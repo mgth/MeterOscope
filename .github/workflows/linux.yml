@@ -57,7 +57,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Paquets (tar.gz + .deb)
         run: |
-          desktop-file-validate src/packaging/linux/meteroscope.desktop
+          desktop-file-validate ci/packaging/linux/meteroscope.desktop
           ci/packaging/linux/package.sh src src/target/release/meteroscope "${{ steps.version.outputs.version }}" dist
       - name: Vérification du .deb (dpkg, installation apt)
         run: |
