@@ -17,3 +17,7 @@ image.workspace = true
 rfd.workspace = true
 anyhow.workspace = true
 dirs = "6"
+
+# Ressources Windows (icône de l'exécutable, informations de version).
+[build-dependencies]
+winresource = "0.1.34"

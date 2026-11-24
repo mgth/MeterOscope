@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MeterOscope : variante simplifiée pour 16, 24 et 32 px (grille 16 unités) -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c94d4"/>
+      <stop offset="1" stop-color="#0b6a9e"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="16" height="16" rx="3.5" fill="url(#tile)"/>
+  <circle cx="8" cy="8" r="5.75" fill="#16191c" stroke="#ffffff" stroke-width="1.5"/>
+  <g fill="#ffd23f">
+    <rect x="5" y="7.25" width="6" height="1.5"/>
+    <rect x="4.5" y="5" width="1.5" height="6"/>
+    <rect x="10" y="5" width="1.5" height="6"/>
+  </g>
+</svg>
