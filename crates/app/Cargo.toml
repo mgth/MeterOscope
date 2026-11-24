@@ -1,15 +1,15 @@
 [package]
-name = "mesura"
+name = "meteroscope"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-mesura-core.workspace = true
-mesura-camera.workspace = true
-mesura-io.workspace = true
-mesura-canvas.workspace = true
-mesura-panels.workspace = true
+meteroscope-core.workspace = true
+meteroscope-camera.workspace = true
+meteroscope-io.workspace = true
+meteroscope-canvas.workspace = true
+meteroscope-panels.workspace = true
 egui.workspace = true
 eframe.workspace = true
 image.workspace = true

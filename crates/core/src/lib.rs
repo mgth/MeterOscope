@@ -1,4 +1,4 @@
-//! Modèle de données de Mesura : géométrie, mesures, étalonnage, document.
+//! Modèle de données de MeterOscope : géométrie, mesures, étalonnage, document.
 //!
 //! Ce crate est pur (pas d'egui, pas d'E/S). Toutes les coordonnées sont en
 //! pixels image (origine en haut à gauche, y vers le bas), en `f64`.

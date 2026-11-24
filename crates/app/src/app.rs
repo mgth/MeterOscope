@@ -3,10 +3,10 @@
 use crate::camera_view::CameraView;
 use egui::{Align, Color32, ColorImage, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextureHandle, TextureOptions, Ui};
 use image::RgbaImage;
-use mesura_canvas::Canvas;
-use mesura_core::{Document, Tool};
-use mesura_io as io;
-use mesura_panels::CalibrationDialog;
+use meteroscope_canvas::Canvas;
+use meteroscope_core::{Document, Tool};
+use meteroscope_io as io;
+use meteroscope_panels::CalibrationDialog;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -16,7 +16,7 @@ enum Mode {
     Camera,
 }
 
-pub struct MesuraApp {
+pub struct MeterOscopeApp {
     doc: Document,
     /// Image d'origine (pleine résolution, non réglée).
     image: Option<RgbaImage>,
@@ -39,7 +39,7 @@ pub struct MesuraApp {
 const CTRL: Modifiers = Modifiers::COMMAND;
 const CTRL_SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND };
 
-impl MesuraApp {
+impl MeterOscopeApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         let mut app = Self {
             doc: Document::new(),
@@ -313,9 +313,9 @@ impl MesuraApp {
         if ctx.input(|i| i.modifiers.is_none()) {
             let tools = std::iter::once(Tool::Select)
                 .chain(std::iter::once(Tool::Calibrate))
-                .chain(mesura_core::ShapeKind::ALL.into_iter().map(Tool::Draw));
+                .chain(meteroscope_core::ShapeKind::ALL.into_iter().map(Tool::Draw));
             for t in tools {
-                if mesura_panels::tool_shortcut(t).is_some_and(|k| ctx.input(|i| i.key_pressed(k))) {
+                if meteroscope_panels::tool_shortcut(t).is_some_and(|k| ctx.input(|i| i.key_pressed(k))) {
                     self.canvas.set_tool(t);
                 }
             }
@@ -404,7 +404,7 @@ impl MesuraApp {
         });
     }
 
-    fn status_bar(&mut self, ui: &mut Ui, cursor: Option<mesura_core::Pt>) {
+    fn status_bar(&mut self, ui: &mut Ui, cursor: Option<meteroscope_core::Pt>) {
         ui.horizontal(|ui| {
             match &self.toast {
                 Some((msg, is_err, t)) if t.elapsed() < Duration::from_secs(5) => {
@@ -432,7 +432,7 @@ impl MesuraApp {
         let ctx = ui.ctx().clone();
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() * 0.3).max(20.0));
-            ui.label(RichText::new("Mesura").size(34.0).strong());
+            ui.label(RichText::new("MeterOscope").size(34.0).strong());
             ui.label("Mesurez des longueurs, angles et surfaces sur une image.");
             ui.add_space(24.0);
             let big = |text: &str| egui::Button::new(RichText::new(text).size(18.0)).min_size(egui::vec2(260.0, 48.0));
@@ -449,7 +449,7 @@ impl MesuraApp {
     }
 }
 
-impl eframe::App for MesuraApp {
+impl eframe::App for MeterOscopeApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
@@ -468,20 +468,20 @@ impl eframe::App for MesuraApp {
         let show_tools = self.image.is_some() && self.mode == Mode::Image;
         let mut cursor = None;
         // La barre d'état est déclarée avant le centre mais affiche le curseur de la frame précédente.
-        let cursor_id = egui::Id::unique("mesura_cursor");
-        let last_cursor: Option<mesura_core::Pt> = ctx.data(|d| d.get_temp(cursor_id)).flatten();
+        let cursor_id = egui::Id::unique("meteroscope_cursor");
+        let last_cursor: Option<meteroscope_core::Pt> = ctx.data(|d| d.get_temp(cursor_id)).flatten();
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui, last_cursor));
 
         if show_tools {
             egui::Panel::left("tools").resizable(false).show(ui, |ui| {
                 let mut tool = self.canvas.tool();
-                mesura_panels::tool_palette(ui, &mut tool);
+                meteroscope_panels::tool_palette(ui, &mut tool);
                 if tool != self.canvas.tool() {
                     self.canvas.set_tool(tool);
                 }
             });
             egui::Panel::right("measurements").default_size(300.0).show(ui, |ui| {
-                let out = mesura_panels::measurements_panel(ui, &mut self.doc);
+                let out = meteroscope_panels::measurements_panel(ui, &mut self.doc);
                 if out.start_calibration {
                     self.canvas.set_tool(Tool::Calibrate);
                 }
@@ -521,8 +521,8 @@ impl eframe::App for MesuraApp {
         // Titre de fenêtre.
         let name = self.project_path.as_ref().or(self.image_path.as_ref()).and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
         let title = match name {
-            Some(n) => format!("{n}{} — Mesura", if self.is_dirty() { " •" } else { "" }),
-            None => "Mesura".to_owned(),
+            Some(n) => format!("{n}{} — MeterOscope", if self.is_dirty() { " •" } else { "" }),
+            None => "MeterOscope".to_owned(),
         };
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
     }

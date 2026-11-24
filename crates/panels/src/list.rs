@@ -8,8 +8,8 @@ use egui::{
     Align, Button, CollapsingHeader, Color32, Frame, Grid, Key, Label, Layout, Popup, Rect, RichText, ScrollArea,
     Sense, Stroke, TextEdit, Ui, UiBuilder, Vec2, vec2,
 };
-use mesura_core::measure::format_number;
-use mesura_core::{Document, Measurement, PALETTE, Quantity, Shape, ShapeKind, Stats};
+use meteroscope_core::measure::format_number;
+use meteroscope_core::{Document, Measurement, PALETTE, Quantity, Shape, ShapeKind, Stats};
 
 const ROW_H: f32 = 30.0;
 const ICON_BTN: f32 = 22.0;
@@ -47,7 +47,7 @@ fn rgb(c: [u8; 3]) -> Color32 {
 /// sélectionnée, statistiques par type.
 pub fn measurements_panel(ui: &mut Ui, doc: &mut Document) -> PanelOutput {
     let mut out = PanelOutput::default();
-    let state_id = ui.scope_id().with("mesura_panneau_mesures");
+    let state_id = ui.scope_id().with("meteroscope_panneau_mesures");
     let mut st: ListState = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
 
     ui.add_space(6.0);
@@ -66,7 +66,7 @@ pub fn measurements_panel(ui: &mut Ui, doc: &mut Document) -> PanelOutput {
     let selection_changed = doc.selected != st.last_selected;
     let mut actions: Vec<(u64, RowAction)> = Vec::new();
     ScrollArea::vertical()
-        .id_salt("mesura_liste_mesures")
+        .id_salt("meteroscope_liste_mesures")
         .auto_shrink([false, false])
         .max_height(list_h)
         .show(ui, |ui| {
@@ -295,7 +295,7 @@ fn values_box(ui: &mut Ui, doc: &Document, m: &Measurement) -> egui::Response {
         .inner_margin(egui::Margin { left: 28, right: 8, top: 6, bottom: 6 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            Grid::new(("mesura_valeurs", m.id)).num_columns(2).spacing([14.0, 3.0]).show(ui, |ui| {
+            Grid::new(("meteroscope_valeurs", m.id)).num_columns(2).spacing([14.0, 3.0]).show(ui, |ui| {
                 ui.label(RichText::new("Type").weak());
                 ui.label(m.shape.kind().label());
                 ui.end_row();
@@ -431,7 +431,7 @@ fn icon_button(
 /// Statistiques par type (repliable) : un tableau compact, une ligne par type.
 fn stats_section(ui: &mut Ui, doc: &Document) {
     CollapsingHeader::new(RichText::new("Statistiques").strong())
-        .id_salt("mesura_statistiques")
+        .id_salt("meteroscope_statistiques")
         .default_open(true)
         .show(ui, |ui| {
             let summary = doc.summary();
@@ -442,7 +442,7 @@ fn stats_section(ui: &mut Ui, doc: &Document) {
             }
             // Hauteur plafonnée : la liste des mesures reste prioritaire.
             let max_h = (ui.ctx().content_rect().height() * 0.3).max(110.0);
-            ScrollArea::vertical().id_salt("mesura_stats_defilement").max_height(max_h).show(ui, |ui| {
+            ScrollArea::vertical().id_salt("meteroscope_stats_defilement").max_height(max_h).show(ui, |ui| {
                 if !summary.is_empty() {
                     stats_table(ui, &summary);
                 }
@@ -460,7 +460,7 @@ fn stats_section(ui: &mut Ui, doc: &Document) {
 fn stats_table(ui: &mut Ui, summary: &[(ShapeKind, Quantity, String, Stats)]) {
     // Colonnes de largeur minimale commune : les grilles successives restent alignées.
     const COL_W: f32 = 54.0;
-    let grid = |salt: &str| Grid::new(("mesura_stats", salt.to_owned())).num_columns(4).min_col_width(COL_W).spacing([8.0, 0.0]);
+    let grid = |salt: &str| Grid::new(("meteroscope_stats", salt.to_owned())).num_columns(4).min_col_width(COL_W).spacing([8.0, 0.0]);
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
     grid("entete").show(ui, |ui| {
         for h in ["Moyenne", "Écart-type", "Min", "Max"] {

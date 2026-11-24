@@ -3,8 +3,8 @@
 use crate::format::{format_significant, parse_number, scale_texts_raw};
 use egui::text::CCursorRange;
 use egui::{Align, Button, ComboBox, Context, Id, Key, Layout, Modal, RichText, TextEdit, vec2};
-use mesura_core::Document;
-use mesura_core::measure::format_number;
+use meteroscope_core::Document;
+use meteroscope_core::measure::format_number;
 
 /// Unités proposées dans la liste.
 pub const UNITS: [&str; 5] = ["µm", "mm", "cm", "m", "in"];
@@ -147,7 +147,7 @@ impl CalibrationDialog {
         let mut validate = false;
         let mut cancel = false;
 
-        let modal = Modal::new(Id::unique("mesura_dialogue_echelle")).show(ctx, |ui| {
+        let modal = Modal::new(Id::unique("meteroscope_dialogue_echelle")).show(ctx, |ui| {
             ui.set_width(330.0);
             ui.heading("Définir l'échelle");
             ui.add_space(4.0);
@@ -158,7 +158,7 @@ impl CalibrationDialog {
 
             ui.horizontal(|ui| {
                 let mut output = TextEdit::singleline(&mut self.value)
-                    .id(Id::unique("mesura_echelle_valeur"))
+                    .id(Id::unique("meteroscope_echelle_valeur"))
                     .desired_width(120.0)
                     .hint_text("p. ex. 10")
                     .show(ui);
@@ -171,7 +171,7 @@ impl CalibrationDialog {
                 }
 
                 let shown = if self.custom_unit { "Autre…" } else { self.unit.as_str() };
-                let combo = ComboBox::from_id_salt("mesura_echelle_unite").selected_text(shown.to_owned()).width(72.0).show_ui(
+                let combo = ComboBox::from_id_salt("meteroscope_echelle_unite").selected_text(shown.to_owned()).width(72.0).show_ui(
                     ui,
                     |ui| {
                         for u in UNITS {

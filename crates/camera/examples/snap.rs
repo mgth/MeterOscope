@@ -2,13 +2,13 @@
 //! l'index est donné), mesure la cadence, enregistre une image PNG, puis
 //! vérifie fermeture → réouverture immédiate.
 //!
-//! cargo run -p mesura-camera --example snap -- <sortie.png> [index] [LxH]
+//! cargo run -p meteroscope-camera --example snap -- <sortie.png> [index] [LxH]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use mesura_camera::{CameraStream, list_devices, list_modes};
+use meteroscope_camera::{CameraStream, list_devices, list_modes};
 
 fn wait_frames(stream: &CameraStream, counter: &AtomicU64, n: u64, timeout: Duration) -> bool {
     let t0 = Instant::now();

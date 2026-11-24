@@ -25,7 +25,7 @@ use egui::{
     Color32, CursorIcon, Event, Key, Modifiers, PointerButton, Pos2, Rect, Sense, Stroke, TextureHandle, Ui, Vec2,
     pos2, vec2,
 };
-use mesura_core::{Calibration, Document, PALETTE, Pt, Shape, ShapeKind, Tool};
+use meteroscope_core::{Calibration, Document, PALETTE, Pt, Shape, ShapeKind, Tool};
 use view::{View, Xf};
 
 pub use view::{MAX_ZOOM, MIN_ZOOM};

@@ -5,7 +5,7 @@
 
 use ab_glyph::{Font, FontRef, OutlineCurve};
 use image::RgbaImage;
-use mesura_core::{Document, Pt, Shape};
+use meteroscope_core::{Document, Pt, Shape};
 use std::f32::consts::PI;
 use std::sync::OnceLock;
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};

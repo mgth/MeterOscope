@@ -2,7 +2,7 @@
 
 use egui::{Color32, ColorImage, Rect, RichText, TextureHandle, TextureOptions, Ui, pos2};
 use image::RgbaImage;
-use mesura_camera::{CameraStream, DeviceInfo, VideoMode, list_devices, list_modes};
+use meteroscope_camera::{CameraStream, DeviceInfo, VideoMode, list_devices, list_modes};
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -23,7 +23,7 @@ pub struct CameraView {
 
 /// Fichier où l'on retient la dernière caméra qui a servi à capturer.
 fn memory_file() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("mesura").join("camera"))
+    Some(dirs::config_dir()?.join("meteroscope").join("camera"))
 }
 
 impl CameraView {

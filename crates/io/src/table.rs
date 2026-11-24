@@ -1,6 +1,6 @@
 //! Tableau des mesures : CSV (tableur français) et texte tabulé (presse-papiers).
 
-use mesura_core::{Document, Quantity, Shape};
+use meteroscope_core::{Document, Quantity, Shape};
 
 /// Colonnes de grandeurs, dans l'ordre du tableau.
 const COLUMNS: [Quantity; 8] = [
@@ -133,7 +133,7 @@ pub fn clipboard_table(doc: &Document) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mesura_core::Pt;
+    use meteroscope_core::Pt;
 
     #[test]
     fn precise_numbers() {

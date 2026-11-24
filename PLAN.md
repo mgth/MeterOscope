@@ -1,4 +1,4 @@
-# Mesura — plan de développement
+# MeterOscope — plan de développement
 
 Application de mesure sur image (dans l'esprit de Digimizer) : on ouvre une photo
 ou on capture depuis une caméra, on définit l'échelle, on mesure.
@@ -18,12 +18,12 @@ Rust + egui/eframe 0.37. Interface en français.
 
 | Crate | Rôle | Dépend de |
 |---|---|---|
-| `crates/core` (`mesura-core`) | Modèle pur : géométrie, formes, valeurs, étalonnage, document, annuler/rétablir, stats | serde |
-| `crates/canvas` (`mesura-canvas`) | Vue image : zoom/déplacement, tracé et édition des mesures, loupe | core, egui |
-| `crates/panels` (`mesura-panels`) | Palette d'outils, liste des mesures + stats, dialogue d'échelle | core, egui |
-| `crates/io` (`mesura-io`) | Chargement d'image (EXIF), projet `.mesura`, CSV, image annotée, rotation/miroir, luminosité/contraste | core, image |
-| `crates/camera` (`mesura-camera`) | Liste des caméras, flux en direct dans un fil dédié | nokhwa |
-| `crates/app` (binaire `mesura`) | Coquille : barre d'outils, raccourcis, fichiers, vue caméra, assemblage | tous |
+| `crates/core` (`meteroscope-core`) | Modèle pur : géométrie, formes, valeurs, étalonnage, document, annuler/rétablir, stats | serde |
+| `crates/canvas` (`meteroscope-canvas`) | Vue image : zoom/déplacement, tracé et édition des mesures, loupe | core, egui |
+| `crates/panels` (`meteroscope-panels`) | Palette d'outils, liste des mesures + stats, dialogue d'échelle | core, egui |
+| `crates/io` (`meteroscope-io`) | Chargement d'image (EXIF), projet `.meteroscope`, CSV, image annotée, rotation/miroir, luminosité/contraste | core, image |
+| `crates/camera` (`meteroscope-camera`) | Liste des caméras, flux en direct dans un fil dédié | nokhwa |
+| `crates/app` (binaire `meteroscope`) | Coquille : barre d'outils, raccourcis, fichiers, vue caméra, assemblage | tous |
 
 Le haut de chaque `lib.rs` porte le **contrat public** consommé par `crates/app`.
 Toutes les coordonnées du modèle sont en pixels de l'image d'origine (`f64`).
@@ -57,7 +57,7 @@ paquet d'installation.
 ## Commandes
 
 ```bash
-cargo run -p mesura --release            # lancer
-cargo run -p mesura --release -- photo.jpg
+cargo run -p meteroscope --release            # lancer
+cargo run -p meteroscope --release -- photo.jpg
 cargo test --workspace
 ```

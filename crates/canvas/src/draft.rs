@@ -8,7 +8,7 @@
 //! - Chemin/Surface se terminent par [`Draft::finish`] (double-clic, Entrée, clic
 //!   droit) ou, pour la surface, par un clic sur le premier point.
 
-use mesura_core::{Pt, ShapeKind};
+use meteroscope_core::{Pt, ShapeKind};
 
 /// Résultat d'une action sur le tracé.
 #[derive(Clone, Debug, PartialEq)]
@@ -70,7 +70,7 @@ impl Draft {
         self.pts.push(p);
         if self.kind == ShapeKind::Circle3 && self.pts.len() == 3 {
             // Trois points alignés : on retire le dernier et on attend un autre clic.
-            if mesura_core::geometry::circle_from_3_points(self.pts[0], self.pts[1], self.pts[2]).is_none() {
+            if meteroscope_core::geometry::circle_from_3_points(self.pts[0], self.pts[1], self.pts[2]).is_none() {
                 self.pts.pop();
                 return Step::Continue;
             }

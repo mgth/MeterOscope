@@ -2118,73 +2118,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mesura"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dirs",
- "eframe",
- "egui",
- "image",
- "mesura-camera",
- "mesura-canvas",
- "mesura-core",
- "mesura-io",
- "mesura-panels",
- "rfd",
-]
-
-[[package]]
-name = "mesura-camera"
-version = "0.1.0"
-dependencies = [
- "image",
- "nokhwa",
- "thiserror 2.0.21",
- "v4l",
- "zune-jpeg",
-]
-
-[[package]]
-name = "mesura-canvas"
-version = "0.1.0"
-dependencies = [
- "egui",
- "egui_kittest",
- "mesura-core",
-]
-
-[[package]]
-name = "mesura-core"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "mesura-io"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "epaint_default_fonts",
- "image",
- "mesura-core",
- "serde",
- "serde_json",
- "tiny-skia",
-]
-
-[[package]]
-name = "mesura-panels"
-version = "0.1.0"
-dependencies = [
- "egui",
- "egui_kittest",
- "mesura-core",
-]
-
-[[package]]
 name = "metal"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2197,6 +2130,73 @@ dependencies = [
  "foreign-types 0.3.2",
  "log",
  "objc",
+]
+
+[[package]]
+name = "meteroscope"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "eframe",
+ "egui",
+ "image",
+ "meteroscope-camera",
+ "meteroscope-canvas",
+ "meteroscope-core",
+ "meteroscope-io",
+ "meteroscope-panels",
+ "rfd",
+]
+
+[[package]]
+name = "meteroscope-camera"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "nokhwa",
+ "thiserror 2.0.21",
+ "v4l",
+ "zune-jpeg",
+]
+
+[[package]]
+name = "meteroscope-canvas"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui_kittest",
+ "meteroscope-core",
+]
+
+[[package]]
+name = "meteroscope-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "meteroscope-io"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "epaint_default_fonts",
+ "image",
+ "meteroscope-core",
+ "serde",
+ "serde_json",
+ "tiny-skia",
+]
+
+[[package]]
+name = "meteroscope-panels"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui_kittest",
+ "meteroscope-core",
 ]
 
 [[package]]

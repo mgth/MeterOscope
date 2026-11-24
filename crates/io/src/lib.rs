@@ -12,7 +12,7 @@ mod transform;
 
 use anyhow::{Context, Result, anyhow};
 use image::RgbaImage;
-use mesura_core::Document;
+use meteroscope_core::Document;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -24,7 +24,7 @@ pub use transform::transform_point;
 /// Extensions d'image acceptées à l'ouverture (minuscules, sans point).
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp", "gif"];
 /// Extension des fichiers projet.
-pub const PROJECT_EXTENSION: &str = "mesura";
+pub const PROJECT_EXTENSION: &str = "meteroscope";
 
 /// Charge une image en RGBA en respectant l'orientation EXIF.
 pub fn load_image(path: &Path) -> Result<RgbaImage> {

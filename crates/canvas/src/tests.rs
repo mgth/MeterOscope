@@ -3,7 +3,7 @@
 use crate::{Canvas, CanvasOutput};
 use egui::{Color32, ColorImage, Event, Key, Modifiers, PointerButton, Pos2, TextureHandle, TextureOptions, vec2};
 use egui_kittest::Harness;
-use mesura_core::{Document, Pt, Shape, ShapeKind, Tool};
+use meteroscope_core::{Document, Pt, Shape, ShapeKind, Tool};
 
 struct St {
     canvas: Canvas,

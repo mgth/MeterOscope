@@ -1,11 +1,11 @@
 [package]
-name = "mesura-io"
+name = "meteroscope-io"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-mesura-core.workspace = true
+meteroscope-core.workspace = true
 image.workspace = true
 serde.workspace = true
 serde_json.workspace = true

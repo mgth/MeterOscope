@@ -1,6 +1,6 @@
 //! Logique pure : lecture des nombres saisis et mise en forme de l'échelle.
 
-use mesura_core::Scale;
+use meteroscope_core::Scale;
 
 /// Lit un nombre saisi par l'utilisateur : accepte la virgule ou le point
 /// décimal et ignore les espaces (y compris insécables). `None` si le texte

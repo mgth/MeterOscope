@@ -247,7 +247,7 @@ pub(crate) fn spawn_capture(
     body: impl FnOnce(&mut Publisher) + Send + 'static,
 ) -> Result<JoinHandle<()>, CameraError> {
     std::thread::Builder::new()
-        .name("mesura-camera".into())
+        .name("meteroscope-camera".into())
         .spawn(move || {
             if catch_unwind(AssertUnwindSafe(|| body(&mut publisher))).is_err() {
                 publisher.fail("La capture vidéo s'est arrêtée sur une erreur interne.");

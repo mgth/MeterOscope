@@ -5,8 +5,8 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Shape as EShape, Stroke, StrokeKind, TextureId, Vec2,
     pos2, vec2,
 };
-use mesura_core::measure::format_number;
-use mesura_core::{Calibration, Pt, Shape};
+use meteroscope_core::measure::format_number;
+use meteroscope_core::{Calibration, Pt, Shape};
 use std::f32::consts::TAU;
 
 /// Contour sombre sous les traits, pour rester lisible sur toute photo.

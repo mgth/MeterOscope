@@ -2,7 +2,7 @@
 
 use crate::icons::paint_tool_icon;
 use egui::{Align2, FontId, Key, Rect, RichText, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
-use mesura_core::{ShapeKind, Tool};
+use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
 pub const TOOLS: [Tool; 10] = [
@@ -92,7 +92,7 @@ pub fn tool_tooltip(tool: Tool) -> String {
 pub fn tool_palette(ui: &mut Ui, tool: &mut Tool) {
     ui.set_width(BUTTON_W);
     ScrollArea::vertical()
-        .id_salt("mesura_palette_outils")
+        .id_salt("meteroscope_palette_outils")
         .auto_shrink([true, true])
         .content_margin(0.0)
         .show(ui, |ui| {

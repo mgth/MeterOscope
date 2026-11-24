@@ -3,8 +3,8 @@
 use egui::Key;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use mesura_core::{Document, Pt, Shape, ShapeKind, Tool};
-use mesura_panels::{CalibrationDialog, PanelOutput, measurements_panel, tool_palette};
+use meteroscope_core::{Document, Pt, Shape, ShapeKind, Tool};
+use meteroscope_panels::{CalibrationDialog, PanelOutput, measurements_panel, tool_palette};
 
 fn length(x: f64) -> Shape {
     Shape::Length { a: Pt::new(0.0, 0.0), b: Pt::new(x, 0.0) }
@@ -231,10 +231,10 @@ fn changer_la_couleur() {
     harness.run();
     // La palette s'ouvre : 8 pastilles ; on prend la dernière (blanc).
     let choices: Vec<_> = harness.get_all_by_label_contains("Couleur ").collect();
-    assert_eq!(choices.len(), mesura_core::PALETTE.len());
+    assert_eq!(choices.len(), meteroscope_core::PALETTE.len());
     choices.last().unwrap().click();
     harness.run();
     let after = harness.state().doc.get(a).unwrap().color;
     assert_ne!(before, after);
-    assert_eq!(after, mesura_core::PALETTE[7]);
+    assert_eq!(after, meteroscope_core::PALETTE[7]);
 }

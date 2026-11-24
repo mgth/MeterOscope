@@ -1,14 +1,14 @@
-//! Fichier projet `.mesura` : JSON lisible, versionné.
+//! Fichier projet `.meteroscope` : JSON lisible, versionné.
 
 use crate::Project;
 use crate::image_io::{describe_io, file_name};
 use anyhow::{Context, Result, anyhow, bail};
-use mesura_core::Document;
+use meteroscope_core::Document;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
 /// Identifiant du format, pour reconnaître nos fichiers.
-const FORMAT_ID: &str = "mesura";
+const FORMAT_ID: &str = "meteroscope";
 /// Version courante du format sur disque.
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
 
@@ -130,17 +130,17 @@ pub fn load_project(path: &Path) -> Result<Project> {
     let text = String::from_utf8(text).map_err(|_| anyhow!("ce n'est pas un fichier texte UTF-8")).with_context(ctx)?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     let value: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| anyhow!("ce n'est pas un projet Mesura (JSON invalide, ligne {}, colonne {})", e.line(), e.column()))
+        .map_err(|e| anyhow!("ce n'est pas un projet MeterOscope (JSON invalide, ligne {}, colonne {})", e.line(), e.column()))
         .with_context(ctx)?;
     let check = || -> Result<()> {
         if value.get("format").and_then(|f| f.as_str()) != Some(FORMAT_ID) {
-            bail!("ce n'est pas un projet Mesura");
+            bail!("ce n'est pas un projet MeterOscope");
         }
         match value.get("version").and_then(|v| v.as_u64()) {
             None => bail!("version du format absente ou invalide"),
             Some(v) if v == 0 || v > PROJECT_FORMAT_VERSION as u64 => bail!(
-                "format de projet version {v} inconnu (cette version de Mesura lit jusqu'à la version {PROJECT_FORMAT_VERSION}) ; \
-                 mettez Mesura à jour"
+                "format de projet version {v} inconnu (cette version de MeterOscope lit jusqu'à la version {PROJECT_FORMAT_VERSION}) ; \
+                 mettez MeterOscope à jour"
             ),
             Some(_) => Ok(()),
         }

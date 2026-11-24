@@ -2,7 +2,7 @@
 
 use crate::Transform;
 use image::{RgbaImage, imageops};
-use mesura_core::{Document, Pt};
+use meteroscope_core::{Document, Pt};
 
 /// Image du point `p` (coordonnées continues : le pixel (i, j) couvre
 /// [i, i+1] × [j, j+1]) pour une image de taille `w`×`h` *avant* transformation.
@@ -81,7 +81,7 @@ pub fn adjust(image: &RgbaImage, brightness: f32, contrast: f32) -> RgbaImage {
 mod tests {
     use super::*;
     use image::Rgba;
-    use mesura_core::Shape;
+    use meteroscope_core::Shape;
 
     fn test_image(w: u32, h: u32) -> RgbaImage {
         RgbaImage::from_fn(w, h, |x, y| Rgba([(x * 7) as u8, (y * 13) as u8, ((x * y) % 251) as u8, 200]))
@@ -126,7 +126,7 @@ mod tests {
                 im = apply_transform(&im, &mut doc, t);
                 for (m, v) in doc.measurements.iter().zip(&before) {
                     // Valeurs triées : un quart de tour échange largeur et hauteur d'un rectangle.
-                    let sorted = |vals: &[mesura_core::Value]| {
+                    let sorted = |vals: &[meteroscope_core::Value]| {
                         let mut x: Vec<f64> = vals.iter().map(|v| v.value).collect();
                         x.sort_by(f64::total_cmp);
                         x

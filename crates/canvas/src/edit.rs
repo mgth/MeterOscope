@@ -1,8 +1,8 @@
 //! Poignées et test de clic sur les mesures (logique pure, en pixels image).
 
 use crate::draft::{snap45, square};
-use mesura_core::geometry::{dist_point_segment, point_in_polygon};
-use mesura_core::{Document, Pt, Shape};
+use meteroscope_core::geometry::{dist_point_segment, point_in_polygon};
+use meteroscope_core::{Document, Pt, Shape};
 
 /// Élément sous le pointeur.
 #[derive(Clone, Copy, Debug, PartialEq)]

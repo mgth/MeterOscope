@@ -1,7 +1,7 @@
 //! Icônes dessinées au pinceau (aucune police d'icônes, aucun emoji).
 
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, pos2, vec2};
-use mesura_core::{ShapeKind, Tool};
+use meteroscope_core::{ShapeKind, Tool};
 use std::f32::consts::TAU;
 
 /// Dessine l'icône de `tool` centrée dans `rect` (carré conseillé, 20 à 28 px).

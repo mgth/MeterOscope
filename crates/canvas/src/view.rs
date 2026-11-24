@@ -1,7 +1,7 @@
 //! Transformation image ↔ écran, zoom et déplacement de la vue.
 
 use egui::{Pos2, Vec2, pos2, vec2};
-use mesura_core::Pt;
+use meteroscope_core::Pt;
 
 /// Bornes du zoom (pixels écran par pixel image).
 pub const MIN_ZOOM: f32 = 0.01;

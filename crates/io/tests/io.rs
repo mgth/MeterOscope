@@ -1,8 +1,8 @@
 //! Tests sur fichiers (dossier temporaire sous `crates/io/target-tests/`).
 
 use image::{ImageEncoder, Rgba, RgbaImage};
-use mesura_core::{Document, Pt, Shape};
-use mesura_io::*;
+use meteroscope_core::{Document, Pt, Shape};
+use meteroscope_io::*;
 use std::path::{Path, PathBuf};
 
 /// Dossier de test propre à chaque test, supprimé à la fin.
@@ -45,7 +45,7 @@ fn project_round_trip_relative() {
     std::fs::create_dir_all(dir.path("a/images")).unwrap();
     let img = dir.path("a/images/photo.png");
     std::fs::write(&img, b"x").unwrap();
-    let proj = dir.path("a/essai.mesura");
+    let proj = dir.path("a/essai.meteroscope");
     let doc = sample_doc();
     save_project(&Project { image_path: Some(img.clone()), document: doc.clone() }, &proj).unwrap();
 
@@ -65,12 +65,12 @@ fn project_round_trip_relative() {
 
     // On déplace projet + image ensemble : le chemin suit.
     std::fs::rename(dir.path("a"), dir.path("b")).unwrap();
-    let p = load_project(&dir.path("b/essai.mesura")).unwrap();
+    let p = load_project(&dir.path("b/essai.meteroscope")).unwrap();
     assert_eq!(p.image_path.as_deref(), Some(dir.path("b/images/photo.png").as_path()));
 
     // Image à côté, dossier parent.
     std::fs::create_dir_all(dir.path("b/sous")).unwrap();
-    let proj2 = dir.path("b/sous/p.mesura");
+    let proj2 = dir.path("b/sous/p.meteroscope");
     save_project(&Project { image_path: Some(dir.path("b/images/photo.png")), document: Document::new() }, &proj2).unwrap();
     assert!(std::fs::read_to_string(&proj2).unwrap().contains("\"image\": \"../images/photo.png\""));
     assert_eq!(load_project(&proj2).unwrap().image_path, Some(dir.path("b/images/photo.png")));
@@ -79,7 +79,7 @@ fn project_round_trip_relative() {
     save_project(&Project { image_path: None, document: Document::new() }, &proj2).unwrap();
     assert_eq!(load_project(&proj2).unwrap().image_path, None);
     // Pas de fichier temporaire résiduel.
-    assert!(!dir.path("b/sous/p.mesura.tmp").exists());
+    assert!(!dir.path("b/sous/p.meteroscope.tmp").exists());
 }
 
 #[test]
@@ -87,27 +87,27 @@ fn project_moved_alone_falls_back_to_absolute() {
     let dir = TestDir::new("projet-seul");
     let img = dir.path("photo.png");
     std::fs::write(&img, b"x").unwrap();
-    save_project(&Project { image_path: Some(img.clone()), document: Document::new() }, &dir.path("p.mesura")).unwrap();
+    save_project(&Project { image_path: Some(img.clone()), document: Document::new() }, &dir.path("p.meteroscope")).unwrap();
     std::fs::create_dir_all(dir.path("ailleurs")).unwrap();
-    std::fs::rename(dir.path("p.mesura"), dir.path("ailleurs/p.mesura")).unwrap();
-    assert_eq!(load_project(&dir.path("ailleurs/p.mesura")).unwrap().image_path, Some(img));
+    std::fs::rename(dir.path("p.meteroscope"), dir.path("ailleurs/p.meteroscope")).unwrap();
+    assert_eq!(load_project(&dir.path("ailleurs/p.meteroscope")).unwrap().image_path, Some(img));
 }
 
 #[test]
 fn project_errors() {
     let dir = TestDir::new("projet-erreurs");
     let err = |content: &str| {
-        let p = dir.path("x.mesura");
+        let p = dir.path("x.meteroscope");
         std::fs::write(&p, content).unwrap();
         format!("{:#}", load_project(&p).unwrap_err())
     };
-    let e = err("{\"format\":\"mesura\",\"version\":99,\"document\":{}}");
-    assert!(e.contains("version 99 inconnu") && e.contains("x.mesura"), "{e}");
+    let e = err("{\"format\":\"meteroscope\",\"version\":99,\"document\":{}}");
+    assert!(e.contains("version 99 inconnu") && e.contains("x.meteroscope"), "{e}");
     assert!(err("pas du json").contains("JSON invalide"));
-    assert!(err("{\"a\":1}").contains("pas un projet Mesura"));
-    let e = err("{\"format\":\"mesura\",\"version\":1,\"document\":{\"measurements\":12}}");
+    assert!(err("{\"a\":1}").contains("pas un projet MeterOscope"));
+    let e = err("{\"format\":\"meteroscope\",\"version\":1,\"document\":{\"measurements\":12}}");
     assert!(e.contains("contenu du projet invalide"), "{e}");
-    let e = format!("{:#}", load_project(&dir.path("absent.mesura")).unwrap_err());
+    let e = format!("{:#}", load_project(&dir.path("absent.meteroscope")).unwrap_err());
     assert!(e.contains("introuvable"), "{e}");
 }
 
@@ -214,10 +214,10 @@ fn export_csv_file_has_bom() {
     assert!(export_csv(&sample_doc(), &dir.path("absent/m.csv")).is_err());
 }
 
-/// Rendu de démonstration à regarder à l'œil : `MESURA_RENDER_DEMO=<dossier> cargo test`.
+/// Rendu de démonstration à regarder à l'œil : `METEROSCOPE_RENDER_DEMO=<dossier> cargo test`.
 #[test]
 fn render_demo() {
-    let Ok(out_dir) = std::env::var("MESURA_RENDER_DEMO") else { return };
+    let Ok(out_dir) = std::env::var("METEROSCOPE_RENDER_DEMO") else { return };
     for (w, h) in [(640u32, 480u32), (4000, 3000)] {
         let k = w as f64 / 640.0;
         let img = RgbaImage::from_fn(w, h, |x, y| {
