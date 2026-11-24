@@ -1,0 +1,15 @@
+[package]
+name = "mesura-io"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mesura-core.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+ab_glyph = "0.2"
+epaint_default_fonts = "0.37"

@@ -1,0 +1,14 @@
+[package]
+name = "mesura-canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mesura-core.workspace = true
+egui.workspace = true
+
+[dev-dependencies]
+egui_kittest = "0.37"
+# Polices intégrées, nécessaires pour mettre en page du texte dans les tests.
+egui = { workspace = true, features = ["default_fonts"] }

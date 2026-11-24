@@ -1,0 +1,22 @@
+[package]
+name = "mesura-camera"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+# Décodage MJPEG en Rust pur (déjà présent dans l'arbre via `image`).
+zune-jpeg = "0.5.15"
+
+# Linux : V4L2 direct (lecture avec délai d'attente, arrêt rapide, tri des nœuds).
+[target.'cfg(target_os = "linux")'.dependencies]
+v4l = "0.14.0"
+
+# Autres systèmes : nokhwa (Media Foundation, AVFoundation). Sans la fonction
+# « decoding » (mozjpeg, en C) : le décodage est fait par ce crate.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+nokhwa = { version = "0.10.11", default-features = false, features = ["input-native"] }
+
+[dev-dependencies]
+image.workspace = true

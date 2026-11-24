@@ -1,0 +1,18 @@
+[package]
+name = "mesura"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mesura-core.workspace = true
+mesura-camera.workspace = true
+mesura-io.workspace = true
+mesura-canvas.workspace = true
+mesura-panels.workspace = true
+egui.workspace = true
+eframe.workspace = true
+image.workspace = true
+rfd.workspace = true
+anyhow.workspace = true
+dirs = "6"
