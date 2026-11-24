@@ -10,7 +10,9 @@ struct TestDir(PathBuf);
 
 impl TestDir {
     fn new(name: &str) -> TestDir {
-        let d = Path::new(env!("CARGO_MANIFEST_DIR")).join("target-tests").join(name);
+        // `absolute` : sous Wine, CARGO_MANIFEST_DIR reste un chemin Unix
+        // alors que l'application voit `Z:\…`.
+        let d = std::path::absolute(Path::new(env!("CARGO_MANIFEST_DIR")).join("target-tests").join(name)).unwrap();
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         TestDir(d)

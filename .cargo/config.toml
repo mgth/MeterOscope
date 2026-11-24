@@ -1,0 +1,7 @@
+# Windows (MSVC) : CRT liée statiquement, l'exécutable n'exige pas le
+# redistribuable Visual C++ sur la machine cible.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

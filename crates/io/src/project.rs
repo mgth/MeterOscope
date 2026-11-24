@@ -165,7 +165,22 @@ mod tests {
         assert_eq!(r("/a/b/c/img.png", "/a/b").as_deref(), Some("c/img.png"));
         assert_eq!(r("/a/x/img.png", "/a/b").as_deref(), Some("../x/img.png"));
         assert_eq!(r("/img.png", "/a/b").as_deref(), Some("../../img.png"));
-        assert_eq!(absolute_clean(Path::new("/a/b/../c/./d")), PathBuf::from("/a/c/d"));
-        assert_eq!(absolute_clean(Path::new("/../a")), PathBuf::from("/a"));
+        // Sous Windows, « /a » est relatif au lecteur courant : on compare donc
+        // à la forme absolue attendue plutôt qu'à une chaîne Unix.
+        let abs = |s: &str| std::path::absolute(s).unwrap();
+        assert_eq!(absolute_clean(Path::new("/a/b/../c/./d")), abs("/a/c/d"));
+        assert_eq!(absolute_clean(Path::new("/../a")), abs("/a"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn relative_paths_windows() {
+        let r = |t: &str, b: &str| relative_to(Path::new(t), Path::new(b));
+        assert_eq!(r(r"C:\a\b\c\img.png", r"C:\a\b").as_deref(), Some("c/img.png"));
+        assert_eq!(r(r"C:\a\x\img.png", r"C:\a\b").as_deref(), Some("../x/img.png"));
+        // Autre lecteur ou partage réseau : pas de chemin relatif.
+        assert_eq!(r(r"D:\img.png", r"C:\a"), None);
+        assert_eq!(r(r"\\srv\photos\img.png", r"C:\a"), None);
+        assert_eq!(absolute_clean(Path::new(r"C:\a\b\..\c\.\d")), PathBuf::from(r"C:\a\c\d"));
     }
 }
