@@ -1,5 +1,6 @@
 //! Vue caméra en direct : choix de l'appareil, aperçu, capture.
 
+use meteroscope_i18n::tr;
 use egui::{Color32, ColorImage, Rect, RichText, TextureHandle, TextureOptions, Ui, pos2};
 use image::RgbaImage;
 use meteroscope_camera::{CameraStream, DeviceInfo, VideoMode, list_devices, list_modes};
@@ -42,7 +43,7 @@ impl CameraView {
             .or_else(|| self.devices.first().cloned());
         match dev {
             Some(d) => self.open(ctx, d),
-            None => self.error = Some("Aucune caméra détectée.".into()),
+            None => self.error = Some(tr!("camera.none").into()),
         }
     }
 
@@ -84,7 +85,7 @@ impl CameraView {
         let mut captured = None;
 
         ui.horizontal(|ui| {
-            ui.label("Caméra :");
+            ui.label(tr!("camera.label"));
             let mut pick = None;
             egui::ComboBox::from_id_salt("camera_device")
                 .selected_text(self.current.as_ref().map_or("—", |d| d.name.as_str()))
@@ -119,7 +120,7 @@ impl CameraView {
             } else if let Some((w, h)) = res {
                 ui.weak(format!("{w} × {h}"));
             }
-            if ui.button("⟳").on_hover_text("Rechercher les caméras").clicked() {
+            if ui.button("⟳").on_hover_text(tr!("camera.rescan_tip")).clicked() {
                 self.start(&ctx);
             }
         });
@@ -156,8 +157,8 @@ impl CameraView {
         egui::Panel::bottom("camera_capture").show(ui, |ui| {
             ui.add_space(8.0);
             ui.vertical_centered(|ui| {
-                let b = egui::Button::new(RichText::new("⏺  Capturer").size(20.0)).min_size(egui::vec2(220.0, 44.0));
-                clicked = ui.add_enabled(ready, b).on_hover_text("Barre d'espace").clicked();
+                let b = egui::Button::new(RichText::new(format!("⏺  {}", tr!("camera.capture"))).size(20.0)).min_size(egui::vec2(220.0, 44.0));
+                clicked = ui.add_enabled(ready, b).on_hover_text(tr!("camera.capture_tip")).clicked();
             });
             ui.add_space(8.0);
         });
@@ -173,7 +174,7 @@ impl CameraView {
         if let Some(e) = &self.error {
             ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, e, egui::FontId::proportional(18.0), Color32::from_rgb(255, 120, 110));
         } else if self.texture.is_none() {
-            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Démarrage de la caméra…", egui::FontId::proportional(18.0), Color32::GRAY);
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, tr!("camera.starting"), egui::FontId::proportional(18.0), Color32::GRAY);
         }
 
         if ready && (clicked || space)

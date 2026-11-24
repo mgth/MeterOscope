@@ -327,6 +327,7 @@ mod tests {
 
     #[test]
     fn longueurs_rondes() {
+        meteroscope_i18n::set_language("fr");
         assert_eq!(nice_length(1.3), 1.0);
         assert_eq!(nice_length(37.0), 20.0);
         assert_eq!(nice_length(0.07), 0.05);
@@ -339,6 +340,7 @@ mod tests {
 
     #[test]
     fn textes_etiquettes() {
+        meteroscope_i18n::set_language("fr");
         let cal = Calibration::default();
         let r = Shape::Rect { a: Pt::new(0., 0.), b: Pt::new(20., 10.) };
         assert_eq!(label_text(&r, &cal, 0), "20,00 × 10,00 px\n200,0 px²");
@@ -351,6 +353,7 @@ mod tests {
 
     #[test]
     fn arc_angle_court() {
+        meteroscope_i18n::set_language("fr");
         let (_, sweep, _) = angle_arc(pos2(10.0, 0.0), pos2(0.0, 0.0), pos2(0.0, -10.0));
         assert!((sweep.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
     }

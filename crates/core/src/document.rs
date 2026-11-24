@@ -165,6 +165,7 @@ mod tests {
 
     #[test]
     fn add_undo_redo() {
+        meteroscope_i18n::set_language("fr");
         let mut d = Document::new();
         let a = d.add(Shape::Length { a: Pt::new(0., 0.), b: Pt::new(3., 4.) });
         let b = d.add(Shape::Length { a: Pt::new(0., 0.), b: Pt::new(6., 8.) });

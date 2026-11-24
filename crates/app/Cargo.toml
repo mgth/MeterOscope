@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+meteroscope-i18n.workspace = true
 meteroscope-core.workspace = true
 meteroscope-camera.workspace = true
 meteroscope-io.workspace = true

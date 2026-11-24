@@ -1,4 +1,4 @@
-; Installeur Windows de MeterOscope (Inno Setup 6).
+﻿; Installeur Windows de MeterOscope (Inno Setup 6).
 ; Compilation : iscc /DAppVersion=1.0.0 /DSourceDir=<dossier contenant meteroscope.exe> installer\meteroscope.iss
 ; Le fichier produit est installer\Output\MeterOscope-<version>-setup-x64.exe.
 
@@ -46,14 +46,39 @@ ChangesAssociations=yes
 CloseApplications=yes
 
 [Languages]
-Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
+; Mêmes langues que l'application (et que LittleBigMouse) ; l'assistant suit la langue du système.
 Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "fr"; MessagesFile: "compiler:Languages\French.isl"
+Name: "de"; MessagesFile: "compiler:Languages\German.isl"
+Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
+Name: "it"; MessagesFile: "compiler:Languages\Italian.isl"
+Name: "pl"; MessagesFile: "compiler:Languages\Polish.isl"
+Name: "ptbr"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+Name: "ja"; MessagesFile: "compiler:Languages\Japanese.isl"
+Name: "ko"; MessagesFile: "compiler:Languages\Korean.isl"
+Name: "zhcn"; MessagesFile: "languages\ChineseSimplified.isl"
 
 [CustomMessages]
-fr.AssocProject=Associer les fichiers projet .meteroscope à MeterOscope
 en.AssocProject=Associate .meteroscope project files with MeterOscope
-fr.ProjectType=Projet MeterOscope
+fr.AssocProject=Associer les fichiers projet .meteroscope à MeterOscope
+de.AssocProject=Projektdateien (.meteroscope) mit MeterOscope verknüpfen
+es.AssocProject=Asociar los archivos de proyecto .meteroscope con MeterOscope
+it.AssocProject=Associa i file di progetto .meteroscope a MeterOscope
+pl.AssocProject=Skojarz pliki projektów .meteroscope z MeterOscope
+ptbr.AssocProject=Associar os arquivos de projeto .meteroscope ao MeterOscope
+ja.AssocProject=プロジェクト ファイル (.meteroscope) を MeterOscope に関連付ける
+ko.AssocProject=프로젝트 파일(.meteroscope)을 MeterOscope에 연결
+zhcn.AssocProject=将 .meteroscope 项目文件关联到 MeterOscope
 en.ProjectType=MeterOscope project
+fr.ProjectType=Projet MeterOscope
+de.ProjectType=MeterOscope-Projekt
+es.ProjectType=Proyecto de MeterOscope
+it.ProjectType=Progetto MeterOscope
+pl.ProjectType=Projekt MeterOscope
+ptbr.ProjectType=Projeto do MeterOscope
+ja.ProjectType=MeterOscope プロジェクト
+ko.ProjectType=MeterOscope 프로젝트
+zhcn.ProjectType=MeterOscope 项目
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

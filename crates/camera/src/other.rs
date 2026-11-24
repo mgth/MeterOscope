@@ -1,6 +1,7 @@
 //! Capture hors Linux (Windows, macOS) par nokhwa. Le décodage reste
 //! celui de ce crate (pas de mozjpeg).
 
+use meteroscope_i18n::tr;
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -65,7 +66,7 @@ pub(crate) fn list_devices() -> Vec<DeviceInfo> {
                 CameraIndex::String(_) => pos as u32,
             };
             let name = info.human_name().trim().to_string();
-            let name = if name.is_empty() { format!("Caméra {}", index) } else { name };
+            let name = if name.is_empty() { tr!("camera.default_name", n = index) } else { name };
             DeviceInfo { index, name }
         })
         .collect()
@@ -86,11 +87,11 @@ fn explain(e: &nokhwa::NokhwaError) -> String {
     let s = e.to_string();
     let low = s.to_lowercase();
     if low.contains("denied") || low.contains("permission") || low.contains("authoriz") {
-        "permission refusée (autorisez l'accès à la caméra dans les réglages du système)".into()
+        tr!("camera.denied_system").into()
     } else if low.contains("busy") || low.contains("in use") {
-        "la caméra est déjà utilisée par une autre application".into()
+        tr!("camera.busy").into()
     } else {
-        format!("erreur du pilote ({s})")
+        tr!("camera.driver_error", error = s)
     }
 }
 
@@ -125,8 +126,8 @@ pub(crate) fn start(
             }
             Ok(None) => {
                 let _ = tx.send(Err(match wanted {
-                    Some((w, h)) => format!("résolution {w}×{h} non prise en charge"),
-                    None => "aucun format d'image pris en charge".into(),
+                    Some((w, h)) => tr!("camera.bad_resolution", w = w, h = h),
+                    None => tr!("camera.no_format").into(),
                 }));
                 return;
             }
@@ -155,7 +156,7 @@ pub(crate) fn start(
                 }
             }
             if errors >= 60 || last_frame.elapsed() > STALL {
-                p.fail("La caméra ne fournit plus d'image.");
+                p.fail(tr!("camera.no_more_images"));
                 break;
             }
         }
@@ -169,12 +170,12 @@ pub(crate) fn start(
         }
         Err(RecvTimeoutError::Disconnected) => {
             let _ = handle.join();
-            Err(CameraError::Open("erreur interne du pilote".into()))
+            Err(CameraError::Open(tr!("camera.driver_internal").into()))
         }
         // Le fil reste détaché ; il s'arrêtera seul quand le pilote rendra la main.
         Err(RecvTimeoutError::Timeout) => {
             shared.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            Err(CameraError::Open("la caméra ne répond pas".into()))
+            Err(CameraError::Open(tr!("camera.not_responding").into()))
         }
     }
 }

@@ -147,6 +147,7 @@ mod tests {
 
     #[test]
     fn poignees_rectangle() {
+        meteroscope_i18n::set_language("fr");
         let mut s = Shape::Rect { a: p(0., 0.), b: p(10., 5.) };
         assert_eq!(handles(&s), vec![p(0., 0.), p(10., 0.), p(10., 5.), p(0., 5.)]);
         set_handle(&mut s, 1, p(12., -1.));
@@ -168,6 +169,7 @@ mod tests {
 
     #[test]
     fn test_de_clic() {
+        meteroscope_i18n::set_language("fr");
         let mut doc = Document::new();
         let a = doc.add(Shape::Length { a: p(0., 0.), b: p(100., 0.) });
         let c = doc.add(Shape::Circle { center: p(50., 50.), edge: p(70., 50.) });

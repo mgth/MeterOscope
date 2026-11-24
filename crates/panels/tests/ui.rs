@@ -12,6 +12,7 @@ fn length(x: f64) -> Shape {
 
 #[test]
 fn palette_change_l_outil() {
+    meteroscope_i18n::set_language("fr");
     let mut harness = Harness::new_ui_state(|ui, tool: &mut Tool| tool_palette(ui, tool), Tool::Select);
     harness.run();
     harness.get_by_label("Longueur").click();
@@ -41,6 +42,7 @@ fn panel_harness(doc: Document) -> Harness<'static, PanelState> {
 
 #[test]
 fn panneau_vide() {
+    meteroscope_i18n::set_language("fr");
     let mut harness = panel_harness(Document::new());
     harness.run();
     harness.get_by_label_contains("Choisissez un outil à gauche");
@@ -52,6 +54,7 @@ fn panneau_vide() {
 
 #[test]
 fn liste_selection_visibilite_suppression() {
+    meteroscope_i18n::set_language("fr");
     let mut doc = Document::new();
     let a = doc.add(length(30.0));
     let b = doc.add(length(40.0));
@@ -96,6 +99,7 @@ fn liste_selection_visibilite_suppression() {
 
 #[test]
 fn renommer_par_double_clic() {
+    meteroscope_i18n::set_language("fr");
     let mut doc = Document::new();
     let a = doc.add(length(10.0));
     let mut harness = panel_harness(doc);
@@ -119,6 +123,7 @@ fn renommer_par_double_clic() {
 
 #[test]
 fn echelle_definie_puis_retiree() {
+    meteroscope_i18n::set_language("fr");
     let mut doc = Document::new();
     doc.calibration.set_from_reference(100.0, 10.0, "mm");
     doc.add(length(50.0));
@@ -155,6 +160,7 @@ fn dialog_harness() -> Harness<'static, DialogState> {
 
 #[test]
 fn dialogue_saisie_et_entree() {
+    meteroscope_i18n::set_language("fr");
     let mut harness = dialog_harness();
     harness.run();
     harness.get_by_label_contains("250,0 px");
@@ -174,6 +180,7 @@ fn dialogue_saisie_et_entree() {
 
 #[test]
 fn dialogue_invalide_puis_echap() {
+    meteroscope_i18n::set_language("fr");
     let mut harness = dialog_harness();
     harness.run();
     harness.get_by_role(egui::Role::TextInput).type_text("abc");
@@ -201,6 +208,7 @@ fn count_undo(doc: &Document) -> usize {
 
 #[test]
 fn renommer_puis_echap_annule() {
+    meteroscope_i18n::set_language("fr");
     let mut doc = Document::new();
     let a = doc.add(length(10.0));
     let mut harness = panel_harness(doc);
@@ -222,6 +230,7 @@ fn renommer_puis_echap_annule() {
 
 #[test]
 fn changer_la_couleur() {
+    meteroscope_i18n::set_language("fr");
     let mut doc = Document::new();
     let a = doc.add(length(10.0));
     let mut harness = panel_harness(doc);

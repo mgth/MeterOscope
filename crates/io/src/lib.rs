@@ -10,6 +10,7 @@ mod render;
 mod table;
 mod transform;
 
+use meteroscope_i18n::tr;
 use anyhow::{Context, Result, anyhow};
 use image::RgbaImage;
 use meteroscope_core::Document;
@@ -68,7 +69,7 @@ pub fn clipboard_table(doc: &Document) -> String {
 pub fn export_csv(doc: &Document, path: &Path) -> Result<()> {
     std::fs::write(path, csv_string(doc))
         .map_err(|e| anyhow!(image_io::describe_io(&e)))
-        .with_context(|| format!("Impossible d'exporter les mesures vers « {} »", image_io::file_name(path)))
+        .with_context(|| tr!("csv.export_failed", file = image_io::file_name(path)))
 }
 
 /// Dessine les mesures visibles (traits, poignées discrètes, étiquettes de

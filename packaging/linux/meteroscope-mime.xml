@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-meteroscope">
+    <comment>MeterOscope project</comment>
+    <comment xml:lang="fr">Projet MeterOscope</comment>
+    <comment xml:lang="de">MeterOscope-Projekt</comment>
+    <comment xml:lang="es">Proyecto de MeterOscope</comment>
+    <comment xml:lang="it">Progetto MeterOscope</comment>
+    <comment xml:lang="pl">Projekt MeterOscope</comment>
+    <comment xml:lang="pt_BR">Projeto do MeterOscope</comment>
+    <comment xml:lang="ja">MeterOscope プロジェクト</comment>
+    <comment xml:lang="ko">MeterOscope 프로젝트</comment>
+    <comment xml:lang="zh_CN">MeterOscope 项目</comment>
+    <sub-class-of type="application/json"/>
+    <icon name="meteroscope"/>
+    <glob pattern="*.meteroscope"/>
+  </mime-type>
+</mime-info>

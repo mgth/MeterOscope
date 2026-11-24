@@ -1,5 +1,6 @@
 //! Coquille de l'application : barre d'outils, panneaux, raccourcis, fichiers.
 
+use meteroscope_i18n::tr;
 use crate::camera_view::CameraView;
 use egui::{Align, Color32, ColorImage, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextureHandle, TextureOptions, Ui};
 use image::RgbaImage;
@@ -168,9 +169,9 @@ impl MeterOscopeApp {
         let mut all: Vec<&str> = io::IMAGE_EXTENSIONS.to_vec();
         all.push(io::PROJECT_EXTENSION);
         let picked = rfd::FileDialog::new()
-            .set_title("Ouvrir une image")
-            .add_filter("Images et projets", &all)
-            .add_filter("Tous les fichiers", &["*"])
+            .set_title(tr!("dialog.open_title"))
+            .add_filter(tr!("dialog.filter_images"), &all)
+            .add_filter(tr!("dialog.filter_all"), &["*"])
             .pick_file();
         if let Some(p) = picked {
             self.open_path(ctx, &p);
@@ -203,7 +204,7 @@ impl MeterOscopeApp {
         }
         let path = match (&self.project_path, save_as) {
             (Some(p), false) => p.clone(),
-            _ => match self.save_dialog("Enregistrer le projet", "", io::PROJECT_EXTENSION) {
+            _ => match self.save_dialog(tr!("dialog.save_project"), "", io::PROJECT_EXTENSION) {
                 Some(p) => p,
                 None => return,
             },
@@ -223,25 +224,25 @@ impl MeterOscopeApp {
             self.image_modified = false;
         }
         let project = io::Project { image_path: self.image_path.clone(), document: self.doc.clone() };
-        if self.report(io::save_project(&project, &path), "Projet enregistré").is_some() {
+        if self.report(io::save_project(&project, &path), tr!("msg.project_saved")).is_some() {
             self.saved_revision = self.doc.revision();
             self.project_path = Some(path);
         }
     }
 
     fn export_csv(&mut self) {
-        if let Some(p) = self.save_dialog("Exporter les mesures", "-mesures", "csv") {
+        if let Some(p) = self.save_dialog(tr!("dialog.export_csv"), tr!("file.measurements_suffix"), "csv") {
             let r = io::export_csv(&self.doc, &p);
-            self.report(r, "Mesures exportées");
+            self.report(r, tr!("msg.csv_exported"));
         }
     }
 
     fn export_image(&mut self) {
         let Some(img) = &self.image else { return };
-        if let Some(p) = self.save_dialog("Exporter l'image annotée", "-mesures", "png") {
+        if let Some(p) = self.save_dialog(tr!("dialog.export_image"), tr!("file.measurements_suffix"), "png") {
             let base = io::adjust(img, self.brightness, self.contrast);
             let r = io::save_image(&io::render_annotated(&base, &self.doc), &p);
-            self.report(r, "Image exportée");
+            self.report(r, tr!("msg.image_exported"));
         }
     }
 
@@ -329,44 +330,44 @@ impl MeterOscopeApp {
         let has_image = self.image.is_some() && self.mode == Mode::Image;
         ui.horizontal(|ui| {
             ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
-            if ui.button("📂  Ouvrir").on_hover_text("Ouvrir une image ou un projet (Ctrl+O)").clicked() {
+            if ui.button(format!("📂  {}", tr!("toolbar.open"))).on_hover_text(tr!("toolbar.open_tip")).clicked() {
                 self.open_dialog(&ctx);
             }
-            if ui.selectable_label(self.mode == Mode::Camera, "📷  Caméra").on_hover_text("Capturer depuis une caméra").clicked() {
+            if ui.selectable_label(self.mode == Mode::Camera, format!("📷  {}", tr!("toolbar.camera"))).on_hover_text(tr!("toolbar.camera_tip")).clicked() {
                 self.toggle_camera(&ctx);
             }
             ui.separator();
             ui.add_enabled_ui(has_image, |ui| {
                 let dirty = if self.is_dirty() { " •" } else { "" };
-                if ui.button(format!("💾  Enregistrer{dirty}")).on_hover_text("Enregistrer le projet (Ctrl+S)").clicked() {
+                if ui.button(format!("💾  {}{dirty}", tr!("toolbar.save"))).on_hover_text(tr!("toolbar.save_tip")).clicked() {
                     self.save_project(false);
                 }
-                ui.menu_button("⬇  Exporter", |ui| {
-                    if ui.button("Mesures en CSV…  (Ctrl+E)").clicked() {
+                ui.menu_button(format!("⬇  {}", tr!("toolbar.export")), |ui| {
+                    if ui.button(tr!("toolbar.export_csv")).clicked() {
                         self.export_csv();
                     }
-                    if ui.button("Image annotée…").clicked() {
+                    if ui.button(tr!("toolbar.export_image")).clicked() {
                         self.export_image();
                     }
-                    if ui.button("Copier le tableau").clicked() {
+                    if ui.button(tr!("toolbar.copy_table")).clicked() {
                         ui.ctx().copy_text(io::clipboard_table(&self.doc));
-                        self.info("Tableau copié");
+                        self.info(tr!("msg.table_copied"));
                     }
                 });
                 ui.separator();
-                if ui.add_enabled(self.doc.can_undo(), egui::Button::new("↩")).on_hover_text("Annuler (Ctrl+Z)").clicked() {
+                if ui.add_enabled(self.doc.can_undo(), egui::Button::new("↩")).on_hover_text(tr!("toolbar.undo_tip")).clicked() {
                     self.doc.undo();
                 }
-                if ui.add_enabled(self.doc.can_redo(), egui::Button::new("↪")).on_hover_text("Rétablir (Ctrl+Y)").clicked() {
+                if ui.add_enabled(self.doc.can_redo(), egui::Button::new("↪")).on_hover_text(tr!("toolbar.redo_tip")).clicked() {
                     self.doc.redo();
                 }
                 ui.separator();
-                ui.menu_button("🖼  Image", |ui| {
+                ui.menu_button(format!("🖼  {}", tr!("toolbar.image")), |ui| {
                     for (label, t) in [
-                        ("⟲  Pivoter à gauche", io::Transform::RotateLeft),
-                        ("⟳  Pivoter à droite", io::Transform::RotateRight),
-                        ("⇆  Miroir horizontal", io::Transform::FlipHorizontal),
-                        ("⇅  Miroir vertical", io::Transform::FlipVertical),
+                        (format!("⟲  {}", tr!("image.rotate_left")), io::Transform::RotateLeft),
+                        (format!("⟳  {}", tr!("image.rotate_right")), io::Transform::RotateRight),
+                        (format!("⇆  {}", tr!("image.flip_h")), io::Transform::FlipHorizontal),
+                        (format!("⇅  {}", tr!("image.flip_v")), io::Transform::FlipVertical),
                     ] {
                         if ui.button(label).clicked() {
                             self.transform(&ctx, t);
@@ -374,9 +375,9 @@ impl MeterOscopeApp {
                     }
                     ui.separator();
                     let mut changed = false;
-                    changed |= ui.add(egui::Slider::new(&mut self.brightness, -1.0..=1.0).text("Luminosité")).changed();
-                    changed |= ui.add(egui::Slider::new(&mut self.contrast, -1.0..=1.0).text("Contraste")).changed();
-                    if ui.button("Réinitialiser").clicked() {
+                    changed |= ui.add(egui::Slider::new(&mut self.brightness, -1.0..=1.0).text(tr!("image.brightness"))).changed();
+                    changed |= ui.add(egui::Slider::new(&mut self.contrast, -1.0..=1.0).text(tr!("image.contrast"))).changed();
+                    if ui.button(tr!("image.reset")).clicked() {
                         self.brightness = 0.0;
                         self.contrast = 0.0;
                         changed = true;
@@ -386,17 +387,17 @@ impl MeterOscopeApp {
                     }
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("1:1").on_hover_text("Taille réelle (Ctrl+1)").clicked() {
+                    if ui.button("1:1").on_hover_text(tr!("zoom.actual_tip")).clicked() {
                         self.canvas.zoom_actual();
                     }
-                    if ui.button("Ajuster").on_hover_text("Voir toute l'image (Ctrl+0)").clicked() {
+                    if ui.button(tr!("zoom.fit")).on_hover_text(tr!("zoom.fit_tip")).clicked() {
                         self.canvas.fit();
                     }
-                    if ui.button("➕").on_hover_text("Zoom avant (molette)").clicked() {
+                    if ui.button("➕").on_hover_text(tr!("zoom.in_tip")).clicked() {
                         self.canvas.zoom_by(1.25);
                     }
                     ui.label(format!("{:.0} %", self.canvas.zoom() * 100.0));
-                    if ui.button("➖").on_hover_text("Zoom arrière (molette)").clicked() {
+                    if ui.button("➖").on_hover_text(tr!("zoom.out_tip")).clicked() {
                         self.canvas.zoom_by(0.8);
                     }
                 });
@@ -417,6 +418,8 @@ impl MeterOscopeApp {
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                crate::language::selector(ui);
+                ui.separator();
                 if let Some(img) = &self.image {
                     ui.label(format!("{} × {} px", img.width(), img.height()));
                     ui.separator();
@@ -433,18 +436,18 @@ impl MeterOscopeApp {
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() * 0.3).max(20.0));
             ui.label(RichText::new("MeterOscope").size(34.0).strong());
-            ui.label("Mesurez des longueurs, angles et surfaces sur une image.");
+            ui.label(tr!("welcome.tagline"));
             ui.add_space(24.0);
             let big = |text: &str| egui::Button::new(RichText::new(text).size(18.0)).min_size(egui::vec2(260.0, 48.0));
-            if ui.add(big("📂  Ouvrir une image")).clicked() {
+            if ui.add(big(&format!("📂  {}", tr!("welcome.open")))).clicked() {
                 self.open_dialog(&ctx);
             }
             ui.add_space(8.0);
-            if ui.add(big("📷  Capturer avec la caméra")).clicked() {
+            if ui.add(big(&format!("📷  {}", tr!("welcome.camera")))).clicked() {
                 self.toggle_camera(&ctx);
             }
             ui.add_space(16.0);
-            ui.weak("… ou glissez une image dans la fenêtre");
+            ui.weak(tr!("welcome.drop"));
         });
     }
 }
@@ -487,7 +490,7 @@ impl eframe::App for MeterOscopeApp {
                 }
                 if out.copy_table {
                     ui.ctx().copy_text(io::clipboard_table(&self.doc));
-                    self.info("Tableau copié");
+                    self.info(tr!("msg.table_copied"));
                 }
                 if out.export_csv {
                     self.export_csv();
@@ -499,7 +502,7 @@ impl eframe::App for MeterOscopeApp {
             Mode::Camera => {
                 if let Some(img) = self.camera.show(ui) {
                     self.set_image(&ctx, img, None);
-                    self.info("Image capturée");
+                    self.info(tr!("msg.image_captured"));
                 }
             }
             Mode::Image if self.image.is_none() => self.welcome(ui),

@@ -1,5 +1,6 @@
 //! Lecture et écriture des fichiers image.
 
+use meteroscope_i18n::tr;
 use anyhow::{Context, Result, anyhow};
 use image::{DynamicImage, ImageError, ImageFormat, ImageReader, RgbImage, RgbaImage};
 use std::fs::File;
@@ -17,35 +18,35 @@ pub(crate) fn file_name(path: &Path) -> String {
 /// Message français pour une erreur d'entrée/sortie.
 pub(crate) fn describe_io(e: &std::io::Error) -> String {
     match e.kind() {
-        ErrorKind::NotFound => "fichier ou dossier introuvable".to_owned(),
-        ErrorKind::PermissionDenied => "accès refusé".to_owned(),
-        ErrorKind::IsADirectory => "c'est un dossier, pas un fichier".to_owned(),
-        ErrorKind::StorageFull => "disque plein".to_owned(),
-        ErrorKind::ReadOnlyFilesystem => "support en lecture seule".to_owned(),
-        _ => format!("erreur d'entrée/sortie ({e})"),
+        ErrorKind::NotFound => tr!("io.not_found").to_owned(),
+        ErrorKind::PermissionDenied => tr!("io.denied").to_owned(),
+        ErrorKind::IsADirectory => tr!("io.is_dir").to_owned(),
+        ErrorKind::StorageFull => tr!("io.disk_full").to_owned(),
+        ErrorKind::ReadOnlyFilesystem => tr!("io.read_only").to_owned(),
+        _ => tr!("io.other", error = e),
     }
 }
 
 /// Message français pour une erreur du crate `image`.
 fn describe_image(e: &ImageError) -> String {
     match e {
-        ImageError::Unsupported(u) => format!("format d'image non pris en charge ({u})"),
-        ImageError::Decoding(d) => format!("fichier image corrompu ou illisible ({d})"),
-        ImageError::Encoding(d) => format!("échec de l'encodage ({d})"),
-        ImageError::Limits(_) => "image trop grande pour être chargée".to_owned(),
-        ImageError::Parameter(p) => format!("paramètre invalide ({p})"),
+        ImageError::Unsupported(u) => tr!("image.unsupported", detail = u),
+        ImageError::Decoding(d) => tr!("image.corrupt", detail = d),
+        ImageError::Encoding(d) => tr!("image.encode_failed", detail = d),
+        ImageError::Limits(_) => tr!("image.too_large").to_owned(),
+        ImageError::Parameter(p) => tr!("image.bad_parameter", detail = p),
         ImageError::IoError(io) => describe_io(io),
     }
 }
 
 /// Charge une image en RGBA en appliquant l'orientation EXIF.
 pub fn load_image(path: &Path) -> Result<RgbaImage> {
-    let ctx = || format!("Impossible d'ouvrir l'image « {} »", file_name(path));
+    let ctx = || tr!("image.open_failed", file = file_name(path));
     let reader = ImageReader::open(path).map_err(|e| anyhow!(describe_io(&e))).with_context(ctx)?;
     // Le contenu prime sur l'extension (fichiers mal nommés).
     let reader = reader.with_guessed_format().map_err(|e| anyhow!(describe_io(&e))).with_context(ctx)?;
     if reader.format().is_none() {
-        return Err(anyhow!("format d'image non reconnu")).with_context(ctx);
+        return Err(anyhow!(tr!("image.unknown_format"))).with_context(ctx);
     }
     let mut decoder = reader.into_decoder().map_err(|e| anyhow!(describe_image(&e))).with_context(ctx)?;
     use image::ImageDecoder;
@@ -70,13 +71,13 @@ fn flatten_on_white(image: &RgbaImage) -> RgbImage {
 
 /// Enregistre une image ; le format est déduit de l'extension.
 pub fn save_image(image: &RgbaImage, path: &Path) -> Result<()> {
-    let ctx = || format!("Impossible d'enregistrer l'image « {} »", file_name(path));
+    let ctx = || tr!("image.save_failed", file = file_name(path));
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     let Some(ext) = ext else {
-        return Err(anyhow!("extension manquante (p. ex. .png ou .jpg)")).with_context(ctx);
+        return Err(anyhow!(tr!("image.missing_extension"))).with_context(ctx);
     };
     let Some(format) = ImageFormat::from_extension(&ext).filter(|f| f.writing_enabled()) else {
-        return Err(anyhow!("format « .{ext} » non pris en charge à l'enregistrement")).with_context(ctx);
+        return Err(anyhow!(tr!("image.unsupported_save", ext = ext))).with_context(ctx);
     };
     let file = File::create(path).map_err(|e| anyhow!(describe_io(&e))).with_context(ctx)?;
     let mut w = BufWriter::new(file);

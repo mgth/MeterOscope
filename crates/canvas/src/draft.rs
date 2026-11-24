@@ -181,6 +181,7 @@ mod tests {
 
     #[test]
     fn clic_puis_clic() {
+        meteroscope_i18n::set_language("fr");
         let mut d = Draft::new(ShapeKind::Length);
         assert_eq!(d.press(p(0., 0.), TOL), Step::Continue);
         assert_eq!(d.release(p(0.5, 0.), false, TOL), Step::Continue);
@@ -192,6 +193,7 @@ mod tests {
 
     #[test]
     fn presser_glisser_relacher() {
+        meteroscope_i18n::set_language("fr");
         let mut d = Draft::new(ShapeKind::Rect);
         d.press(p(1., 1.), TOL);
         assert_eq!(d.release(p(20., 30.), true, TOL), Step::Done(vec![p(1., 1.), p(20., 30.)]));
@@ -202,6 +204,7 @@ mod tests {
 
     #[test]
     fn angle_et_doublons() {
+        meteroscope_i18n::set_language("fr");
         let mut d = Draft::new(ShapeKind::Angle);
         d.press(p(0., 0.), TOL);
         d.release(p(0., 0.), false, TOL);
@@ -217,6 +220,7 @@ mod tests {
 
     #[test]
     fn chemin_et_surface() {
+        meteroscope_i18n::set_language("fr");
         let mut d = Draft::new(ShapeKind::Path);
         for q in [p(0., 0.), p(10., 0.), p(10., 10.)] {
             d.press(q, TOL);
@@ -243,6 +247,7 @@ mod tests {
 
     #[test]
     fn marqueur_et_cercle3() {
+        meteroscope_i18n::set_language("fr");
         let mut m = Draft::new(ShapeKind::Marker);
         assert_eq!(m.press(p(3., 4.), TOL), Step::Done(vec![p(3., 4.)]));
         assert_eq!(m.release(p(3., 4.), false, TOL), Step::Continue);
@@ -260,6 +265,7 @@ mod tests {
 
     #[test]
     fn contrainte_maj() {
+        meteroscope_i18n::set_language("fr");
         let o = p(10., 10.);
         assert_eq!(snap45(o, p(50., 13.)), p(50., 10.));
         assert_eq!(snap45(o, p(12., -30.)), p(10., -30.));

@@ -103,6 +103,7 @@ mod tests {
 
     #[test]
     fn basics() {
+        meteroscope_i18n::set_language("fr");
         let sq = [Pt::new(0., 0.), Pt::new(10., 0.), Pt::new(10., 10.), Pt::new(0., 10.)];
         assert_eq!(polygon_area(&sq), 100.0);
         assert_eq!(polygon_perimeter(&sq), 40.0);

@@ -1,5 +1,6 @@
 //! Palette d'outils verticale et raccourcis clavier.
 
+use meteroscope_i18n::tr;
 use crate::icons::paint_tool_icon;
 use egui::{Align2, FontId, Key, Rect, RichText, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
 use meteroscope_core::{ShapeKind, Tool};
@@ -26,8 +27,8 @@ const ICON: f32 = 22.0;
 /// Nom complet de l'outil.
 pub fn tool_name(tool: Tool) -> &'static str {
     match tool {
-        Tool::Select => "Sélection",
-        Tool::Calibrate => "Échelle",
+        Tool::Select => tr!("tool.select"),
+        Tool::Calibrate => tr!("tool.scale"),
         Tool::Draw(k) => k.label(),
     }
 }
@@ -35,7 +36,7 @@ pub fn tool_name(tool: Tool) -> &'static str {
 /// Nom court affiché sous l'icône (tient dans la largeur du bouton).
 fn short_name(tool: Tool) -> &'static str {
     match tool {
-        Tool::Draw(ShapeKind::Circle3) => "Cercle 3 pts",
+        Tool::Draw(ShapeKind::Circle3) => tr!("tool.circle3_short"),
         t => tool_name(t),
     }
 }
@@ -43,17 +44,17 @@ fn short_name(tool: Tool) -> &'static str {
 /// Description d'une ligne (infobulle).
 pub fn tool_description(tool: Tool) -> &'static str {
     match tool {
-        Tool::Select => "Sélectionner, déplacer ou modifier une mesure.",
-        Tool::Calibrate => "Tracer un segment de longueur connue pour définir l'échelle.",
+        Tool::Select => tr!("tool_help.select"),
+        Tool::Calibrate => tr!("tool_help.scale"),
         Tool::Draw(k) => match k {
-            ShapeKind::Length => "Distance entre deux points.",
-            ShapeKind::Path => "Longueur d'une ligne brisée ; double-clic pour terminer.",
-            ShapeKind::Angle => "Angle par trois points : un côté, le sommet, l'autre côté.",
-            ShapeKind::Area => "Aire et périmètre d'un contour ; double-clic pour fermer.",
-            ShapeKind::Rect => "Largeur, hauteur et aire, par deux coins opposés.",
-            ShapeKind::Circle => "Cercle par son centre, puis un point du bord.",
-            ShapeKind::Circle3 => "Cercle passant par trois points de son bord.",
-            ShapeKind::Marker => "Pointer et compter des éléments.",
+            ShapeKind::Length => tr!("tool_help.length"),
+            ShapeKind::Path => tr!("tool_help.path"),
+            ShapeKind::Angle => tr!("tool_help.angle"),
+            ShapeKind::Area => tr!("tool_help.area"),
+            ShapeKind::Rect => tr!("tool_help.rect"),
+            ShapeKind::Circle => tr!("tool_help.circle"),
+            ShapeKind::Circle3 => tr!("tool_help.circle3"),
+            ShapeKind::Marker => tr!("tool_help.marker"),
         },
     }
 }
@@ -82,7 +83,7 @@ pub fn tool_shortcut(tool: Tool) -> Option<Key> {
 /// Texte d'infobulle complet : description + raccourci.
 pub fn tool_tooltip(tool: Tool) -> String {
     match tool_shortcut(tool) {
-        Some(k) => format!("{}\nRaccourci : {}", tool_description(tool), k.name()),
+        Some(k) => format!("{}\n{}", tool_description(tool), tr!("tool.shortcut", key = k.name())),
         None => tool_description(tool).to_owned(),
     }
 }
@@ -154,7 +155,7 @@ fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
         ui.label(RichText::new(tool_name(tool)).strong());
         ui.label(tool_description(tool));
         if let Some(k) = tool_shortcut(tool) {
-            ui.label(RichText::new(format!("Raccourci : {}", k.name())).weak());
+            ui.label(RichText::new(tr!("tool.shortcut", key = k.name())).weak());
         }
     })
 }
@@ -166,6 +167,7 @@ mod tests {
 
     #[test]
     fn raccourcis_sans_collision() {
+        meteroscope_i18n::set_language("fr");
         let mut seen = HashSet::new();
         for t in TOOLS {
             let k = tool_shortcut(t).expect("chaque outil a un raccourci");
@@ -179,6 +181,7 @@ mod tests {
 
     #[test]
     fn tous_les_types_sont_dans_la_palette() {
+        meteroscope_i18n::set_language("fr");
         for k in ShapeKind::ALL {
             assert!(TOOLS.contains(&Tool::Draw(k)));
         }

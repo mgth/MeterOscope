@@ -1,3 +1,4 @@
+use meteroscope_i18n::tr;
 use crate::calibration::Calibration;
 use crate::geometry::{self as geo, Pt};
 use serde::{Deserialize, Serialize};
@@ -43,14 +44,14 @@ impl ShapeKind {
     /// Nom affiché (français).
     pub fn label(self) -> &'static str {
         match self {
-            ShapeKind::Length => "Longueur",
-            ShapeKind::Path => "Chemin",
-            ShapeKind::Angle => "Angle",
-            ShapeKind::Area => "Surface",
-            ShapeKind::Rect => "Rectangle",
-            ShapeKind::Circle => "Cercle",
-            ShapeKind::Circle3 => "Cercle 3 points",
-            ShapeKind::Marker => "Marqueur",
+            ShapeKind::Length => tr!("shape.length"),
+            ShapeKind::Path => tr!("shape.path"),
+            ShapeKind::Angle => tr!("shape.angle"),
+            ShapeKind::Area => tr!("shape.area"),
+            ShapeKind::Rect => tr!("shape.rect"),
+            ShapeKind::Circle => tr!("shape.circle"),
+            ShapeKind::Circle3 => tr!("shape.circle3"),
+            ShapeKind::Marker => tr!("shape.marker"),
         }
     }
 
@@ -236,14 +237,14 @@ pub enum Quantity {
 impl Quantity {
     pub fn label(self) -> &'static str {
         match self {
-            Quantity::Length => "Longueur",
-            Quantity::Angle => "Angle",
-            Quantity::Area => "Aire",
-            Quantity::Perimeter => "Périmètre",
-            Quantity::Width => "Largeur",
-            Quantity::Height => "Hauteur",
-            Quantity::Diameter => "Diamètre",
-            Quantity::Radius => "Rayon",
+            Quantity::Length => tr!("quantity.length"),
+            Quantity::Angle => tr!("quantity.angle"),
+            Quantity::Area => tr!("quantity.area"),
+            Quantity::Perimeter => tr!("quantity.perimeter"),
+            Quantity::Width => tr!("quantity.width"),
+            Quantity::Height => tr!("quantity.height"),
+            Quantity::Diameter => tr!("quantity.diameter"),
+            Quantity::Radius => tr!("quantity.radius"),
         }
     }
 }
@@ -263,7 +264,7 @@ impl Value {
     }
 }
 
-/// Formate un nombre avec une précision adaptée à sa grandeur, virgule décimale.
+/// Formate un nombre avec une précision adaptée à sa grandeur, séparateur décimal de la langue.
 pub fn format_number(v: f64) -> String {
     let a = v.abs();
     let decimals = if a >= 1000.0 {
@@ -275,7 +276,11 @@ pub fn format_number(v: f64) -> String {
     } else {
         3
     };
-    format!("{v:.decimals$}").replace('.', ",")
+    let s = format!("{v:.decimals$}");
+    match meteroscope_i18n::decimal_separator() {
+        '.' => s,
+        sep => s.replace('.', &sep.to_string()),
+    }
 }
 
 /// Une mesure posée sur l'image.
@@ -294,6 +299,7 @@ mod tests {
 
     #[test]
     fn values_and_calibration() {
+        meteroscope_i18n::set_language("fr");
         let mut cal = Calibration::default();
         let s = Shape::Length { a: Pt::new(0., 0.), b: Pt::new(30., 40.) };
         assert_eq!(s.values(&cal)[0].text(), "50,00 px");

@@ -6,4 +6,5 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+meteroscope-i18n.workspace = true
 serde.workspace = true

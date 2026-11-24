@@ -1,5 +1,6 @@
 //! Fichier projet `.meteroscope` : JSON lisible, versionné.
 
+use meteroscope_i18n::tr;
 use crate::Project;
 use crate::image_io::{describe_io, file_name};
 use anyhow::{Context, Result, anyhow, bail};
@@ -80,7 +81,7 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 }
 
 pub fn save_project(project: &Project, path: &Path) -> Result<()> {
-    let ctx = || format!("Impossible d'enregistrer le projet « {} »", file_name(path));
+    let ctx = || tr!("project.save_failed", file = file_name(path));
     let proj_abs = absolute_clean(path);
     let dir = proj_abs.parent().unwrap_or(Path::new("/"));
     let (image, image_absolute) = match &project.image_path {
@@ -100,7 +101,7 @@ pub fn save_project(project: &Project, path: &Path) -> Result<()> {
         image_absolute,
         document: project.document.clone(),
     };
-    let mut json = serde_json::to_string_pretty(&file).context("sérialisation du projet").with_context(ctx)?;
+    let mut json = serde_json::to_string_pretty(&file).context(tr!("project.serialize")).with_context(ctx)?;
     json.push('\n');
     write_atomic(path, json.as_bytes()).map_err(|e| anyhow!(describe_io(&e))).with_context(ctx)?;
     Ok(())
@@ -125,29 +126,26 @@ fn resolve_image(stored: &str, absolute: Option<&str>, dir: &Path) -> PathBuf {
 }
 
 pub fn load_project(path: &Path) -> Result<Project> {
-    let ctx = || format!("Impossible d'ouvrir le projet « {} »", file_name(path));
+    let ctx = || tr!("project.open_failed", file = file_name(path));
     let text = std::fs::read(path).map_err(|e| anyhow!(describe_io(&e))).with_context(ctx)?;
-    let text = String::from_utf8(text).map_err(|_| anyhow!("ce n'est pas un fichier texte UTF-8")).with_context(ctx)?;
+    let text = String::from_utf8(text).map_err(|_| anyhow!(tr!("project.not_utf8"))).with_context(ctx)?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     let value: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| anyhow!("ce n'est pas un projet MeterOscope (JSON invalide, ligne {}, colonne {})", e.line(), e.column()))
+        .map_err(|e| anyhow!(tr!("project.bad_json", line = e.line(), column = e.column())))
         .with_context(ctx)?;
     let check = || -> Result<()> {
         if value.get("format").and_then(|f| f.as_str()) != Some(FORMAT_ID) {
-            bail!("ce n'est pas un projet MeterOscope");
+            bail!(tr!("project.not_project"));
         }
         match value.get("version").and_then(|v| v.as_u64()) {
-            None => bail!("version du format absente ou invalide"),
-            Some(v) if v == 0 || v > PROJECT_FORMAT_VERSION as u64 => bail!(
-                "format de projet version {v} inconnu (cette version de MeterOscope lit jusqu'à la version {PROJECT_FORMAT_VERSION}) ; \
-                 mettez MeterOscope à jour"
-            ),
+            None => bail!(tr!("project.bad_version")),
+            Some(v) if v == 0 || v > PROJECT_FORMAT_VERSION as u64 => bail!(tr!("project.unknown_version", version = v, max = PROJECT_FORMAT_VERSION)),
             Some(_) => Ok(()),
         }
     };
     check().with_context(ctx)?;
     let file: ProjectFile =
-        serde_json::from_value(value).map_err(|e| anyhow!("contenu du projet invalide : {e}")).with_context(ctx)?;
+        serde_json::from_value(value).map_err(|e| anyhow!(tr!("project.bad_content", error = e))).with_context(ctx)?;
     let proj_abs = absolute_clean(path);
     let dir = proj_abs.parent().unwrap_or(Path::new("/"));
     let image_path = file.image.as_deref().map(|s| resolve_image(s, file.image_absolute.as_deref(), dir));
@@ -160,6 +158,7 @@ mod tests {
 
     #[test]
     fn relative_paths() {
+        meteroscope_i18n::set_language("fr");
         let r = |t: &str, b: &str| relative_to(Path::new(t), Path::new(b));
         assert_eq!(r("/a/b/img.png", "/a/b").as_deref(), Some("img.png"));
         assert_eq!(r("/a/b/c/img.png", "/a/b").as_deref(), Some("c/img.png"));
@@ -175,6 +174,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn relative_paths_windows() {
+        meteroscope_i18n::set_language("fr");
         let r = |t: &str, b: &str| relative_to(Path::new(t), Path::new(b));
         assert_eq!(r(r"C:\a\b\c\img.png", r"C:\a\b").as_deref(), Some("c/img.png"));
         assert_eq!(r(r"C:\a\x\img.png", r"C:\a\b").as_deref(), Some("../x/img.png"));

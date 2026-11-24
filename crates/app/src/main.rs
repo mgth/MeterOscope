@@ -3,6 +3,7 @@
 
 mod app;
 mod camera_view;
+mod language;
 
 /// Icône de la fenêtre et de la barre des tâches.
 fn window_icon() -> egui::IconData {
@@ -11,6 +12,7 @@ fn window_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    language::init();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("MeterOscope")

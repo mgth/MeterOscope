@@ -1,5 +1,6 @@
 //! Logique pure : lecture des nombres saisis et mise en forme de l'échelle.
 
+use meteroscope_i18n::tr;
 use meteroscope_core::Scale;
 
 /// Lit un nombre saisi par l'utilisateur : accepte la virgule ou le point
@@ -40,7 +41,10 @@ pub fn format_significant(v: f64, sig: usize) -> String {
     if s == "-0" {
         s = "0".to_owned();
     }
-    s.replace('.', ",")
+    match meteroscope_i18n::decimal_separator() {
+        '.' => s,
+        sep => s.replace('.', &sep.to_string()),
+    }
 }
 
 /// Textes décrivant une échelle : (« 1 px = 0,04082 mm », « 24,5 px par mm »).
@@ -52,7 +56,7 @@ pub fn scale_texts(scale: &Scale) -> (String, String) {
 pub fn scale_texts_raw(units_per_px: f64, unit: &str) -> (String, String) {
     let main = format!("1 px = {} {unit}", format_significant(units_per_px, 4));
     let inverse = if units_per_px > 0.0 {
-        format!("{} px par {unit}", format_significant(1.0 / units_per_px, 4))
+        tr!("scale.px_per_unit", px = format_significant(1.0 / units_per_px, 4), unit = unit)
     } else {
         String::new()
     };
@@ -65,6 +69,7 @@ mod tests {
 
     #[test]
     fn lecture_des_nombres() {
+        meteroscope_i18n::set_language("fr");
         assert_eq!(parse_number("12,5"), Some(12.5));
         assert_eq!(parse_number("12.5"), Some(12.5));
         assert_eq!(parse_number("  7 "), Some(7.0));
@@ -82,6 +87,7 @@ mod tests {
 
     #[test]
     fn chiffres_significatifs() {
+        meteroscope_i18n::set_language("fr");
         assert_eq!(format_significant(0.0123456, 4), "0,01235");
         assert_eq!(format_significant(81.3, 4), "81,3");
         assert_eq!(format_significant(120.0, 4), "120");
@@ -93,6 +99,7 @@ mod tests {
 
     #[test]
     fn texte_de_l_echelle() {
+        meteroscope_i18n::set_language("fr");
         let s = Scale { units_per_px: 0.1, unit: "mm".to_owned() };
         assert_eq!(scale_texts(&s), ("1 px = 0,1 mm".to_owned(), "10 px par mm".to_owned()));
         let (a, b) = scale_texts_raw(10.0 / 245.0, "µm");

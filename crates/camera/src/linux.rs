@@ -1,5 +1,6 @@
 //! Capture sous Linux, directement par V4L2.
 
+use meteroscope_i18n::tr;
 use std::io;
 use std::path::PathBuf;
 use std::thread::JoinHandle;
@@ -50,7 +51,7 @@ fn device_name(index: u32) -> String {
         Some((a, b)) if b.starts_with(a) => b,
         _ => raw,
     };
-    if name.is_empty() { format!("Caméra {index}") } else { name.to_string() }
+    if name.is_empty() { tr!("camera.default_name", n = index) } else { name.to_string() }
 }
 
 pub(crate) fn list_devices() -> Vec<DeviceInfo> {
@@ -134,15 +135,15 @@ fn fps(f: Fraction) -> f32 {
 /// Message français pour une erreur système V4L2.
 fn explain(e: &io::Error) -> String {
     match e.raw_os_error() {
-        Some(libc_errno::EBUSY) => "la caméra est déjà utilisée par une autre application".into(),
+        Some(libc_errno::EBUSY) => tr!("camera.busy").into(),
         Some(libc_errno::EACCES | libc_errno::EPERM) => {
-            "permission refusée (l'utilisateur doit appartenir au groupe « video »)".into()
+            tr!("camera.denied_linux").into()
         }
-        Some(libc_errno::ENOENT | libc_errno::ENODEV | libc_errno::ENXIO) => "caméra introuvable ou débranchée".into(),
+        Some(libc_errno::ENOENT | libc_errno::ENODEV | libc_errno::ENXIO) => tr!("camera.not_found").into(),
         Some(libc_errno::ENOSPC) => {
-            "bande passante USB insuffisante (essayez une résolution plus basse ou un autre port USB)".into()
+            tr!("camera.usb_bandwidth").into()
         }
-        _ => format!("erreur du pilote ({e})"),
+        _ => tr!("camera.driver_error", error = e),
     }
 }
 
@@ -180,7 +181,7 @@ fn configure(dev: &Device, mode: VideoMode, interval: Fraction) -> io::Result<Co
     });
     let actual = dev.set_format(&Format::new(mode.width, mode.height, fourcc))?;
     let Some(format) = fourcc_to_format(actual.fourcc) else {
-        return Err(io::Error::other("format refusé par la caméra"));
+        return Err(io::Error::other(tr!("camera.format_refused")));
     };
     // La cadence n'est qu'une préférence : on ignore un refus.
     let rate = dev.set_params(&Parameters::new(interval)).map(|p| fps(p.interval)).unwrap_or(mode.fps);
@@ -199,8 +200,8 @@ pub(crate) fn start(
     let mut candidates = rank_modes(probe(device.index), wanted);
     if candidates.is_empty() {
         return Err(CameraError::Open(match wanted {
-            Some((w, h)) => format!("résolution {w}×{h} non prise en charge"),
-            None => "aucun format d'image pris en charge".into(),
+            Some((w, h)) => tr!("camera.bad_resolution", w = w, h = h),
+            None => tr!("camera.no_format").into(),
         }));
     }
     // Configuration synchrone du meilleur mode : les erreurs d'ouverture
@@ -222,7 +223,7 @@ pub(crate) fn start(
         }
     }
     let Some(configured) = configured else {
-        return Err(CameraError::Open(last_err.map_or_else(|| "aucun mode utilisable".into(), |e| explain(&e))));
+        return Err(CameraError::Open(last_err.map_or_else(|| tr!("camera.no_mode").into(), |e| explain(&e))));
     };
     publisher.set_mode(configured.mode);
     spawn_capture(publisher, move |p| capture(p, dev, configured, candidates))
@@ -248,7 +249,7 @@ fn capture(p: &mut Publisher, dev: Device, first: Configured, mut fallback: Vec<
             Outcome::NoBandwidth(e) => explain(&e),
             Outcome::Undecodable(format, e) => {
                 fallback.retain(|(m, _)| m.format != format);
-                format!("images illisibles ({e})")
+                tr!("camera.unreadable", error = e)
             }
         };
         loop {
@@ -256,7 +257,7 @@ fn capture(p: &mut Publisher, dev: Device, first: Configured, mut fallback: Vec<
                 return;
             }
             if fallback.is_empty() {
-                p.fail(format!("Capture impossible : {err}."));
+                p.fail(tr!("camera.capture_failed", error = err));
                 return;
             }
             let (mode, interval) = fallback.remove(0);
@@ -307,7 +308,7 @@ fn run(p: &mut Publisher, mut cur: Configured) -> Outcome {
                             return Outcome::Undecodable(cur.format, e);
                         }
                         if decode_errors >= 60 {
-                            p.fail(format!("Images illisibles reçues de la caméra : {e}"));
+                            p.fail(tr!("camera.unreadable_received", error = e));
                             return Outcome::Finished;
                         }
                     }
@@ -317,9 +318,9 @@ fn run(p: &mut Publisher, mut cur: Configured) -> Outcome {
                 dequeue_only = true;
                 if last_frame.elapsed() > STALL {
                     p.fail(if got_frame {
-                        "La caméra ne fournit plus d'image."
+                        tr!("camera.no_more_images")
                     } else {
-                        "La caméra n'envoie aucune image."
+                        tr!("camera.no_images")
                     });
                     return Outcome::Finished;
                 }
@@ -328,8 +329,8 @@ fn run(p: &mut Publisher, mut cur: Configured) -> Outcome {
             Err(e) if !got_frame && e.raw_os_error() == Some(libc_errno::ENOSPC) => return Outcome::NoBandwidth(e),
             Err(e) => {
                 let msg = match e.raw_os_error() {
-                    Some(libc_errno::ENODEV | libc_errno::ENXIO) => "La caméra a été débranchée.".to_string(),
-                    _ => format!("Capture interrompue : {}.", explain(&e)),
+                    Some(libc_errno::ENODEV | libc_errno::ENXIO) => tr!("camera.unplugged").to_string(),
+                    _ => tr!("camera.interrupted", error = explain(&e)),
                 };
                 p.fail(msg);
                 return Outcome::Finished;

@@ -7,6 +7,7 @@
 //! offre ni délai d'attente sur la lecture d'image (arrêt non garanti) ni tri
 //! des nœuds /dev/video*. Les autres systèmes utilisent nokhwa.
 
+use meteroscope_i18n::tr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -43,9 +44,9 @@ pub struct Frame {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CameraError {
-    #[error("aucune caméra détectée")]
+    #[error("{}", meteroscope_i18n::tr!("camera.none_error"))]
     NoDevice,
-    #[error("impossible d'ouvrir la caméra : {0}")]
+    #[error("{}", meteroscope_i18n::tr!("camera.open_failed", error = .0))]
     Open(String),
 }
 
@@ -76,7 +77,7 @@ impl PixelFormat {
             Self::Yuyv => "YUYV",
             Self::Uyvy => "UYVY",
             Self::Nv12 => "NV12",
-            Self::Gray => "Gris",
+            Self::Gray => tr!("camera.format_gray"),
             Self::Rgb => "RGB",
             Self::Bgr => "BGR",
         }
@@ -250,10 +251,10 @@ pub(crate) fn spawn_capture(
         .name("meteroscope-camera".into())
         .spawn(move || {
             if catch_unwind(AssertUnwindSafe(|| body(&mut publisher))).is_err() {
-                publisher.fail("La capture vidéo s'est arrêtée sur une erreur interne.");
+                publisher.fail(tr!("camera.internal_stop"));
             }
         })
-        .map_err(|e| CameraError::Open(format!("impossible de lancer le fil de capture ({e})")))
+        .map_err(|e| CameraError::Open(tr!("camera.thread_failed", error = e)))
 }
 
 /// Flux vidéo en direct, capturé dans un fil dédié. S'arrête au `Drop`.
@@ -299,7 +300,7 @@ impl CameraStream {
             _alive: tx,
         };
         let thread = catch_unwind(AssertUnwindSafe(|| backend::start(device, wanted, publisher)))
-            .unwrap_or_else(|_| Err(CameraError::Open("erreur interne du pilote".into())))?;
+            .unwrap_or_else(|_| Err(CameraError::Open(tr!("camera.driver_internal").into())))?;
         Ok(Self { shared, thread: Some(thread), alive })
     }
 
@@ -363,6 +364,7 @@ mod tests {
 
     #[test]
     fn choix_du_mode() {
+        meteroscope_i18n::set_language("fr");
         use PixelFormat::*;
         // Profil d'une C920 : YUYV 1080p à 5 i/s, MJPEG 1080p à 30 i/s.
         let modes = vec![

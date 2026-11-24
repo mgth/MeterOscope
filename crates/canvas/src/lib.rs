@@ -19,6 +19,7 @@ mod view;
 #[cfg(test)]
 mod tests;
 
+use meteroscope_i18n::tr;
 use draft::{Draft, Step};
 use edit::Hit;
 use egui::{
@@ -231,42 +232,42 @@ impl Canvas {
         let s = match self.tool {
             Tool::Select => {
                 if matches!(self.gesture.as_ref().map(|g| g.kind), Some(GestureKind::Handle(..))) {
-                    "Relâchez pour placer le point — Maj : contraindre"
+                    tr!("hint.select.drag_handle")
                 } else if self.has_selection {
-                    "Glissez une poignée pour modifier, le trait pour déplacer — Suppr : supprimer, Échap : désélectionner"
+                    tr!("hint.select.selected")
                 } else {
-                    "Cliquez une mesure pour la sélectionner — glisser dans le vide : déplacer la vue, molette : zoom"
+                    tr!("hint.select.idle")
                 }
             }
             Tool::Calibrate => match (n, self.calib_seg.is_some()) {
-                (0, false) => "Échelle : cliquez le début d'une longueur connue (ou glissez d'un bout à l'autre)",
-                (0, true) => "Indiquez la longueur réelle dans la boîte de dialogue — ou tracez un autre segment",
-                _ => "Cliquez la fin de la longueur connue — Maj : horizontale/verticale",
+                (0, false) => tr!("hint.scale.start"),
+                (0, true) => tr!("hint.scale.dialog"),
+                _ => tr!("hint.scale.end"),
             },
             Tool::Draw(kind) => match (kind, n) {
-                (ShapeKind::Length, 0) => "Cliquez le premier point (ou glissez d'un bout à l'autre)",
-                (ShapeKind::Length, _) => "Cliquez le deuxième point — Maj : horizontale/verticale/45°",
-                (ShapeKind::Rect, 0) => "Cliquez un premier coin (ou glissez en diagonale)",
-                (ShapeKind::Rect, _) => "Cliquez le coin opposé — Maj : carré",
-                (ShapeKind::Circle, 0) => "Cliquez le centre du cercle (ou glissez du centre vers le bord)",
-                (ShapeKind::Circle, _) => "Cliquez un point du bord du cercle",
-                (ShapeKind::Circle3, 0) => "Cliquez un premier point sur le bord du cercle",
-                (ShapeKind::Circle3, 1) => "Cliquez un deuxième point sur le bord",
-                (ShapeKind::Circle3, _) => "Cliquez un troisième point sur le bord",
-                (ShapeKind::Angle, 0) => "Cliquez un point sur le premier côté de l'angle",
-                (ShapeKind::Angle, 1) => "Cliquez le sommet de l'angle — Maj : horizontale/verticale/45°",
-                (ShapeKind::Angle, _) => "Cliquez un point sur le second côté — Maj : horizontale/verticale/45°",
-                (ShapeKind::Path, 0) => "Cliquez le premier point du chemin",
-                (ShapeKind::Path, 1) => "Cliquez le point suivant — Retour arrière : retirer le dernier point",
+                (ShapeKind::Length, 0) => tr!("hint.length.first"),
+                (ShapeKind::Length, _) => tr!("hint.length.second"),
+                (ShapeKind::Rect, 0) => tr!("hint.rect.first"),
+                (ShapeKind::Rect, _) => tr!("hint.rect.second"),
+                (ShapeKind::Circle, 0) => tr!("hint.circle.center"),
+                (ShapeKind::Circle, _) => tr!("hint.circle.edge"),
+                (ShapeKind::Circle3, 0) => tr!("hint.circle3.first"),
+                (ShapeKind::Circle3, 1) => tr!("hint.circle3.second"),
+                (ShapeKind::Circle3, _) => tr!("hint.circle3.third"),
+                (ShapeKind::Angle, 0) => tr!("hint.angle.first"),
+                (ShapeKind::Angle, 1) => tr!("hint.angle.vertex"),
+                (ShapeKind::Angle, _) => tr!("hint.angle.second"),
+                (ShapeKind::Path, 0) => tr!("hint.path.first"),
+                (ShapeKind::Path, 1) => tr!("hint.path.second"),
                 (ShapeKind::Path, _) => {
-                    "Cliquez le point suivant — double-clic, Entrée ou clic droit pour terminer, Retour arrière : retirer un point"
+                    tr!("hint.path.next")
                 }
-                (ShapeKind::Area, 0) => "Cliquez le premier sommet de la surface",
-                (ShapeKind::Area, 1 | 2) => "Cliquez le sommet suivant — Retour arrière : retirer le dernier point",
+                (ShapeKind::Area, 0) => tr!("hint.area.first"),
+                (ShapeKind::Area, 1 | 2) => tr!("hint.area.second"),
                 (ShapeKind::Area, _) => {
-                    "Cliquez le sommet suivant — double-clic, Entrée ou clic sur le premier point pour fermer"
+                    tr!("hint.area.next")
                 }
-                (ShapeKind::Marker, _) => "Cliquez pour poser un marqueur (comptage)",
+                (ShapeKind::Marker, _) => tr!("hint.marker"),
             },
         };
         s.to_owned()

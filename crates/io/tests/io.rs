@@ -43,6 +43,7 @@ fn sample_doc() -> Document {
 
 #[test]
 fn project_round_trip_relative() {
+    meteroscope_i18n::set_language("fr");
     let dir = TestDir::new("projet");
     std::fs::create_dir_all(dir.path("a/images")).unwrap();
     let img = dir.path("a/images/photo.png");
@@ -86,6 +87,7 @@ fn project_round_trip_relative() {
 
 #[test]
 fn project_moved_alone_falls_back_to_absolute() {
+    meteroscope_i18n::set_language("fr");
     let dir = TestDir::new("projet-seul");
     let img = dir.path("photo.png");
     std::fs::write(&img, b"x").unwrap();
@@ -97,6 +99,7 @@ fn project_moved_alone_falls_back_to_absolute() {
 
 #[test]
 fn project_errors() {
+    meteroscope_i18n::set_language("fr");
     let dir = TestDir::new("projet-erreurs");
     let err = |content: &str| {
         let p = dir.path("x.meteroscope");
@@ -124,6 +127,7 @@ fn quadrants(w: u32, h: u32) -> RgbaImage {
 
 #[test]
 fn save_and_load_images() {
+    meteroscope_i18n::set_language("fr");
     let dir = TestDir::new("images");
     let mut img = quadrants(32, 16);
     img.put_pixel(0, 0, Rgba([1, 2, 3, 128]));
@@ -175,6 +179,7 @@ fn exif_orientation(value: u16) -> Vec<u8> {
 
 #[test]
 fn exif_orientation_is_applied() {
+    meteroscope_i18n::set_language("fr");
     let dir = TestDir::new("exif");
     let (w, h) = (6u32, 4u32);
     let mut img = RgbaImage::from_pixel(w, h, Rgba([50, 50, 50, 255]));
@@ -208,6 +213,7 @@ fn exif_orientation_is_applied() {
 
 #[test]
 fn export_csv_file_has_bom() {
+    meteroscope_i18n::set_language("fr");
     let dir = TestDir::new("csv");
     let p = dir.path("m.csv");
     export_csv(&sample_doc(), &p).unwrap();
@@ -219,6 +225,7 @@ fn export_csv_file_has_bom() {
 /// Rendu de démonstration à regarder à l'œil : `METEROSCOPE_RENDER_DEMO=<dossier> cargo test`.
 #[test]
 fn render_demo() {
+    meteroscope_i18n::set_language("fr");
     let Ok(out_dir) = std::env::var("METEROSCOPE_RENDER_DEMO") else { return };
     for (w, h) in [(640u32, 480u32), (4000, 3000)] {
         let k = w as f64 / 640.0;

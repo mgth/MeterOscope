@@ -1,5 +1,6 @@
 //! Boîte de dialogue « Définir l'échelle ».
 
+use meteroscope_i18n::tr;
 use crate::format::{format_significant, parse_number, scale_texts_raw};
 use egui::text::CCursorRange;
 use egui::{Align, Button, ComboBox, Context, Id, Key, Layout, Modal, RichText, TextEdit, vec2};
@@ -149,18 +150,18 @@ impl CalibrationDialog {
 
         let modal = Modal::new(Id::unique("meteroscope_dialogue_echelle")).show(ctx, |ui| {
             ui.set_width(330.0);
-            ui.heading("Définir l'échelle");
+            ui.heading(tr!("calib.title"));
             ui.add_space(4.0);
-            ui.label(RichText::new(format!("Segment tracé : {} px", format_number(px))).weak());
+            ui.label(RichText::new(tr!("calib.segment", px = format_number(px))).weak());
             ui.add_space(10.0);
-            ui.label("Longueur réelle de ce segment :");
+            ui.label(tr!("calib.real_length"));
             ui.add_space(2.0);
 
             ui.horizontal(|ui| {
                 let mut output = TextEdit::singleline(&mut self.value)
                     .id(Id::unique("meteroscope_echelle_valeur"))
                     .desired_width(120.0)
-                    .hint_text("p. ex. 10")
+                    .hint_text(tr!("calib.value_hint"))
                     .show(ui);
                 let resp = output.response.response.clone();
                 if self.focus {
@@ -170,7 +171,7 @@ impl CalibrationDialog {
                     self.focus = false;
                 }
 
-                let shown = if self.custom_unit { "Autre…" } else { self.unit.as_str() };
+                let shown = if self.custom_unit { tr!("calib.other_unit") } else { self.unit.as_str() };
                 let combo = ComboBox::from_id_salt("meteroscope_echelle_unite").selected_text(shown.to_owned()).width(72.0).show_ui(
                     ui,
                     |ui| {
@@ -180,15 +181,15 @@ impl CalibrationDialog {
                                 self.custom_unit = false;
                             }
                         }
-                        if ui.selectable_label(self.custom_unit, "Autre…").clicked() && !self.custom_unit {
+                        if ui.selectable_label(self.custom_unit, tr!("calib.other_unit")).clicked() && !self.custom_unit {
                             self.custom_unit = true;
                             self.unit.clear();
                         }
                     },
                 );
-                combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Unité"));
+                combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tr!("calib.unit")));
                 if self.custom_unit {
-                    ui.add(TextEdit::singleline(&mut self.unit).desired_width(64.0).hint_text("unité"));
+                    ui.add(TextEdit::singleline(&mut self.unit).desired_width(64.0).hint_text(tr!("calib.unit_hint")));
                 }
             });
 
@@ -203,16 +204,16 @@ impl CalibrationDialog {
                     ui.label(RichText::new(inverse).weak());
                 }
                 CalibrationInput::Empty => {
-                    let t = RichText::new("Saisissez la longueur réelle du segment.");
+                    let t = RichText::new(tr!("calib.enter_length"));
                     ui.label(if self.tried { t.color(error) } else { t.weak() });
                     ui.label("");
                 }
                 CalibrationInput::BadNumber => {
-                    ui.label(RichText::new("Nombre invalide : entrez une longueur positive, p. ex. 12,5").color(error));
+                    ui.label(RichText::new(tr!("calib.invalid_number")).color(error));
                     ui.label("");
                 }
                 CalibrationInput::NoUnit => {
-                    ui.label(RichText::new("Indiquez une unité.").color(error));
+                    ui.label(RichText::new(tr!("calib.need_unit")).color(error));
                     ui.label("");
                 }
             }
@@ -221,13 +222,13 @@ impl CalibrationDialog {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let valid = matches!(input, CalibrationInput::Valid { .. });
                 let sel = ui.visuals().selection;
-                let ok = Button::new(RichText::new("Valider").strong().color(sel.stroke.color))
+                let ok = Button::new(RichText::new(tr!("calib.apply")).strong().color(sel.stroke.color))
                     .fill(sel.bg_fill)
                     .min_size(vec2(90.0, 30.0));
-                if ui.add_enabled(valid, ok).on_hover_text("Appliquer l'échelle (Entrée)").clicked() {
+                if ui.add_enabled(valid, ok).on_hover_text(tr!("calib.apply_tip")).clicked() {
                     validate = true;
                 }
-                if ui.add(Button::new("Annuler").min_size(vec2(90.0, 30.0))).on_hover_text("Échap").clicked() {
+                if ui.add(Button::new(tr!("common.cancel")).min_size(vec2(90.0, 30.0))).on_hover_text(tr!("key.escape")).clicked() {
                     cancel = true;
                 }
             });
@@ -258,6 +259,7 @@ mod tests {
 
     #[test]
     fn lecture_du_formulaire() {
+        meteroscope_i18n::set_language("fr");
         assert_eq!(
             read_calibration_input("12,5", " mm "),
             CalibrationInput::Valid { real_len: 12.5, unit: "mm".to_owned() }
@@ -271,6 +273,7 @@ mod tests {
 
     #[test]
     fn validation_et_memoire() {
+        meteroscope_i18n::set_language("fr");
         let mut doc = Document::new();
         let mut dlg = CalibrationDialog::default();
         dlg.open(0.0);

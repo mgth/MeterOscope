@@ -89,6 +89,7 @@ mod tests {
 
     #[test]
     fn transforms_follow_pixels() {
+        meteroscope_i18n::set_language("fr");
         let (w, h) = (7u32, 4u32);
         let img = test_image(w, h);
         // Repère : centre du pixel (5, 1), marqué d'une couleur unique.
@@ -112,6 +113,7 @@ mod tests {
 
     #[test]
     fn four_rotations_identity_and_values_kept() {
+        meteroscope_i18n::set_language("fr");
         let img = test_image(9, 5);
         let mut doc = Document::new();
         doc.add(Shape::Length { a: Pt::new(1.0, 2.0), b: Pt::new(8.0, 4.5) });
@@ -155,6 +157,7 @@ mod tests {
 
     #[test]
     fn adjust_identity_and_alpha() {
+        meteroscope_i18n::set_language("fr");
         let img = test_image(64, 64);
         assert_eq!(adjust(&img, 0.0, 0.0), img);
         assert_eq!(lut(0.0, 0.0).to_vec(), (0..=255u8).collect::<Vec<_>>());

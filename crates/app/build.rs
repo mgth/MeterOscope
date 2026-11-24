@@ -10,7 +10,7 @@ fn main() {
     res.set_icon("../../assets/icon/meteroscope.ico")
         .set("ProductName", "MeterOscope")
         // ASCII seulement : rc.exe lit le .rc généré dans la page de code du système.
-        .set("FileDescription", "MeterOscope - mesure sur image")
+        .set("FileDescription", "MeterOscope - image measurement")
         .set("OriginalFilename", "MeterOscope.exe")
         .set("LegalCopyright", "Copyright (C) Mathieu GRENET - GPL-3.0-or-later");
     // windres de mingw lors d'une compilation croisée depuis Linux.

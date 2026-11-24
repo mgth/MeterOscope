@@ -492,6 +492,7 @@ mod tests {
 
     #[test]
     fn font_has_needed_glyphs() {
+        meteroscope_i18n::set_language("fr");
         let f = font();
         for ch in ['°', '²', 'µ', '×', ',', '0', 'é'] {
             assert_ne!(f.glyph_id(ch).0, 0, "glyphe manquant : {ch}");
@@ -500,6 +501,7 @@ mod tests {
 
     #[test]
     fn draws_where_measurements_are() {
+        meteroscope_i18n::set_language("fr");
         for (w, h) in [(640u32, 480u32), (2000, 1500)] {
             let img = RgbaImage::from_pixel(w, h, Rgba([90, 90, 90, 255]));
             let mut doc = Document::new();
@@ -526,6 +528,7 @@ mod tests {
 
     #[test]
     fn transparent_pixels_untouched() {
+        meteroscope_i18n::set_language("fr");
         let img = RgbaImage::from_pixel(50, 40, Rgba([10, 20, 30, 0]));
         let out = render_annotated(&img, &Document::new());
         assert_eq!(out, img);

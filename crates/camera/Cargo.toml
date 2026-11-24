@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+meteroscope-i18n.workspace = true
 thiserror.workspace = true
 # Décodage MJPEG en Rust pur (déjà présent dans l'arbre via `image`).
 zune-jpeg = "0.5.15"

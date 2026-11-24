@@ -1,0 +1,10 @@
+[package]
+name = "meteroscope-i18n"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+sys-locale = "0.3.2"

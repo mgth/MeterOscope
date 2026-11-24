@@ -92,6 +92,7 @@ mod tests {
 
     #[test]
     fn aller_retour() {
+        meteroscope_i18n::set_language("fr");
         let xf = Xf { origin: pos2(10.0, 20.0), zoom: 2.5 };
         let p = Pt::new(13.2, 7.5);
         let back = xf.to_image(xf.to_screen(p));
@@ -102,6 +103,7 @@ mod tests {
 
     #[test]
     fn ajuster_et_zoomer() {
+        meteroscope_i18n::set_language("fr");
         let v = View::fit(vec2(816.0, 616.0), vec2(400.0, 100.0));
         assert_eq!(v.zoom, 2.0);
         assert_eq!(v.pan, vec2(8.0, 208.0));
@@ -123,6 +125,7 @@ mod tests {
 
     #[test]
     fn image_jamais_perdue() {
+        meteroscope_i18n::set_language("fr");
         let mut v = View { zoom: 1.0, pan: vec2(5000.0, -5000.0) };
         v.clamp(vec2(800.0, 600.0), vec2(200.0, 100.0));
         assert_eq!(v.pan, vec2(800.0 - 48.0, 48.0 - 100.0));

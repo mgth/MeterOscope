@@ -62,6 +62,7 @@ fn near(a: Pt, b: Pt) -> bool {
 
 #[test]
 fn ajuste_a_la_vue() {
+    meteroscope_i18n::set_language("fr");
     let h = harness();
     let c = &h.state().canvas;
     // 200×100 dans environ 800×600 : la largeur limite.
@@ -71,6 +72,7 @@ fn ajuste_a_la_vue() {
 
 #[test]
 fn longueur_clic_clic_et_glisser() {
+    meteroscope_i18n::set_language("fr");
     let mut h = harness();
     h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::Length));
     click(&mut h, 10.0, 10.0);
@@ -94,6 +96,7 @@ fn longueur_clic_clic_et_glisser() {
 
 #[test]
 fn maj_contraint_et_echelle() {
+    meteroscope_i18n::set_language("fr");
     let mut h = harness();
     h.state_mut().canvas.set_tool(Tool::Calibrate);
     click(&mut h, 10.0, 10.0);
@@ -117,6 +120,7 @@ fn maj_contraint_et_echelle() {
 
 #[test]
 fn surface_double_clic_entree_retour_arriere() {
+    meteroscope_i18n::set_language("fr");
     let mut h = harness();
     h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::Area));
     for (x, y) in [(10.0, 10.0), (80.0, 10.0), (80.0, 60.0)] {
@@ -149,6 +153,7 @@ fn surface_double_clic_entree_retour_arriere() {
 
 #[test]
 fn selection_poignee_et_deplacement() {
+    meteroscope_i18n::set_language("fr");
     let mut h = harness();
     let id = h.state_mut().doc.add(Shape::Length { a: Pt::new(10.0, 10.0), b: Pt::new(60.0, 10.0) });
     h.state_mut().doc.selected = None;
@@ -179,6 +184,7 @@ fn selection_poignee_et_deplacement() {
 
 #[test]
 fn deplacer_la_vue_et_zoomer() {
+    meteroscope_i18n::set_language("fr");
     let mut h = harness();
     let before = h.state().canvas.view.pan;
     let from = scr(&h, 100.0, 50.0);
@@ -209,6 +215,7 @@ fn deplacer_la_vue_et_zoomer() {
 
 #[test]
 fn marqueurs_et_annulation() {
+    meteroscope_i18n::set_language("fr");
     let mut h = harness();
     h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::Marker));
     click(&mut h, 10.0, 10.0);

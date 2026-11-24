@@ -1,5 +1,6 @@
 //! Conversion des formats de capture usuels vers RGBA 8 bits.
 
+use meteroscope_i18n::tr;
 use zune_jpeg::JpegDecoder;
 use zune_jpeg::zune_core::bytestream::ZCursor;
 use zune_jpeg::zune_core::colorspace::ColorSpace;
@@ -23,7 +24,7 @@ pub(crate) fn decode(
     }
     let (w, h) = (width as usize, height as usize);
     if w == 0 || h == 0 {
-        return Err("dimensions nulles".into());
+        return Err(tr!("camera.decode_empty").into());
     }
     let bpp = match format {
         PixelFormat::Yuyv | PixelFormat::Uyvy => 2,
@@ -38,7 +39,7 @@ pub(crate) fn decode(
         _ => stride * (h - 1) + w * bpp,
     };
     if data.len() < needed {
-        return Err(format!("image incomplète ({} octets sur {needed})", data.len()));
+        return Err(tr!("camera.decode_incomplete", got = data.len(), needed = needed));
     }
     out.clear();
     out.resize(w * h * 4, 255);
@@ -98,16 +99,16 @@ fn put(d: &mut [u8], y: i32, u: i32, v: i32) {
 fn decode_mjpeg(data: &[u8], out: &mut Vec<u8>) -> Result<(u32, u32), String> {
     let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
     let mut dec = JpegDecoder::new_with_options(ZCursor::new(data), opts);
-    dec.decode_headers().map_err(|e| format!("JPEG invalide : {e:?}"))?;
-    let info = dec.info().ok_or("JPEG sans en-tête")?;
-    let size = dec.output_buffer_size().ok_or("JPEG sans en-tête")?;
+    dec.decode_headers().map_err(|e| tr!("camera.jpeg_invalid", error = format!("{e:?}")))?;
+    let info = dec.info().ok_or(tr!("camera.jpeg_no_header"))?;
+    let size = dec.output_buffer_size().ok_or(tr!("camera.jpeg_no_header"))?;
     let (w, h) = (info.width as usize, info.height as usize);
     if size != w * h * 4 {
-        return Err("JPEG : sortie RGBA inattendue".into());
+        return Err(tr!("camera.jpeg_bad_output").into());
     }
     out.clear();
     out.resize(size, 0);
-    dec.decode_into(out).map_err(|e| format!("JPEG invalide : {e:?}"))?;
+    dec.decode_into(out).map_err(|e| tr!("camera.jpeg_invalid", error = format!("{e:?}")))?;
     Ok((w as u32, h as u32))
 }
 
@@ -117,6 +118,7 @@ mod tests {
 
     #[test]
     fn yuyv_gris_et_couleurs() {
+        meteroscope_i18n::set_language("fr");
         // Deux pixels : Y=235 (blanc), Y=16 (noir), chroma neutre.
         let data = [235u8, 128, 16, 128];
         let mut out = Vec::new();
@@ -130,6 +132,7 @@ mod tests {
 
     #[test]
     fn bgr_et_pas_de_lignes_decalees() {
+        meteroscope_i18n::set_language("fr");
         // 1×2 BGR avec un pas de ligne de 4 octets (un octet de bourrage).
         let data = [1u8, 2, 3, 0, 4, 5, 6];
         let mut out = Vec::new();
@@ -139,6 +142,7 @@ mod tests {
 
     #[test]
     fn image_tronquee_refusee() {
+        meteroscope_i18n::set_language("fr");
         let mut out = Vec::new();
         assert!(decode(PixelFormat::Yuyv, 4, 4, 0, &[0; 10], &mut out).is_err());
     }

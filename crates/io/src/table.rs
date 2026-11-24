@@ -1,5 +1,6 @@
-//! Tableau des mesures : CSV (tableur français) et texte tabulé (presse-papiers).
+//! Tableau des mesures : CSV (séparateurs selon la langue) et texte tabulé (presse-papiers).
 
+use meteroscope_i18n::tr;
 use meteroscope_core::{Document, Quantity, Shape};
 
 /// Colonnes de grandeurs, dans l'ordre du tableau.
@@ -32,7 +33,10 @@ pub fn format_precise(v: f64) -> String {
     if s == "-0" {
         s = "0".to_owned();
     }
-    s.replace('.', ",")
+    match meteroscope_i18n::decimal_separator() {
+        '.' => s,
+        sep => s.replace('.', &sep.to_string()),
+    }
 }
 
 /// Unité d'une grandeur pour l'étalonnage du document.
@@ -46,7 +50,7 @@ fn unit_of(doc: &Document, q: Quantity) -> String {
 
 /// Lignes du tableau des mesures (en-tête compris), cellules brutes.
 fn measurement_rows(doc: &Document) -> Vec<Vec<String>> {
-    let mut header = vec!["Nom".to_owned(), "Type".to_owned()];
+    let mut header = vec![tr!("table.name").to_owned(), tr!("item.type").to_owned()];
     header.extend(COLUMNS.iter().map(|q| format!("{} ({})", q.label(), unit_of(doc, *q))));
     header.extend(["X (px)".to_owned(), "Y (px)".to_owned()]);
     let mut rows = vec![header];
@@ -68,7 +72,7 @@ fn measurement_rows(doc: &Document) -> Vec<Vec<String>> {
 /// Bloc statistiques + échelle.
 fn stats_rows(doc: &Document) -> Vec<Vec<String>> {
     let mut rows: Vec<Vec<String>> = vec![
-        ["Statistiques", "Grandeur", "Unité", "n", "Moyenne", "Écart-type", "Min", "Max"]
+        [tr!("stats.title"), tr!("table.quantity"), tr!("calib.unit"), "n", tr!("stats.mean"), tr!("stats.std_dev"), tr!("stats.min"), tr!("stats.max")]
             .map(str::to_owned)
             .to_vec(),
     ];
@@ -84,18 +88,23 @@ fn stats_rows(doc: &Document) -> Vec<Vec<String>> {
             format_precise(s.max),
         ]);
     }
-    rows.push(vec!["Nombre de marqueurs".to_owned(), doc.marker_count().to_string()]);
+    rows.push(vec![tr!("table.marker_count").to_owned(), doc.marker_count().to_string()]);
     rows.push(vec![]);
     rows.push(match &doc.calibration.scale {
-        Some(s) => vec!["Échelle".to_owned(), format_precise(s.units_per_px), format!("{}/px", s.unit)],
-        None => vec!["Échelle".to_owned(), "non étalonnée (mesures en pixels)".to_owned()],
+        Some(s) => vec![tr!("panel.scale").to_owned(), format_precise(s.units_per_px), format!("{}/px", s.unit)],
+        None => vec![tr!("panel.scale").to_owned(), tr!("table.uncalibrated").to_owned()],
     });
     rows
 }
 
+/// Séparateur de champs CSV adapté au séparateur décimal de la langue.
+pub fn csv_separator() -> char {
+    if meteroscope_i18n::decimal_separator() == ',' { ';' } else { ',' }
+}
+
 /// Champ CSV : entre guillemets si nécessaire, guillemets doublés.
-fn csv_field(s: &str) -> String {
-    if s.contains([';', '"', '\n', '\r']) || s.starts_with(' ') || s.ends_with(' ') {
+fn csv_field(s: &str, sep: char) -> String {
+    if s.contains([sep, '"', '\n', '\r']) || s.starts_with(' ') || s.ends_with(' ') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_owned()
@@ -108,10 +117,12 @@ fn tsv_field(s: &str) -> String {
 }
 
 pub fn csv_string(doc: &Document) -> String {
+    // Virgule décimale → « ; » entre les champs (tableurs européens), sinon « , ».
+    let sep = csv_separator();
     let mut out = String::from("\u{feff}");
     let mut push = |rows: Vec<Vec<String>>| {
         for r in rows {
-            out.push_str(&r.iter().map(|f| csv_field(f)).collect::<Vec<_>>().join(";"));
+            out.push_str(&r.iter().map(|f| csv_field(f, sep)).collect::<Vec<_>>().join(&sep.to_string()));
             out.push_str("\r\n");
         }
     };
@@ -137,6 +148,7 @@ mod tests {
 
     #[test]
     fn precise_numbers() {
+        meteroscope_i18n::set_language("fr");
         assert_eq!(format_precise(0.0), "0");
         assert_eq!(format_precise(-0.0), "0");
         assert_eq!(format_precise(5.0), "5");
@@ -149,9 +161,13 @@ mod tests {
 
     #[test]
     fn csv_escaping() {
-        assert_eq!(csv_field("a;b"), "\"a;b\"");
-        assert_eq!(csv_field("dit \"x\""), "\"dit \"\"x\"\"\"");
-        assert_eq!(csv_field("simple"), "simple");
+        meteroscope_i18n::set_language("fr");
+        assert_eq!(csv_field("a;b", ';'), "\"a;b\"");
+        assert_eq!(csv_field("dit \"x\"", ';'), "\"dit \"\"x\"\"\"");
+        assert_eq!(csv_field("simple", ';'), "simple");
+        // Point décimal : virgule entre les champs.
+        assert_eq!(csv_field("a,b", ','), "\"a,b\"");
+        assert_eq!(csv_field("a;b", ','), "a;b");
         assert_eq!(tsv_field("a\tb\nc"), "a b c");
     }
 
@@ -170,6 +186,7 @@ mod tests {
 
     #[test]
     fn csv_exact() {
+        meteroscope_i18n::set_language("fr");
         let expected = "\u{feff}\
 Nom;Type;Longueur (mm);Angle (°);Aire (mm²);Périmètre (mm);Largeur (mm);Hauteur (mm);Diamètre (mm);Rayon (mm);X (px);Y (px)\r\n\
 Longueur 1;Longueur;5;;;;;;;;;\r\n\
@@ -191,6 +208,7 @@ Nombre de marqueurs;2\r\n\
 
     #[test]
     fn clipboard_exact() {
+        meteroscope_i18n::set_language("fr");
         let t = clipboard_table(&sample());
         assert!(!t.starts_with('\u{feff}'));
         let lines: Vec<&str> = t.lines().collect();
@@ -201,6 +219,7 @@ Nombre de marqueurs;2\r\n\
 
     #[test]
     fn uncalibrated() {
+        meteroscope_i18n::set_language("fr");
         let mut d = Document::new();
         d.add(Shape::Circle { center: Pt::new(0., 0.), edge: Pt::new(10., 0.) });
         let s = csv_string(&d);

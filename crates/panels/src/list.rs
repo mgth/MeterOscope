@@ -1,5 +1,6 @@
 //! Panneau de droite : échelle, liste des mesures, statistiques, actions.
 
+use meteroscope_i18n::tr;
 use crate::PanelOutput;
 use crate::format::scale_texts;
 use crate::icons::{paint_cross, paint_eye};
@@ -55,7 +56,7 @@ pub fn measurements_panel(ui: &mut Ui, doc: &mut Document) -> PanelOutput {
     ui.add_space(10.0);
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Mesures").strong());
+        ui.label(RichText::new(tr!("panel.measurements")).strong());
         if !doc.measurements.is_empty() {
             ui.label(RichText::new(format!("({})", doc.measurements.len())).weak());
         }
@@ -104,20 +105,20 @@ pub fn measurements_panel(ui: &mut Ui, doc: &mut Document) -> PanelOutput {
 fn scale_card(ui: &mut Ui, doc: &mut Document, out: &mut PanelOutput) {
     Frame::group(ui.style()).inner_margin(10.0).corner_radius(6.0).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new("Échelle").strong());
+        ui.label(RichText::new(tr!("panel.scale")).strong());
         ui.add_space(2.0);
         match doc.calibration.scale.clone() {
             None => {
-                ui.label(RichText::new("Non définie : les mesures sont en pixels.").color(ui.visuals().warn_fg_color));
+                ui.label(RichText::new(tr!("panel.scale_unset")).color(ui.visuals().warn_fg_color));
                 ui.add_space(6.0);
                 let sel = ui.visuals().selection;
-                let button = Button::new(RichText::new("Définir l'échelle").strong().color(sel.stroke.color))
+                let button = Button::new(RichText::new(tr!("calib.title")).strong().color(sel.stroke.color))
                     .fill(sel.bg_fill)
                     .min_size(vec2(0.0, 32.0));
                 let clicked = ui
                     .vertical_centered_justified(|ui| ui.add(button))
                     .inner
-                    .on_hover_text("Tracez sur l'image un segment de longueur connue, puis saisissez sa longueur réelle.")
+                    .on_hover_text(tr!("panel.scale_set_tip"))
                     .clicked();
                 if clicked {
                     out.start_calibration = true;
@@ -129,10 +130,10 @@ fn scale_card(ui: &mut Ui, doc: &mut Document, out: &mut PanelOutput) {
                 ui.label(RichText::new(inverse).weak());
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.button("Modifier").on_hover_text("Tracer un nouveau segment de référence").clicked() {
+                    if ui.button(tr!("panel.scale_change")).on_hover_text(tr!("panel.scale_change_tip")).clicked() {
                         out.start_calibration = true;
                     }
-                    if ui.button("Retirer").on_hover_text("Revenir aux pixels (annulable avec Ctrl+Z)").clicked() {
+                    if ui.button(tr!("panel.scale_remove")).on_hover_text(tr!("panel.scale_remove_tip")).clicked() {
                         doc.checkpoint();
                         doc.calibration.scale = None;
                     }
@@ -145,9 +146,9 @@ fn scale_card(ui: &mut Ui, doc: &mut Document, out: &mut PanelOutput) {
 fn empty_hint(ui: &mut Ui) {
     ui.add_space(24.0);
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new("Aucune mesure pour l'instant.").weak());
+        ui.label(RichText::new(tr!("panel.empty")).weak());
         ui.add_space(4.0);
-        ui.add(Label::new(RichText::new("Choisissez un outil à gauche, puis cliquez sur l'image.").weak()).wrap());
+        ui.add(Label::new(RichText::new(tr!("panel.empty_help")).weak()).wrap());
     });
 }
 
@@ -223,7 +224,7 @@ fn row_content(
     ui.spacing_mut().item_spacing.x = 6.0;
 
     // Pastille de couleur → choix dans la palette.
-    let swatch = color_swatch(ui, rgb(m.color), m.visible).on_hover_text("Changer la couleur");
+    let swatch = color_swatch(ui, rgb(m.color), m.visible).on_hover_text(tr!("item.color_tip"));
     Popup::menu(&swatch).show(|ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -236,14 +237,14 @@ fn row_content(
     });
 
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        if icon_button(ui, "Supprimer", paint_cross, Some(visuals.error_fg_color))
-            .on_hover_text("Supprimer cette mesure (Suppr)")
+        if icon_button(ui, tr!("item.delete"), paint_cross, Some(visuals.error_fg_color))
+            .on_hover_text(tr!("item.delete_tip"))
             .clicked()
         {
             actions.push((id, RowAction::Remove));
         }
         let visible = m.visible;
-        let eye_tip = if visible { "Masquer sur l'image" } else { "Afficher sur l'image" };
+        let eye_tip = if visible { tr!("item.hide") } else { tr!("item.show") };
         if icon_button(ui, eye_tip, move |p, r, c| paint_eye(p, r, c, visible), None).on_hover_text(eye_tip).clicked() {
             actions.push((id, RowAction::ToggleVisible));
         }
@@ -257,7 +258,7 @@ fn row_content(
             Some((_, text, focus)) => {
                 let mut text = text.clone();
                 let mut output =
-                    TextEdit::singleline(&mut text).desired_width(f32::INFINITY).hint_text("Nom de la mesure").show(ui);
+                    TextEdit::singleline(&mut text).desired_width(f32::INFINITY).hint_text(tr!("item.name_hint")).show(ui);
                 let resp = output.response.response.clone();
                 if *focus {
                     resp.request_focus();
@@ -296,12 +297,12 @@ fn values_box(ui: &mut Ui, doc: &Document, m: &Measurement) -> egui::Response {
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             Grid::new(("meteroscope_valeurs", m.id)).num_columns(2).spacing([14.0, 3.0]).show(ui, |ui| {
-                ui.label(RichText::new("Type").weak());
+                ui.label(RichText::new(tr!("item.type")).weak());
                 ui.label(m.shape.kind().label());
                 ui.end_row();
                 match &m.shape {
                     Shape::Marker { p } => {
-                        ui.label(RichText::new("Position").weak());
+                        ui.label(RichText::new(tr!("item.position")).weak());
                         ui.label(format!("x {} · y {} px", format_number(p.x), format_number(p.y)));
                         ui.end_row();
                     }
@@ -315,7 +316,7 @@ fn values_box(ui: &mut Ui, doc: &Document, m: &Measurement) -> egui::Response {
                 }
                 if !m.visible {
                     ui.label("");
-                    ui.label(RichText::new("Masquée sur l'image").weak().italics());
+                    ui.label(RichText::new(tr!("item.hidden")).weak().italics());
                     ui.end_row();
                 }
             });
@@ -381,7 +382,7 @@ fn apply_actions(doc: &mut Document, st: &mut ListState, actions: Vec<(u64, RowA
 /// Pastille ronde cliquable.
 fn color_swatch(ui: &mut Ui, color: Color32, filled: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Couleur"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("item.color")));
     let painter = ui.painter();
     let r = if resp.hovered() { 7.5 } else { 6.5 };
     let outline = ui.visuals().widgets.noninteractive.fg_stroke.color.gamma_multiply(0.6);
@@ -397,7 +398,7 @@ fn color_swatch(ui: &mut Ui, color: Color32, filled: bool) -> egui::Response {
 /// Case de couleur dans le choix de la palette.
 fn color_choice(ui: &mut Ui, color: Color32, current: bool, index: usize) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, format!("Couleur {}", index + 1)));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, tr!("item.color_n", n = index + 1)));
     let painter = ui.painter();
     let outline = ui.visuals().widgets.noninteractive.fg_stroke.color;
     painter.circle(rect.center(), if resp.hovered() { 10.5 } else { 9.0 }, color, Stroke::new(1.0, outline.gamma_multiply(0.5)));
@@ -430,14 +431,14 @@ fn icon_button(
 
 /// Statistiques par type (repliable) : un tableau compact, une ligne par type.
 fn stats_section(ui: &mut Ui, doc: &Document) {
-    CollapsingHeader::new(RichText::new("Statistiques").strong())
+    CollapsingHeader::new(RichText::new(tr!("stats.title")).strong())
         .id_salt("meteroscope_statistiques")
         .default_open(true)
         .show(ui, |ui| {
             let summary = doc.summary();
             let markers = doc.marker_count();
             if summary.is_empty() && markers == 0 {
-                ui.label(RichText::new("Elles apparaîtront ici dès la première mesure.").weak());
+                ui.label(RichText::new(tr!("stats.empty")).weak());
                 return;
             }
             // Hauteur plafonnée : la liste des mesures reste prioritaire.
@@ -449,7 +450,7 @@ fn stats_section(ui: &mut Ui, doc: &Document) {
                 if markers > 0 {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Marqueurs").strong());
+                        ui.label(RichText::new(tr!("stats.markers")).strong());
                         ui.label(RichText::new(format!("n = {markers}")).weak());
                     });
                 }
@@ -463,7 +464,7 @@ fn stats_table(ui: &mut Ui, summary: &[(ShapeKind, Quantity, String, Stats)]) {
     let grid = |salt: &str| Grid::new(("meteroscope_stats", salt.to_owned())).num_columns(4).min_col_width(COL_W).spacing([8.0, 0.0]);
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
     grid("entete").show(ui, |ui| {
-        for h in ["Moyenne", "Écart-type", "Min", "Max"] {
+        for h in [tr!("stats.mean"), tr!("stats.std_dev"), tr!("stats.min"), tr!("stats.max")] {
             ui.label(RichText::new(h).small().weak());
         }
         ui.end_row();
@@ -475,7 +476,7 @@ fn stats_table(ui: &mut Ui, summary: &[(ShapeKind, Quantity, String, Stats)]) {
             let what = if quantity.label() == kind.label() {
                 format!("({unit})")
             } else {
-                format!("{} ({unit})", quantity.label().to_lowercase())
+                format!("{} ({unit})", quantity.label())
             };
             ui.label(RichText::new(what).weak());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -498,14 +499,14 @@ fn actions_bar(ui: &mut Ui, doc: &mut Document, out: &mut PanelOutput) {
     ui.add_enabled_ui(!empty, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().button_padding = vec2(8.0, 5.0);
-            if ui.button("Copier").on_hover_text("Copier le tableau des mesures, à coller dans un tableur").clicked() {
+            if ui.button(tr!("panel.copy")).on_hover_text(tr!("panel.copy_tip")).clicked() {
                 out.copy_table = true;
             }
-            if ui.button("Exporter CSV").on_hover_text("Enregistrer les mesures dans un fichier CSV (Ctrl+E)").clicked() {
+            if ui.button(tr!("panel.export_csv")).on_hover_text(tr!("panel.export_csv_tip")).clicked() {
                 out.export_csv = true;
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("Tout effacer").on_hover_text("Supprimer toutes les mesures (annulable avec Ctrl+Z)").clicked() {
+                if ui.button(tr!("panel.clear_all")).on_hover_text(tr!("panel.clear_all_tip")).clicked() {
                     doc.clear();
                 }
             });
