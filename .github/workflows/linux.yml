@@ -1,0 +1,88 @@
+name: Linux
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag existant à empaqueter et à ajouter à sa release (ex. v1.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # Sources empaquetées : le tag demandé à la main, sinon la référence courante.
+  SRC_REF: ${{ inputs.tag || github.ref }}
+
+jobs:
+  package:
+    # Ubuntu 22.04 : glibc 2.35, le binaire tourne aussi sur les distributions plus anciennes.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Scripts d'empaquetage (version courante)
+        uses: actions/checkout@v4
+        with:
+          path: ci
+      - name: Sources à empaqueter
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SRC_REF }}
+          path: src
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+      - name: Dépendances de compilation
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev desktop-file-utils
+      - name: Tests
+        working-directory: src
+        run: cargo test --workspace
+      - name: Compilation
+        working-directory: src
+        run: cargo build --release -p meteroscope
+      - name: Version
+        id: version
+        working-directory: src
+        run: |
+          v=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="meteroscope") | .version')
+          tag="${{ inputs.tag || github.ref_name }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" || "$GITHUB_REF" == refs/tags/v* ]] && [[ "$tag" != "v$v" ]]; then
+            echo "Le tag $tag ne correspond pas à la version $v de Cargo.toml" >&2; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Paquets (tar.gz + .deb)
+        run: |
+          desktop-file-validate src/packaging/linux/meteroscope.desktop
+          ci/packaging/linux/package.sh src src/target/release/meteroscope "${{ steps.version.outputs.version }}" dist
+      - name: Vérification du .deb (dpkg, installation apt)
+        run: |
+          deb=$(ls dist/*.deb)
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb" | head -n 20
+          sudo apt-get install -y "./$deb"
+          test -x /usr/bin/meteroscope
+          grep -q meteroscope /usr/share/mime/packages/meteroscope.xml
+          sudo apt-get remove -y meteroscope
+      - name: Vérification de l'archive (installation par utilisateur)
+        run: |
+          mkdir -p t && tar -C t -xzf dist/*.tar.gz
+          export XDG_BIN_HOME=$PWD/h/bin XDG_DATA_HOME=$PWD/h/share
+          t/*/install.sh
+          test -x h/bin/meteroscope && test -f h/share/applications/meteroscope.desktop
+          t/*/install.sh --uninstall
+          test ! -e h/bin/meteroscope
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MeterOscope-${{ steps.version.outputs.version }}-linux-x86_64
+          path: dist/*
+      - name: Ajout à la release
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: dist/*

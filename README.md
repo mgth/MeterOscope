@@ -15,7 +15,9 @@ JSON, l'anglais sert de référence).
 utilisateurs, association des fichiers `.meteroscope`, entrée « Ouvrir avec » pour les images),
 ou le zip portable, qui se lance sans installation.
 
-**Linux** : après `cargo build --release -p meteroscope`, `packaging/linux/install.sh` installe pour
+**Linux** : sur la page Releases, `meteroscope_<version>_amd64.deb` (Debian, Ubuntu…) ou
+`MeterOscope-<version>-linux-x86_64.tar.gz` (toute distribution : décompresser puis `./install.sh`,
+installation dans `~/.local` sans droits administrateur). Depuis les sources : après `cargo build --release -p meteroscope`, `packaging/linux/install.sh` installe pour
 l'utilisateur courant l'exécutable, l'entrée de menu, les icônes et le type de fichier `.meteroscope`
 (`--uninstall` pour retirer).
 
