@@ -217,15 +217,17 @@ pub fn segment(p: &Painter, a: Pos2, b: Pos2, color: Color32, width: f32) {
 }
 
 /// Dessine l'image (taille `img` en pixels) selon `xf`, rotation comprise.
-pub fn paint_image(p: &Painter, tex: TextureId, img: [usize; 2], xf: Xf) {
+/// `baked` : la texture contient déjà l'image pivotée dans sa boîte
+/// englobante, dont c'est la taille en pixels image ; elle se dessine droite.
+pub fn paint_image(p: &Painter, tex: TextureId, img: [usize; 2], xf: Xf, baked: Option<Vec2>) {
     let (w, h) = (img[0] as f64, img[1] as f64);
     let mut mesh = egui::Mesh::with_texture(tex);
     for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
-        mesh.vertices.push(egui::epaint::Vertex {
-            pos: xf.to_screen(Pt::new(x * w, y * h)),
-            uv: pos2(x as f32, y as f32),
-            color: Color32::WHITE,
-        });
+        let pos = match baked {
+            Some(size) => xf.origin + vec2(x as f32 * size.x, y as f32 * size.y) * xf.zoom,
+            None => xf.to_screen(Pt::new(x * w, y * h)),
+        };
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv: pos2(x as f32, y as f32), color: Color32::WHITE });
     }
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(0, 2, 3);
@@ -334,13 +336,15 @@ pub fn paint_handles(p: &Painter, xf: Xf, pts: &[Pt], hot: Option<usize>) {
 }
 
 /// Loupe : zoom de la texture autour de `center` (pixels image) avec réticule.
-/// `base` : transformation de la vue (pour la rotation). `extra` dessine des
+/// `baked` : voir [`paint_image`]. `base` : transformation de la vue (pour la
+/// rotation). `extra` dessine des
 /// formes dans le repère de la loupe.
 #[allow(clippy::too_many_arguments)]
 pub fn paint_loupe(
     p: &Painter,
     tex: TextureId,
     img: [usize; 2],
+    baked: Option<Vec2>,
     base: Xf,
     center: Pt,
     cursor_screen: Pos2,
@@ -365,7 +369,7 @@ pub fn paint_loupe(
     // Image entière, découpée par la zone de la loupe.
     let xf = base.centered_on(center, rect.center(), mag);
     if img[0] > 0 && img[1] > 0 {
-        paint_image(&lp, tex, img, xf);
+        paint_image(&lp, tex, img, xf, baked);
     }
     extra(&lp, xf);
 

@@ -117,6 +117,8 @@ pub struct Canvas {
     img_size: Vec2,
     /// Rotation d'affichage appliquée (copie de `Document::rotation`).
     rotation: f64,
+    /// La texture fournie est déjà pivotée : taille de sa boîte (pixels image).
+    baked: Option<Vec2>,
     draft: Draft,
     /// Dernier segment d'étalonnage tracé (affiché tant que l'outil Échelle est actif).
     calib_seg: Option<(Pt, Pt)>,
@@ -140,6 +142,7 @@ impl Default for Canvas {
             last_rect: Rect::NOTHING,
             img_size: Vec2::ZERO,
             rotation: 0.0,
+            baked: None,
             draft: Draft::new(ShapeKind::Length),
             calib_seg: None,
             gesture: None,
@@ -184,6 +187,14 @@ impl Canvas {
         if tool != Tool::Calibrate {
             self.calib_seg = None;
         }
+    }
+
+    /// Indique que la texture passée à [`Canvas::show`] contient l'image déjà
+    /// redressée (pivotée de `Document::rotation` dans sa boîte englobante,
+    /// coin haut-gauche à l'origine) ; `size` : taille de cette boîte en pixels
+    /// de l'image d'origine. `None` : texture droite, pivotée à l'affichage.
+    pub fn set_baked(&mut self, size: Option<Vec2>) {
+        self.baked = size;
     }
 
     /// Ajuste l'image à la vue à la prochaine frame.
@@ -427,7 +438,7 @@ impl Canvas {
         self.has_selection = doc.selected().is_some();
         let outline = render::image_outline(xf, [w, h]);
         painter.add(egui::Shape::convex_polygon(outline, Color32::from_gray(10), Stroke::new(1.0, Color32::from_gray(10))));
-        render::paint_image(&painter, tex.id(), [w, h], xf);
+        render::paint_image(&painter, tex.id(), [w, h], xf, self.baked);
         self.paint_measurements(&painter, xf, doc);
 
         // Aperçu du tracé (le point sous le curseur suit la contrainte Maj).
@@ -460,7 +471,7 @@ impl Canvas {
             let panning = space || self.gesture.as_ref().is_some_and(|g| g.dragged && !matches!(g.kind, GestureKind::Handle(..) | GestureKind::Draw));
             if draw_tool && !panning && let Some(p) = preview_pt {
                 let pts = self.draft.preview(Some(p));
-                render::paint_loupe(&painter, tex.id(), [w, h], xf, p, cur, rect, mag, |lp, lxf| {
+                render::paint_loupe(&painter, tex.id(), [w, h], self.baked, xf, p, cur, rect, mag, |lp, lxf| {
                     self.paint_draft(lp, lxf, &pts, None)
                 });
             } else if let Some(Gesture { kind: GestureKind::Handle(id, i), dragged: true, .. }) = &self.gesture
@@ -470,7 +481,7 @@ impl Canvas {
             {
                 let hp = edit::handles(&m.shape, xf.img_len(ROTATE_GAP))[*i];
                 let color = render::color32(m.color);
-                render::paint_loupe(&painter, tex.id(), [w, h], xf, hp, cur, rect, mag, |lp, lxf| {
+                render::paint_loupe(&painter, tex.id(), [w, h], self.baked, xf, hp, cur, rect, mag, |lp, lxf| {
                     render::paint_shape(lp, lxf, &m.shape, color, 1.5, 0);
                 });
             }
