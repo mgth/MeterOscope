@@ -6,10 +6,15 @@ use std::collections::BTreeMap;
 
 const UNDO_LIMIT: usize = 200;
 
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Snapshot {
     measurements: Vec<Measurement>,
     calibration: Calibration,
+    rotation: f64,
 }
 
 /// L'ensemble des mesures posées sur une image, avec étalonnage,
@@ -22,6 +27,11 @@ struct Snapshot {
 pub struct Document {
     pub measurements: Vec<Measurement>,
     pub calibration: Calibration,
+    /// Rotation d'affichage de la photo (redressement), en degrés, positif =
+    /// sens horaire à l'écran. L'image et les coordonnées des mesures ne
+    /// changent pas : seule la vue pivote.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub rotation: f64,
     /// Identifiant de la mesure sélectionnée.
     #[serde(skip)]
     pub selected: Option<u64>,
@@ -42,7 +52,11 @@ impl Document {
     }
 
     fn snapshot(&self) -> Snapshot {
-        Snapshot { measurements: self.measurements.clone(), calibration: self.calibration.clone() }
+        Snapshot {
+            measurements: self.measurements.clone(),
+            calibration: self.calibration.clone(),
+            rotation: self.rotation,
+        }
     }
 
     /// Enregistre l'état courant dans l'historique. À appeler avant une modification.
@@ -68,6 +82,7 @@ impl Document {
     fn restore(&mut self, s: Snapshot) {
         self.measurements = s.measurements;
         self.calibration = s.calibration;
+        self.rotation = s.rotation;
         if self.selected.is_some_and(|id| self.get(id).is_none()) {
             self.selected = None;
         }
@@ -85,6 +100,19 @@ impl Document {
         let Some(s) = self.redo.pop() else { return false };
         self.undo.push(self.snapshot());
         self.restore(s);
+        true
+    }
+
+    /// Change la rotation d'affichage (annulable). Renvoie `false` si rien ne change.
+    pub fn set_rotation(&mut self, deg: f64) -> bool {
+        let deg = crate::geometry::normalize_deg(deg);
+        // Valeurs « rondes » : évite d'afficher −0,00° après un aller-retour.
+        let deg = if deg.abs() < 1e-9 { 0.0 } else { deg };
+        if !deg.is_finite() || deg == self.rotation {
+            return false;
+        }
+        self.checkpoint();
+        self.rotation = deg;
         true
     }
 
@@ -181,5 +209,12 @@ mod tests {
         assert!(d.measurements.is_empty() && d.selected.is_none());
         assert!(d.redo() && d.redo());
         assert_eq!(d.measurements.len(), 2);
+        assert!(d.set_rotation(-3.5) && !d.set_rotation(-3.5));
+        assert!(d.undo());
+        assert_eq!((d.rotation, d.measurements.len()), (0.0, 2));
+        assert!(d.redo());
+        assert_eq!(d.rotation, -3.5);
+        assert!(d.set_rotation(363.5));
+        assert_eq!(d.rotation, 3.5);
     }
 }

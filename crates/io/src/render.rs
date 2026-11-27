@@ -93,6 +93,29 @@ impl Painter {
 
     // ----- texte -----
 
+    /// Segment avec petits traits perpendiculaires aux extrémités. Renvoie
+    /// la normale unitaire orientée vers le haut de l'image.
+    fn segment(&mut self, pa: (f32, f32), pb: (f32, f32), color: [u8; 3]) -> (f32, f32) {
+        let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
+        let len = dx.hypot(dy).max(1e-6);
+        let mut n = (-dy / len, dx / len);
+        if n.1 > 0.0 || (n.1 == 0.0 && n.0 > 0.0) {
+            n = (-n.0, -n.1);
+        }
+        let mut pbld = PathBuilder::new();
+        pbld.move_to(pa.0, pa.1);
+        pbld.line_to(pb.0, pb.1);
+        let t = self.line * 3.0;
+        for p in [pa, pb] {
+            pbld.move_to(p.0 - n.0 * t, p.1 - n.1 * t);
+            pbld.line_to(p.0 + n.0 * t, p.1 + n.1 * t);
+        }
+        if let Some(p) = pbld.finish() {
+            self.outlined(&p, color);
+        }
+        n
+    }
+
     fn scale(&self, size: f32) -> f32 {
         size / font().units_per_em().unwrap_or(1000.0)
     }
@@ -212,28 +235,76 @@ impl Painter {
         match shape {
             Shape::Length { a, b } => {
                 let (pa, pb_) = (p32(*a), p32(*b));
-                let (dx, dy) = (pb_.0 - pa.0, pb_.1 - pa.1);
-                let len = dx.hypot(dy).max(1e-6);
-                // Normale orientée vers le haut de l'image.
-                let mut n = (-dy / len, dx / len);
-                if n.1 > 0.0 || (n.1 == 0.0 && n.0 > 0.0) {
-                    n = (-n.0, -n.1);
-                }
-                let mut pbld = PathBuilder::new();
-                pbld.move_to(pa.0, pa.1);
-                pbld.line_to(pb_.0, pb_.1);
-                // Petits traits perpendiculaires aux extrémités.
-                let t = self.line * 3.0;
-                for p in [pa, pb_] {
-                    pbld.move_to(p.0 - n.0 * t, p.1 - n.1 * t);
-                    pbld.line_to(p.0 + n.0 * t, p.1 + n.1 * t);
-                }
-                if let Some(p) = pbld.finish() {
-                    self.outlined(&p, color);
-                }
+                let n = self.segment(pa, pb_, color);
                 if let Some(s) = main {
                     let mid = ((pa.0 + pb_.0) / 2.0, (pa.1 + pb_.1) / 2.0);
-                    self.label_beside(&s, mid, n, gap + t, size, color);
+                    self.label_beside(&s, mid, n, gap + self.line * 3.0, size, color);
+                }
+            }
+            Shape::LineAngle { a, b, c, d } => {
+                let (pa, pb_, pc, pd) = (p32(*a), p32(*b), p32(*c), p32(*d));
+                let dash = self.line * 2.0;
+                let mut st = stroke(self.line * 0.6);
+                st.dash = tiny_skia::StrokeDash::new(vec![dash, dash], 0.0);
+                let mut dashes = PathBuilder::new();
+                let (at, n) = match meteroscope_core::geometry::line_angle_vertex(*a, *b, *c, *d) {
+                    Some((x, u1, u2)) => {
+                        // Segments prolongés jusqu'à leur intersection, arc au sommet.
+                        let v = p32(x);
+                        let r = self.text * 2.6;
+                        let reach = r + self.text * 0.6;
+                        for (p0, p1, u) in [(pa, pb_, u1), (pc, pd, u2)] {
+                            let tip = (v.0 + u.x as f32 * reach, v.1 + u.y as f32 * reach);
+                            for (e0, e1) in extensions(p0, p1, &[v, tip]) {
+                                dashes.move_to(e0.0, e0.1);
+                                dashes.line_to(e1.0, e1.1);
+                            }
+                        }
+                        let (t1, t2) = ((u1.y as f32).atan2(u1.x as f32), (u2.y as f32).atan2(u2.x as f32));
+                        let mut sweep = t2 - t1;
+                        while sweep > PI {
+                            sweep -= 2.0 * PI;
+                        }
+                        while sweep <= -PI {
+                            sweep += 2.0 * PI;
+                        }
+                        let mut arc = PathBuilder::new();
+                        let steps = 48;
+                        for i in 0..=steps {
+                            let t = t1 + sweep * i as f32 / steps as f32;
+                            let (px, py) = (v.0 + r * t.cos(), v.1 + r * t.sin());
+                            if i == 0 { arc.move_to(px, py) } else { arc.line_to(px, py) }
+                        }
+                        if let Some(p) = arc.finish() {
+                            self.stroke(&p, SHADOW, self.line * 0.8 + 2.0 * self.halo);
+                            self.stroke(&p, rgb(color, 255), self.line * 0.8);
+                        }
+                        let tm = t1 + sweep / 2.0;
+                        ((v.0 + tm.cos() * r, v.1 + tm.sin() * r), (tm.cos(), tm.sin()))
+                    }
+                    None => {
+                        // Presque parallèles : lien entre les milieux des deux segments.
+                        let m1 = ((pa.0 + pb_.0) / 2.0, (pa.1 + pb_.1) / 2.0);
+                        let m2 = ((pc.0 + pd.0) / 2.0, (pc.1 + pd.1) / 2.0);
+                        dashes.move_to(m1.0, m1.1);
+                        dashes.line_to(m2.0, m2.1);
+                        (((m1.0 + m2.0) / 2.0, (m1.1 + m2.1) / 2.0), (0.0, 0.0))
+                    }
+                };
+                if let Some(p) = dashes.finish() {
+                    let mut halo = stroke(self.line * 0.6 + 2.0 * self.halo);
+                    halo.dash = tiny_skia::StrokeDash::new(vec![dash, dash], 0.0);
+                    self.pm.stroke_path(&p, &paint(SHADOW), &halo, Transform::identity(), None);
+                    self.pm.stroke_path(&p, &paint(rgb(color, 255)), &st, Transform::identity(), None);
+                }
+                self.segment(pa, pb_, color);
+                self.segment(pc, pd, color);
+                if let Some(s) = main {
+                    if n == (0.0, 0.0) {
+                        self.label(&s, at.0, at.1, size, color);
+                    } else {
+                        self.label_beside(&s, at, n, gap, size, color);
+                    }
                 }
             }
             Shape::Path { pts } => {
@@ -311,15 +382,9 @@ impl Painter {
                     self.label(&s, c.0, c.1, size, color);
                 }
             }
-            Shape::Rect { a, b } => {
-                let r = tiny_skia::Rect::from_ltrb(
-                    a.x.min(b.x) as f32,
-                    a.y.min(b.y) as f32,
-                    a.x.max(b.x) as f32,
-                    a.y.max(b.y) as f32,
-                );
-                if let Some(r) = r {
-                    let p = PathBuilder::from_rect(r);
+            Shape::Rect { a, b, angle } => {
+                let corners = meteroscope_core::geometry::rect_corners(*a, *b, *angle);
+                if let Some(p) = polyline(&corners, true) {
                     self.fill(&p, rgb(color, 40));
                     self.outlined(&p, color);
                 }
@@ -412,6 +477,29 @@ impl Painter {
             self.stroke(&p, WHITE, size * 0.035);
         }
     }
+}
+
+/// Parties à ajouter au segment `p0→p1` pour qu'il atteigne les points
+/// `reach` (pris sur sa droite).
+fn extensions(p0: (f32, f32), p1: (f32, f32), reach: &[(f32, f32)]) -> Vec<((f32, f32), (f32, f32))> {
+    let d = (p1.0 - p0.0, p1.1 - p0.1);
+    let l2 = d.0 * d.0 + d.1 * d.1;
+    if l2 == 0.0 {
+        return vec![];
+    }
+    let at = |t: f32| (p0.0 + d.0 * t, p0.1 + d.1 * t);
+    let (lo, hi) = reach
+        .iter()
+        .map(|q| ((q.0 - p0.0) * d.0 + (q.1 - p0.1) * d.1) / l2)
+        .fold((0.0f32, 1.0f32), |(lo, hi), t| (lo.min(t), hi.max(t)));
+    let mut v = vec![];
+    if lo < 0.0 {
+        v.push((at(lo), p0));
+    }
+    if hi > 1.0 {
+        v.push((p1, at(hi)));
+    }
+    v
 }
 
 fn polyline(pts: &[Pt], closed: bool) -> Option<Path> {
@@ -507,7 +595,7 @@ mod tests {
             let mut doc = Document::new();
             let k = w as f64 / 640.0;
             doc.add(Shape::Length { a: Pt::new(50.0 * k, 400.0 * k), b: Pt::new(300.0 * k, 400.0 * k) });
-            let hidden = doc.add(Shape::Rect { a: Pt::new(400.0 * k, 50.0 * k), b: Pt::new(600.0 * k, 150.0 * k) });
+            let hidden = doc.add(Shape::Rect { a: Pt::new(400.0 * k, 50.0 * k), b: Pt::new(600.0 * k, 150.0 * k), angle: 0.0 });
             doc.get_mut(hidden).unwrap().visible = false;
             doc.calibration.set_from_reference(100.0, 1.0, "mm");
             let out = render_annotated(&img, &doc);

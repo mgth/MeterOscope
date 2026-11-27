@@ -5,6 +5,7 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Shape as EShape, Stroke, StrokeKind, TextureId, Vec2,
     pos2, vec2,
 };
+use meteroscope_core::geometry::{line_angle_vertex, rect_corners};
 use meteroscope_core::measure::format_number;
 use meteroscope_core::{Calibration, Pt, Shape};
 use std::f32::consts::TAU;
@@ -68,6 +69,61 @@ fn angle_arc(a: Pos2, v: Pos2, b: Pos2) -> (f32, f32, f32) {
     (a0, sweep, r)
 }
 
+/// Rayon écran de l'arc d'une inclinaison.
+const LINE_ANGLE_RADIUS: f32 = 34.0;
+
+/// Arc d'une inclinaison en écran : (sommet, angle de départ, balayage,
+/// rayon), au croisement des droites portant les deux segments. `None` si
+/// elles ne se coupent pas assez près (presque parallèles).
+pub fn line_angle_arc(xf: Xf, a: Pt, b: Pt, c: Pt, d: Pt) -> Option<(Pos2, f32, f32, f32)> {
+    let (x, u1, u2) = line_angle_vertex(a, b, c, d)?;
+    let v = xf.to_screen(x);
+    // Directions écran (la vue peut être pivotée), sur ~1 pixel écran.
+    let k = 1.0 / xf.zoom as f64;
+    let dir = |u: Pt| (xf.to_screen(x.offset(u.x * k, u.y * k)) - v).normalized();
+    let a0 = dir(u1).angle();
+    let mut sweep = dir(u2).angle() - a0;
+    while sweep > std::f32::consts::PI {
+        sweep -= TAU;
+    }
+    while sweep <= -std::f32::consts::PI {
+        sweep += TAU;
+    }
+    Some((v, a0, sweep, LINE_ANGLE_RADIUS))
+}
+
+/// Parties à ajouter en pointillés au segment `p0→p1` pour qu'il atteigne
+/// les points `reach` (pris sur sa droite).
+fn extensions(p0: Pos2, p1: Pos2, reach: &[Pos2]) -> Vec<(Pos2, Pos2)> {
+    let d = p1 - p0;
+    let l2 = d.length_sq();
+    if l2 == 0.0 {
+        return vec![];
+    }
+    let ts = reach.iter().map(|q| (*q - p0).dot(d) / l2);
+    let (lo, hi) = ts.fold((0.0f32, 1.0f32), |(lo, hi), t| (lo.min(t), hi.max(t)));
+    let mut v = vec![];
+    if lo < 0.0 {
+        v.push((p0 + d * lo, p0));
+    }
+    if hi > 1.0 {
+        v.push((p1, p0 + d * hi));
+    }
+    v
+}
+
+/// Trait en pointillés avec halo.
+fn dashed(p: &Painter, a: Pos2, b: Pos2, color: Color32) {
+    p.extend(EShape::dashed_line(&[a, b], Stroke::new(3.0, HALO), 5.0, 4.0));
+    p.extend(EShape::dashed_line(&[a, b], Stroke::new(1.2, color), 5.0, 4.0));
+}
+
+/// Alignement d'une étiquette placée vers l'extérieur dans la direction `dir`.
+fn align_out(dir: Vec2) -> Align2 {
+    let side = |v: f32| if v > 0.3 { egui::Align::Min } else if v < -0.3 { egui::Align::Max } else { egui::Align::Center };
+    Align2([side(dir.x), side(dir.y)])
+}
+
 /// Texte de l'étiquette d'une forme. `marker_no` : numéro du marqueur.
 pub fn label_text(shape: &Shape, cal: &Calibration, marker_no: usize) -> String {
     let v = shape.values(cal);
@@ -77,7 +133,7 @@ pub fn label_text(shape: &Shape, cal: &Calibration, marker_no: usize) -> String 
             format!("{} × {} {}\n{}", format_number(v[1].value), format_number(v[2].value), v[1].unit, v[0].text())
         }
         Shape::Circle { .. } | Shape::Circle3 { .. } if !v.is_empty() => format!("Ø {}", v[0].text()),
-        Shape::Angle { .. } if !v.is_empty() => format!("{}°", format_number(v[0].value)),
+        Shape::Angle { .. } | Shape::LineAngle { .. } if !v.is_empty() => format!("{}°", format_number(v[0].value)),
         _ => v.first().map(|v| v.text()).unwrap_or_default(),
     }
 }
@@ -108,23 +164,31 @@ pub fn label_anchor(shape: &Shape, xf: Xf) -> (Pos2, Align2) {
         Shape::Angle { a, vertex, b } => {
             let (a0, sweep, r) = angle_arc(s(*a), s(*vertex), s(*b));
             let dir = Vec2::angled(a0 + sweep / 2.0);
-            let align = Align2([
-                if dir.x > 0.3 { egui::Align::Min } else if dir.x < -0.3 { egui::Align::Max } else { egui::Align::Center },
-                if dir.y > 0.3 { egui::Align::Min } else if dir.y < -0.3 { egui::Align::Max } else { egui::Align::Center },
-            ]);
-            (s(*vertex) + dir * (r + 6.0), align)
+            (s(*vertex) + dir * (r + 6.0), align_out(dir))
         }
         Shape::Area { pts } => {
             let n = pts.len().max(1) as f64;
             let c = Pt::new(pts.iter().map(|p| p.x).sum::<f64>() / n, pts.iter().map(|p| p.y).sum::<f64>() / n);
             (s(c), Align2::CENTER_CENTER)
         }
-        Shape::Rect { a, b } => (s(a.lerp(*b, 0.5)), Align2::CENTER_CENTER),
+        Shape::Rect { a, b, .. } => (s(a.lerp(*b, 0.5)), Align2::CENTER_CENTER),
         Shape::Circle { .. } | Shape::Circle3 { .. } => match shape.circle() {
             Some((c, _)) => (s(c) + vec2(0.0, 6.0), Align2::CENTER_TOP),
             None => (s(shape.points()[0]), Align2::LEFT_BOTTOM),
         },
         Shape::Marker { p } => (s(*p), Align2::CENTER_CENTER),
+        Shape::LineAngle { a, b, c, d } => match line_angle_arc(xf, *a, *b, *c, *d) {
+            // Sur l'arc, du côté extérieur.
+            Some((v, a0, sweep, r)) => {
+                let dir = Vec2::angled(a0 + sweep / 2.0);
+                (v + dir * (r + 6.0), align_out(dir))
+            }
+            // Au milieu du trait qui relie les deux segments.
+            None => {
+                let (m1, m2) = (s(a.lerp(*b, 0.5)), s(c.lerp(*d, 0.5)));
+                (m1 + (m2 - m1) / 2.0, Align2::CENTER_CENTER)
+            }
+        },
     }
 }
 
@@ -140,20 +204,63 @@ pub fn label(p: &Painter, pos: Pos2, align: Align2, text: &str, color: Color32, 
 }
 
 /// Dessine une forme (traits seulement). `width` : épaisseur du trait.
+/// Segment avec petits traits perpendiculaires aux extrémités (écran).
+pub fn segment(p: &Painter, a: Pos2, b: Pos2, color: Color32, width: f32) {
+    outlined(p, vec![a, b], false, color, width);
+    let d = b - a;
+    if d.length() > 0.0 {
+        let n = vec2(-d.y, d.x).normalized() * 5.0;
+        for e in [a, b] {
+            outlined(p, vec![e - n, e + n], false, color, width * 0.75);
+        }
+    }
+}
+
+/// Dessine l'image (taille `img` en pixels) selon `xf`, rotation comprise.
+pub fn paint_image(p: &Painter, tex: TextureId, img: [usize; 2], xf: Xf) {
+    let (w, h) = (img[0] as f64, img[1] as f64);
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: xf.to_screen(Pt::new(x * w, y * h)),
+            uv: pos2(x as f32, y as f32),
+            color: Color32::WHITE,
+        });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    p.add(EShape::mesh(mesh));
+}
+
+/// Contour écran de l'image (quadrilatère, rotation comprise).
+pub fn image_outline(xf: Xf, img: [usize; 2]) -> Vec<Pos2> {
+    let (w, h) = (img[0] as f64, img[1] as f64);
+    [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)].map(|(x, y)| xf.to_screen(Pt::new(x, y))).to_vec()
+}
+
 pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f32, marker_no: usize) {
     let s = |q: Pt| xf.to_screen(q);
     match shape {
-        Shape::Length { a, b } => {
-            let (a, b) = (s(*a), s(*b));
-            outlined(p, vec![a, b], false, color, width);
-            // Petits traits perpendiculaires aux extrémités.
-            let d = b - a;
-            if d.length() > 0.0 {
-                let n = vec2(-d.y, d.x).normalized() * 5.0;
-                for e in [a, b] {
-                    outlined(p, vec![e - n, e + n], false, color, width * 0.75);
+        Shape::Length { a, b } => segment(p, s(*a), s(*b), color, width),
+        Shape::LineAngle { a: pa, b: pb, c: pc, d: pd } => {
+            let (a, b, c, d) = (s(*pa), s(*pb), s(*pc), s(*pd));
+            match line_angle_arc(xf, *pa, *pb, *pc, *pd) {
+                Some((v, a0, sweep, r)) => {
+                    // Segments prolongés en pointillés jusqu'à leur intersection
+                    // (et un peu au-delà, jusqu'au bout de l'arc), puis l'arc.
+                    let reach = r + 8.0;
+                    for (p0, p1, dir) in [(a, b, Vec2::angled(a0)), (c, d, Vec2::angled(a0 + sweep))] {
+                        for (e0, e1) in extensions(p0, p1, &[v, v + dir * reach]) {
+                            dashed(p, e0, e1, color);
+                        }
+                    }
+                    outlined(p, arc_points(v, r, a0, sweep), false, color, width * 0.75);
                 }
+                // Presque parallèles : lien entre les milieux.
+                None => dashed(p, a + (b - a) / 2.0, c + (d - c) / 2.0, color),
             }
+            segment(p, a, b, color, width);
+            segment(p, c, d, color, width);
         }
         Shape::Path { pts } => {
             outlined(p, pts.iter().map(|q| s(*q)).collect(), false, color, width);
@@ -174,9 +281,10 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
             let (a0, sweep, r) = angle_arc(a, v, b);
             outlined(p, arc_points(v, r, a0, sweep), false, color, width * 0.75);
         }
-        Shape::Rect { a, b } => {
-            let r = Rect::from_two_pos(s(*a), s(*b));
-            outlined(p, vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true, color, width);
+        Shape::Rect { a, b, angle } => {
+            // Coins en pixels image, côtés orientés selon le rectangle.
+            let corners = rect_corners(*a, *b, *angle);
+            outlined(p, corners.iter().map(|q| s(*q)).collect(), true, color, width);
         }
         Shape::Circle { .. } | Shape::Circle3 { .. } => {
             if let Some((c, r)) = shape.circle() {
@@ -209,6 +317,13 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
     }
 }
 
+/// Poignée de rotation (ronde) reliée au bord en `base`.
+pub fn paint_rotate_handle(p: &Painter, base: Pos2, h: Pos2, hot: bool) {
+    outlined(p, vec![base, h], false, Color32::WHITE, 1.2);
+    let r = if hot { HANDLE_SIZE / 2.0 + 2.5 } else { HANDLE_SIZE / 2.0 + 1.0 };
+    p.circle(h, r, Color32::WHITE, Stroke::new(1.5, Color32::BLACK));
+}
+
 /// Poignées carrées blanches ; `hot` : poignée survolée ou saisie.
 pub fn paint_handles(p: &Painter, xf: Xf, pts: &[Pt], hot: Option<usize>) {
     for (i, q) in pts.iter().enumerate() {
@@ -219,12 +334,14 @@ pub fn paint_handles(p: &Painter, xf: Xf, pts: &[Pt], hot: Option<usize>) {
 }
 
 /// Loupe : zoom de la texture autour de `center` (pixels image) avec réticule.
-/// `extra` dessine des formes dans le repère de la loupe.
+/// `base` : transformation de la vue (pour la rotation). `extra` dessine des
+/// formes dans le repère de la loupe.
 #[allow(clippy::too_many_arguments)]
 pub fn paint_loupe(
     p: &Painter,
     tex: TextureId,
     img: [usize; 2],
+    base: Xf,
     center: Pt,
     cursor_screen: Pos2,
     view: Rect,
@@ -245,19 +362,10 @@ pub fn paint_loupe(
     let lp = p.with_clip_rect(rect.intersect(p.clip_rect()));
     lp.rect_filled(rect, 0.0, Color32::from_gray(20));
 
-    // Partie visible de l'image dans la loupe.
-    let xf = Xf { origin: rect.center() - vec2(center.x as f32, center.y as f32) * mag, zoom: mag };
-    let (w, h) = (img[0] as f64, img[1] as f64);
-    let tl = xf.to_image(rect.min);
-    let br = xf.to_image(rect.max);
-    let (x0, y0, x1, y1) = (tl.x.max(0.0), tl.y.max(0.0), br.x.min(w), br.y.min(h));
-    if x1 > x0 && y1 > y0 && w > 0.0 && h > 0.0 {
-        let screen = Rect::from_min_max(xf.to_screen(Pt::new(x0, y0)), xf.to_screen(Pt::new(x1, y1)));
-        let uv = Rect::from_min_max(
-            pos2((x0 / w) as f32, (y0 / h) as f32),
-            pos2((x1 / w) as f32, (y1 / h) as f32),
-        );
-        lp.image(tex, screen, uv, Color32::WHITE);
+    // Image entière, découpée par la zone de la loupe.
+    let xf = base.centered_on(center, rect.center(), mag);
+    if img[0] > 0 && img[1] > 0 {
+        paint_image(&lp, tex, img, xf);
     }
     extra(&lp, xf);
 
@@ -342,13 +450,34 @@ mod tests {
     fn textes_etiquettes() {
         meteroscope_i18n::set_language("fr");
         let cal = Calibration::default();
-        let r = Shape::Rect { a: Pt::new(0., 0.), b: Pt::new(20., 10.) };
+        let r = Shape::Rect { a: Pt::new(0., 0.), b: Pt::new(20., 10.), angle: 0.0 };
         assert_eq!(label_text(&r, &cal, 0), "20,00 × 10,00 px\n200,0 px²");
         let c = Shape::Circle { center: Pt::new(0., 0.), edge: Pt::new(5., 0.) };
         assert_eq!(label_text(&c, &cal, 0), "Ø 10,00 px");
         let a = Shape::Angle { a: Pt::new(1., 0.), vertex: Pt::new(0., 0.), b: Pt::new(0., 1.) };
         assert_eq!(label_text(&a, &cal, 0), "90,00°");
         assert_eq!(label_text(&Shape::Marker { p: Pt::default() }, &cal, 3), "3");
+        let la = Shape::LineAngle { a: Pt::new(0., 0.), b: Pt::new(10., 0.), c: Pt::new(0., 5.), d: Pt::new(0., 9.) };
+        assert_eq!(label_text(&la, &cal, 0), "90,00°");
+    }
+
+    #[test]
+    fn inclinaison_arc_et_prolongements() {
+        meteroscope_i18n::set_language("fr");
+        let xf = Xf::new(Pos2::ZERO, 2.0);
+        // Horizontale de 10 à 20 et verticale de y = 5 à 8 en x = 5 : sommet en (5, 0).
+        let (a, b, c, d) = (Pt::new(10., 0.), Pt::new(20., 0.), Pt::new(5., 5.), Pt::new(5., 8.));
+        let (v, a0, sweep, _) = line_angle_arc(xf, a, b, c, d).unwrap();
+        assert!(v.distance(pos2(10.0, 0.0)) < 1e-4);
+        assert!(a0.abs() < 1e-4 && (sweep - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+        let (pos, _) = label_anchor(&Shape::LineAngle { a, b, c, d }, xf);
+        assert!(pos.x > v.x && pos.y > v.y);
+        // Prolongement jusqu'au sommet, d'un seul côté.
+        let e = extensions(pos2(20.0, 0.0), pos2(40.0, 0.0), &[pos2(10.0, 0.0), pos2(14.0, 0.0)]);
+        assert_eq!(e, vec![(pos2(10.0, 0.0), pos2(20.0, 0.0))]);
+        assert!(extensions(pos2(0.0, 0.0), pos2(40.0, 0.0), &[pos2(10.0, 0.0)]).is_empty());
+        // Parallèles : pas d'arc.
+        assert!(line_angle_arc(xf, a, b, Pt::new(10., 5.), Pt::new(20., 5.)).is_none());
     }
 
     #[test]

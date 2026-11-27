@@ -312,10 +312,7 @@ impl MeterOscopeApp {
                 self.doc.remove(id);
             }
         if ctx.input(|i| i.modifiers.is_none()) {
-            let tools = std::iter::once(Tool::Select)
-                .chain(std::iter::once(Tool::Calibrate))
-                .chain(meteroscope_core::ShapeKind::ALL.into_iter().map(Tool::Draw));
-            for t in tools {
+            for t in meteroscope_panels::TOOLS {
                 if meteroscope_panels::tool_shortcut(t).is_some_and(|k| ctx.input(|i| i.key_pressed(k))) {
                     self.canvas.set_tool(t);
                 }
@@ -374,6 +371,15 @@ impl MeterOscopeApp {
                         }
                     }
                     ui.separator();
+                    if ui.button(format!("📐  {}", tr!("image.straighten"))).on_hover_text(tr!("tool_help.straighten")).clicked() {
+                        self.canvas.set_tool(Tool::Straighten);
+                        ui.close();
+                    }
+                    let reset = ui.add_enabled(self.doc.rotation != 0.0, egui::Button::new(tr!("image.straighten_reset")));
+                    if reset.clicked() {
+                        self.doc.set_rotation(0.0);
+                    }
+                    ui.separator();
                     let mut changed = false;
                     changed |= ui.add(egui::Slider::new(&mut self.brightness, -1.0..=1.0).text(tr!("image.brightness"))).changed();
                     changed |= ui.add(egui::Slider::new(&mut self.contrast, -1.0..=1.0).text(tr!("image.contrast"))).changed();
@@ -422,6 +428,15 @@ impl MeterOscopeApp {
                 ui.separator();
                 if let Some(img) = &self.image {
                     ui.label(format!("{} × {} px", img.width(), img.height()));
+                    ui.separator();
+                }
+                if self.image.is_some() && self.doc.rotation != 0.0 {
+                    let r = self.doc.rotation;
+                    let text = tr!("status.rotation", angle = meteroscope_core::measure::format_number(r.abs()));
+                    let resp = ui.add(egui::Label::new(text).sense(egui::Sense::click())).on_hover_text(tr!("status.rotation_tip"));
+                    if resp.double_clicked() {
+                        self.doc.set_rotation(0.0);
+                    }
                     ui.separator();
                 }
                 if let Some(p) = cursor {

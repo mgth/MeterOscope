@@ -239,7 +239,7 @@ fn render_demo() {
         d.add(Shape::Length { a: s(600., 40.), b: s(600., 300.) });
         d.add(Shape::Angle { a: s(80., 300.), vertex: s(40., 420.), b: s(220., 420.) });
         d.add(Shape::Area { pts: vec![s(300., 300.), s(420., 280.), s(460., 400.), s(330., 430.)] });
-        d.add(Shape::Rect { a: s(300., 150.), b: s(450., 240.) });
+        d.add(Shape::Rect { a: s(300., 150.), b: s(450., 240.), angle: 0.0 });
         d.add(Shape::Circle { center: s(150., 200.), edge: s(200., 200.) });
         d.add(Shape::Circle3 { a: s(480., 100.), b: s(540., 120.), c: s(500., 180.) });
         d.add(Shape::Path { pts: vec![s(480., 300.), s(520., 340.), s(500., 380.), s(560., 400.)] });

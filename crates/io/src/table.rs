@@ -175,7 +175,7 @@ mod tests {
         let mut d = Document::new();
         d.add(Shape::Length { a: Pt::new(0., 0.), b: Pt::new(30., 40.) });
         d.add(Shape::Length { a: Pt::new(0., 0.), b: Pt::new(0., 100.) });
-        d.add(Shape::Rect { a: Pt::new(0., 0.), b: Pt::new(20., 10.) });
+        d.add(Shape::Rect { a: Pt::new(0., 0.), b: Pt::new(20., 10.), angle: 0.0 });
         d.add(Shape::Angle { a: Pt::new(10., 0.), vertex: Pt::new(0., 0.), b: Pt::new(0., 10.) });
         d.add(Shape::Marker { p: Pt::new(12.5, 7.0) });
         let id = d.add(Shape::Marker { p: Pt::new(3.0, 4.0) });
