@@ -2,7 +2,7 @@
 
 use crate::Transform;
 use image::{RgbaImage, imageops};
-use meteroscope_core::{Document, Pt};
+use meteroscope_core::{Document, Pt, Shape};
 
 /// Image du point `p` (coordonnées continues : le pixel (i, j) couvre
 /// [i, i+1] × [j, j+1]) pour une image de taille `w`×`h` *avant* transformation.
@@ -24,10 +24,21 @@ pub fn apply_transform(image: &RgbaImage, doc: &mut Document, t: Transform) -> R
         Transform::FlipVertical => imageops::flip_vertical(image),
     };
     let (w, h) = (image.width() as f64, image.height() as f64);
-    if !doc.measurements.is_empty() {
+    // Un miroir inverse le sens du redressement (l'image redressée reste droite) ;
+    // un quart de tour le conserve.
+    let flip = matches!(t, Transform::FlipHorizontal | Transform::FlipVertical);
+    let flip_rotation = flip && doc.rotation != 0.0;
+    if !doc.measurements.is_empty() || flip_rotation {
         doc.checkpoint();
         for m in &mut doc.measurements {
             m.shape.map_points(|p| transform_point(p, w, h, t));
+            // Le miroir inverse aussi l'orientation d'un rectangle.
+            if let (true, Shape::Rect { angle, .. }) = (flip, &mut m.shape) {
+                *angle = -*angle;
+            }
+        }
+        if flip_rotation {
+            doc.rotation = -doc.rotation;
         }
     }
     out
@@ -81,7 +92,6 @@ pub fn adjust(image: &RgbaImage, brightness: f32, contrast: f32) -> RgbaImage {
 mod tests {
     use super::*;
     use image::Rgba;
-    use meteroscope_core::Shape;
 
     fn test_image(w: u32, h: u32) -> RgbaImage {
         RgbaImage::from_fn(w, h, |x, y| Rgba([(x * 7) as u8, (y * 13) as u8, ((x * y) % 251) as u8, 200]))
@@ -118,7 +128,8 @@ mod tests {
         let mut doc = Document::new();
         doc.add(Shape::Length { a: Pt::new(1.0, 2.0), b: Pt::new(8.0, 4.5) });
         doc.add(Shape::Angle { a: Pt::new(1.0, 1.0), vertex: Pt::new(4.0, 2.0), b: Pt::new(2.0, 4.0) });
-        doc.add(Shape::Rect { a: Pt::new(1.0, 1.0), b: Pt::new(6.0, 3.0) });
+        doc.add(Shape::Rect { a: Pt::new(1.0, 1.0), b: Pt::new(6.0, 3.0), angle: 0.0 });
+        doc.add(Shape::Rect { a: Pt::new(1.0, 1.0), b: Pt::new(6.0, 3.0), angle: 20.0 });
         doc.add(Shape::Circle3 { a: Pt::new(1.0, 1.0), b: Pt::new(4.0, 0.5), c: Pt::new(3.0, 4.0) });
         let before: Vec<_> = doc.measurements.iter().map(|m| m.shape.values(&doc.calibration)).collect();
         let shapes0: Vec<_> = doc.measurements.iter().map(|m| m.shape.clone()).collect();
@@ -148,11 +159,31 @@ mod tests {
         let mut im = img.clone();
         for t in [Transform::FlipHorizontal, Transform::FlipHorizontal, Transform::FlipVertical, Transform::FlipVertical] {
             im = apply_transform(&im, &mut doc, t);
+            // Un miroir ne change pas les mesures (rectangle orienté compris).
+            for (m, v) in doc.measurements.iter().zip(&before) {
+                let a = m.shape.values(&doc.calibration);
+                assert!(a.iter().zip(v).all(|(x, y)| (x.value - y.value).abs() < 1e-9), "{t:?} {:?}", m.shape);
+            }
         }
         assert_eq!(im, img);
         // Gauche puis droite = identité.
         let im = apply_transform(&apply_transform(&img, &mut doc, Transform::RotateLeft), &mut doc, Transform::RotateRight);
         assert_eq!(im, img);
+    }
+
+    #[test]
+    fn straightening_survives_transforms() {
+        meteroscope_i18n::set_language("fr");
+        let img = test_image(9, 5);
+        let mut doc = Document::new();
+        doc.set_rotation(4.0);
+        let im = apply_transform(&img, &mut doc, Transform::RotateRight);
+        assert_eq!(doc.rotation, 4.0);
+        apply_transform(&im, &mut doc, Transform::FlipHorizontal);
+        assert_eq!(doc.rotation, -4.0);
+        // Le miroir s'annule comme le reste.
+        assert!(doc.undo());
+        assert_eq!(doc.rotation, 4.0);
     }
 
     #[test]

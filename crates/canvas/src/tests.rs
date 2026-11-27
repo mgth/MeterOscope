@@ -229,3 +229,69 @@ fn marqueurs_et_annulation() {
     h.step();
     assert_eq!(h.state().doc.measurements.len(), 2);
 }
+
+#[test]
+fn redresser_puis_mesurer_sur_la_vue_pivotee() {
+    meteroscope_i18n::set_language("fr");
+    let mut h = harness();
+    // Ligne penchée de atan(10/100) ≈ 5,71° dans l'image.
+    h.state_mut().canvas.set_tool(Tool::Straighten);
+    let (p, q) = (scr(&h, 50.0, 40.0), scr(&h, 150.0, 50.0));
+    drag(&mut h, p, q, PointerButton::Primary);
+    let expected = -(10f64).atan2(100.0).to_degrees();
+    let st = h.state();
+    assert!(st.doc.measurements.is_empty(), "redresser n'ajoute pas de mesure");
+    assert!((st.doc.rotation - expected).abs() < 1e-6, "rotation = {}", st.doc.rotation);
+    assert!(st.outs.iter().any(|o| o.straightened.is_some()));
+    // À la frame suivante, la vue est pivotée : la ligne est horizontale à l'écran
+    // et l'image entière reste visible (réajustement).
+    h.step();
+    let (a, b) = (scr(&h, 50.0, 40.0), scr(&h, 150.0, 50.0));
+    assert!((a.y - b.y).abs() < 0.01, "{a:?} {b:?}");
+    let c = &h.state().canvas;
+    for (x, y) in [(0.0, 0.0), (200.0, 0.0), (200.0, 100.0), (0.0, 100.0)] {
+        assert!(c.last_rect.contains(scr(&h, x, y)), "coin ({x}, {y}) hors de la vue");
+    }
+    // Un clic au même endroit de l'écran tombe toujours au bon pixel de l'image.
+    h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::Marker));
+    click(&mut h, 120.0, 30.0);
+    let Shape::Marker { p: m } = h.state().doc.measurements[0].shape else { panic!() };
+    assert!(near(m, Pt::new(120.0, 30.0)), "{m:?}");
+    // Un rectangle tracé sur la vue redressée reste droit à l'écran.
+    h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::Rect));
+    let p = scr(&h, 60.0, 40.0);
+    drag(&mut h, p, p + egui::vec2(50.0, 30.0), PointerButton::Primary);
+    let r = h.state().doc.measurements[1].shape.clone();
+    let Shape::Rect { angle, .. } = r else { panic!("{r:?}") };
+    assert!((angle + expected).abs() < 1e-6, "angle = {angle}");
+    let c: Vec<_> = crate::edit::handles(&r, 1.0).into_iter().map(|q| scr(&h, q.x, q.y)).collect();
+    assert!((c[0].y - c[1].y).abs() < 0.01 && (c[0].x - c[3].x).abs() < 0.01, "{c:?}");
+    assert!((c[1].x - c[0].x - 50.0).abs() < 0.01 && (c[3].y - c[0].y - 30.0).abs() < 0.01, "{c:?}");
+    // Redresser est annulable comme le reste.
+    h.state_mut().doc.undo();
+    h.state_mut().doc.undo();
+    h.state_mut().doc.undo();
+    h.step();
+    assert_eq!(h.state().doc.rotation, 0.0);
+    let (a, b) = (scr(&h, 0.0, 0.0), scr(&h, 200.0, 0.0));
+    assert!((a.y - b.y).abs() < 0.01);
+}
+
+#[test]
+fn inclinaison_entre_deux_segments() {
+    meteroscope_i18n::set_language("fr");
+    let mut h = harness();
+    h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::LineAngle));
+    let (p, q) = (scr(&h, 10.0, 10.0), scr(&h, 90.0, 10.0));
+    drag(&mut h, p, q, PointerButton::Primary);
+    assert!(h.state().canvas.is_drawing());
+    assert!(h.state().canvas.hint().contains("second segment"));
+    click(&mut h, 100.0, 60.0);
+    click(&mut h, 180.0, 80.0);
+    let st = h.state();
+    assert_eq!(st.doc.measurements.len(), 1);
+    let m = &st.doc.measurements[0];
+    assert_eq!(m.shape.kind(), ShapeKind::LineAngle);
+    let v = m.shape.values(&st.doc.calibration)[0].value;
+    assert!((v - (20f64).atan2(80.0).to_degrees()).abs() < 0.1, "{v}");
+}

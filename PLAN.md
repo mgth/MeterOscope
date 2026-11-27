@@ -31,9 +31,17 @@ Toutes les coordonnées du modèle sont en pixels de l'image d'origine (`f64`).
 ## Mesures
 
 Longueur, chemin (ligne brisée), angle (3 points), surface (polygone : aire + périmètre),
-rectangle (largeur, hauteur, aire), cercle centre-bord et cercle par 3 points
-(diamètre, rayon, aire, circonférence), marqueur (comptage).
+rectangle (largeur, hauteur, aire ; par deux coins, ou incliné par trois points, et
+inclinable par sa poignée ronde), cercle centre-bord et cercle par 3 points
+(diamètre, rayon, aire, circonférence), marqueur (comptage), inclinaison entre deux
+segments distants (0° à 90°).
 Statistiques par type : n, moyenne, écart-type, min, max.
+
+Redressement : l'outil Redresser (H) fait pivoter l'affichage pour qu'un segment tracé
+devienne horizontal ou vertical. L'image et les coordonnées des mesures ne changent pas
+(rotation d'affichage `Document::rotation`, enregistrée dans le projet, annulable).
+Un rectangle tracé par deux coins sur une vue redressée en suit l'horizontale et la verticale.
+L'inclinaison prolonge ses segments en pointillés jusqu'à leur intersection, cote sur l'arc.
 
 ## Lots de développement
 

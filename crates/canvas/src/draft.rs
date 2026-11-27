@@ -5,6 +5,7 @@
 //!   le point de relâchement devient le point suivant (presser-glisser-relâcher) ;
 //! - les points suivants sont posés au relâchement d'un clic (clic puis clic) ;
 //! - un point trop proche du précédent est ignoré (évite les doublons d'un double-clic) ;
+//! - Inclinaison : deux segments, chacun tracé comme une longueur ;
 //! - Chemin/Surface se terminent par [`Draft::finish`] (double-clic, Entrée, clic
 //!   droit) ou, pour la surface, par un clic sur le premier point.
 
@@ -45,16 +46,26 @@ impl Draft {
         self.kind.point_count().is_none()
     }
 
+    /// Le prochain point commence un segment (premier point, ou début du
+    /// second segment d'une inclinaison) : il est posé à l'appui.
+    fn starts_segment(&self) -> bool {
+        self.pts.is_empty() || (self.kind == ShapeKind::LineAngle && self.pts.len() == 2)
+    }
+
     /// Applique la contrainte Maj au point `p` par rapport au point précédent.
-    pub fn constrain(&self, p: Pt, shift: bool) -> Pt {
+    /// `rot` : rotation d'affichage (degrés), pour que l'horizontale et la
+    /// verticale soient celles de l'écran (carré compris).
+    pub fn constrain(&self, p: Pt, shift: bool, rot: f64) -> Pt {
         let Some(&prev) = self.pts.last() else { return p };
-        if !shift {
+        if !shift || self.starts_segment() {
             return p;
         }
         match self.kind {
-            ShapeKind::Rect => square(prev, p),
+            ShapeKind::Rect => square_in(prev, p, -rot),
+            // Troisième point : largeur égale au premier côté (carré).
+            ShapeKind::Rect3 if self.pts.len() == 2 => square3(self.pts[0], prev, p),
             ShapeKind::Circle | ShapeKind::Circle3 | ShapeKind::Marker => p,
-            _ => snap45(prev, p),
+            _ => snap45(prev, p, rot),
         }
     }
 
@@ -90,7 +101,7 @@ impl Draft {
     /// Appui du bouton principal en `p` (déjà contraint). `tol` : tolérance en pixels image.
     pub fn press(&mut self, p: Pt, tol: f64) -> Step {
         self.pressing = true;
-        self.press_started = self.pts.is_empty();
+        self.press_started = self.starts_segment();
         if self.press_started {
             let step = self.push(p, tol);
             if matches!(step, Step::Done(_)) {
@@ -147,14 +158,16 @@ impl Draft {
 }
 
 /// Contraint `p` à l'horizontale, la verticale ou une diagonale à 45° depuis `o`
-/// (projection sur la direction la plus proche).
-pub fn snap45(o: Pt, p: Pt) -> Pt {
+/// (projection sur la direction la plus proche), à l'écran : `rot` est la
+/// rotation d'affichage en degrés (sens horaire).
+pub fn snap45(o: Pt, p: Pt, rot: f64) -> Pt {
     let (dx, dy) = (p.x - o.x, p.y - o.y);
     if dx == 0.0 && dy == 0.0 {
         return p;
     }
     let step = std::f64::consts::FRAC_PI_4;
-    let a = (dy.atan2(dx) / step).round() * step;
+    let r = rot.to_radians();
+    let a = ((dy.atan2(dx) + r) / step).round() * step - r;
     let (ux, uy) = (a.cos(), a.sin());
     let t = dx * ux + dy * uy;
     // Arrondi pour obtenir des coordonnées exactes sur les axes.
@@ -168,6 +181,31 @@ pub fn square(o: Pt, p: Pt) -> Pt {
     let s = dx.abs().max(dy.abs());
     let sign = |v: f64| if v < 0.0 { -1.0 } else { 1.0 };
     Pt::new(o.x + s * sign(dx), o.y + s * sign(dy))
+}
+
+/// Contraint le troisième point d'un rectangle par trois points pour que
+/// la largeur soit égale au côté `o→q` (du côté où se trouve `p`).
+pub fn square3(o: Pt, q: Pt, p: Pt) -> Pt {
+    let (dx, dy) = (q.x - o.x, q.y - o.y);
+    let l = dx.hypot(dy);
+    if l == 0.0 {
+        return p;
+    }
+    // Normale unitaire, orientée vers p.
+    let (mut nx, mut ny) = (-dy / l, dx / l);
+    if (p.x - q.x) * nx + (p.y - q.y) * ny < 0.0 {
+        (nx, ny) = (-nx, -ny);
+    }
+    Pt::new(q.x + nx * l, q.y + ny * l)
+}
+
+/// [`square`] pour un rectangle dont les côtés sont orientés à `deg` degrés.
+pub fn square_in(o: Pt, p: Pt, deg: f64) -> Pt {
+    use meteroscope_core::geometry::{from_frame, to_frame};
+    if deg == 0.0 {
+        return square(o, p);
+    }
+    from_frame(square(to_frame(o, deg), to_frame(p, deg)), deg)
 }
 
 #[cfg(test)]
@@ -264,22 +302,66 @@ mod tests {
     }
 
     #[test]
+    fn rectangle_trois_points() {
+        meteroscope_i18n::set_language("fr");
+        let mut r = Draft::new(ShapeKind::Rect3);
+        // Premier côté en glissant, puis un clic pour la largeur.
+        r.press(p(0., 0.), TOL);
+        assert_eq!(r.release(p(30., 40.), true, TOL), Step::Continue);
+        assert_eq!(r.pts.len(), 2);
+        // Maj sur le troisième point : carré, du côté du pointeur.
+        let q = r.constrain(p(20., 60.), true, 0.0);
+        assert!(q.dist(p(-10., 70.)) < 1e-9, "{q:?}");
+        r.press(q, TOL);
+        let Step::Done(pts) = r.release(q, false, TOL) else { panic!() };
+        let s = meteroscope_core::Shape::from_points(ShapeKind::Rect3, &pts).unwrap();
+        let v = s.values(&meteroscope_core::Calibration::default());
+        assert!((v[1].value - 50.0).abs() < 1e-9 && (v[2].value - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn contrainte_maj() {
         meteroscope_i18n::set_language("fr");
         let o = p(10., 10.);
-        assert_eq!(snap45(o, p(50., 13.)), p(50., 10.));
-        assert_eq!(snap45(o, p(12., -30.)), p(10., -30.));
-        let d = snap45(o, p(30., 28.));
+        assert_eq!(snap45(o, p(50., 13.), 0.0), p(50., 10.));
+        assert_eq!(snap45(o, p(12., -30.), 0.0), p(10., -30.));
+        let d = snap45(o, p(30., 28.), 0.0);
         assert!((d.x - o.x - (d.y - o.y)).abs() < 1e-9);
         assert_eq!(square(o, p(20., 4.)), p(20., 0.));
         assert_eq!(square(o, p(0., 13.)), p(0., 20.));
 
         let mut l = Draft::new(ShapeKind::Length);
         l.press(o, TOL);
-        assert_eq!(l.constrain(p(50., 13.), true), p(50., 10.));
-        assert_eq!(l.constrain(p(50., 13.), false), p(50., 13.));
+        assert_eq!(l.constrain(p(50., 13.), true, 0.0), p(50., 10.));
+        assert_eq!(l.constrain(p(50., 13.), false, 0.0), p(50., 13.));
         let mut r = Draft::new(ShapeKind::Rect);
         r.press(o, TOL);
-        assert_eq!(r.constrain(p(20., 4.), true), p(20., 0.));
+        assert_eq!(r.constrain(p(20., 4.), true, 0.0), p(20., 0.));
+        // Affichage pivoté de −10° : « horizontal » à l'écran = penché de +10° dans l'image.
+        let q = snap45(o, p(50., 15.), -10.0);
+        assert!(((q.y - o.y).atan2(q.x - o.x).to_degrees() - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn inclinaison_deux_segments() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = Draft::new(ShapeKind::LineAngle);
+        // Premier segment glissé, second en clic puis clic.
+        d.press(p(0., 0.), TOL);
+        assert_eq!(d.release(p(10., 0.), true, TOL), Step::Continue);
+        // Maj n'agit pas sur le début du second segment.
+        assert_eq!(d.constrain(p(50., 13.), true, 0.0), p(50., 13.));
+        d.press(p(50., 13.), TOL);
+        d.release(p(50., 13.), false, TOL);
+        assert_eq!(d.constrain(p(70., 14.), true, 0.0), p(70., 13.));
+        d.press(p(70., 30.), TOL);
+        let done = d.release(p(70., 30.), false, TOL);
+        assert_eq!(done, Step::Done(vec![p(0., 0.), p(10., 0.), p(50., 13.), p(70., 30.)]));
+        // Second segment glissé lui aussi.
+        let mut g = Draft::new(ShapeKind::LineAngle);
+        g.press(p(0., 0.), TOL);
+        g.release(p(10., 0.), true, TOL);
+        g.press(p(0., 20.), TOL);
+        assert!(matches!(g.release(p(10., 25.), true, TOL), Step::Done(v) if v.len() == 4));
     }
 }

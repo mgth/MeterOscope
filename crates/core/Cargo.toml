@@ -8,3 +8,6 @@ license.workspace = true
 [dependencies]
 meteroscope-i18n.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

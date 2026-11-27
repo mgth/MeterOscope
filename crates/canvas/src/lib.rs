@@ -10,7 +10,10 @@
 //! - outils de tracé : clic puis clic, ou presser-glisser-relâcher ; Maj
 //!   contraint ; Entrée / double-clic / clic droit terminent un chemin ou une
 //!   surface, Retour arrière retire le dernier point ;
-//! - outil Sélection : clic pour sélectionner, glisser une poignée ou le corps.
+//! - outil Sélection : clic pour sélectionner, glisser une poignée ou le corps ;
+//! - outil Redresser : tracer un segment le long d'une ligne qui doit être
+//!   horizontale ou verticale ; la vue pivote (`Document::rotation`), l'image
+//!   et les coordonnées des mesures restent inchangées.
 
 mod draft;
 mod edit;
@@ -24,8 +27,10 @@ use draft::{Draft, Step};
 use edit::Hit;
 use egui::{
     Color32, CursorIcon, Event, Key, Modifiers, PointerButton, Pos2, Rect, Sense, Stroke, TextureHandle, Ui, Vec2,
-    pos2, vec2,
+    vec2,
 };
+use meteroscope_core::geometry::straighten_rotation;
+use meteroscope_core::measure::format_number;
 use meteroscope_core::{Calibration, Document, PALETTE, Pt, Shape, ShapeKind, Tool};
 use view::{View, Xf};
 
@@ -37,6 +42,8 @@ const DRAG_THRESHOLD: f32 = 4.0;
 const HIT_TOL: f32 = 6.0;
 /// Tolérance de clic sur une poignée ou un point (pixels écran).
 const HANDLE_TOL: f32 = 9.0;
+/// Distance écran entre le bord d'un rectangle et sa poignée de rotation.
+const ROTATE_GAP: f32 = 24.0;
 /// Délai et distance maximaux d'un double-clic.
 const DOUBLE_CLICK_DELAY: f64 = 0.4;
 const DOUBLE_CLICK_DIST: f32 = 6.0;
@@ -44,6 +51,8 @@ const DOUBLE_CLICK_DIST: f32 = 6.0;
 const LOUPE_MAX_ZOOM: f32 = 12.0;
 /// Couleur du segment d'étalonnage.
 const CALIB_COLOR: Color32 = Color32::from_rgb(255, 64, 170);
+/// Couleur du segment de redressement.
+const STRAIGHTEN_COLOR: Color32 = Color32::from_rgb(64, 224, 255);
 
 /// Ce que la vue signale à l'application après une frame.
 #[derive(Clone, Debug, Default)]
@@ -55,6 +64,8 @@ pub struct CanvasOutput {
     pub calibration_segment: Option<(Pt, Pt)>,
     /// Une mesure vient d'être créée (id).
     pub created: Option<u64>,
+    /// La vue vient d'être redressée : nouvelle rotation (degrés).
+    pub straightened: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -104,6 +115,8 @@ pub struct Canvas {
     fitted: bool,
     last_rect: Rect,
     img_size: Vec2,
+    /// Rotation d'affichage appliquée (copie de `Document::rotation`).
+    rotation: f64,
     draft: Draft,
     /// Dernier segment d'étalonnage tracé (affiché tant que l'outil Échelle est actif).
     calib_seg: Option<(Pt, Pt)>,
@@ -126,6 +139,7 @@ impl Default for Canvas {
             fitted: true,
             last_rect: Rect::NOTHING,
             img_size: Vec2::ZERO,
+            rotation: 0.0,
             draft: Draft::new(ShapeKind::Length),
             calib_seg: None,
             gesture: None,
@@ -143,13 +157,14 @@ impl Default for Canvas {
 fn draft_kind(tool: Tool) -> Option<ShapeKind> {
     match tool {
         Tool::Select => None,
-        Tool::Calibrate => Some(ShapeKind::Length),
+        Tool::Calibrate | Tool::Straighten => Some(ShapeKind::Length),
         Tool::Draw(k) => Some(k),
     }
 }
 
 /// Couleur attribuée par `Document::add` à un type de forme.
 fn kind_color(kind: ShapeKind) -> Color32 {
+    let kind = kind.produces();
     let i = ShapeKind::ALL.iter().position(|k| *k == kind).unwrap_or(0);
     render::color32(PALETTE[i % PALETTE.len()])
 }
@@ -176,6 +191,12 @@ impl Canvas {
         self.pending = Some(Pending::Fit);
     }
 
+    /// Taille de l'image pivotée (boîte englobante), utilisée pour ajuster
+    /// et borner la vue.
+    fn vimg(&self) -> Vec2 {
+        view::rotated_size(self.img_size, self.rotation)
+    }
+
     fn known(&self) -> bool {
         self.last_rect.is_positive() && self.img_size.x > 0.0 && self.img_size.y > 0.0
     }
@@ -183,7 +204,7 @@ impl Canvas {
     /// Zoom 1:1 centré.
     pub fn zoom_actual(&mut self) {
         if self.known() {
-            self.view = View::actual(self.last_rect.size(), self.img_size);
+            self.view = View::actual(self.last_rect.size(), self.vimg());
             self.fitted = false;
         } else {
             self.pending = Some(Pending::Actual);
@@ -197,7 +218,7 @@ impl Canvas {
             return;
         }
         self.view.zoom_about(self.last_rect.size() / 2.0, factor);
-        self.view.clamp(self.last_rect.size(), self.img_size);
+        self.view.clamp(self.last_rect.size(), self.vimg());
         self.fitted = false;
     }
 
@@ -244,11 +265,18 @@ impl Canvas {
                 (0, true) => tr!("hint.scale.dialog"),
                 _ => tr!("hint.scale.end"),
             },
+            Tool::Straighten => match n {
+                0 => tr!("hint.straighten.start"),
+                _ => tr!("hint.straighten.end"),
+            },
             Tool::Draw(kind) => match (kind, n) {
                 (ShapeKind::Length, 0) => tr!("hint.length.first"),
                 (ShapeKind::Length, _) => tr!("hint.length.second"),
                 (ShapeKind::Rect, 0) => tr!("hint.rect.first"),
                 (ShapeKind::Rect, _) => tr!("hint.rect.second"),
+                (ShapeKind::Rect3, 0) => tr!("hint.rect3.first"),
+                (ShapeKind::Rect3, 1) => tr!("hint.rect3.second"),
+                (ShapeKind::Rect3, _) => tr!("hint.rect3.third"),
                 (ShapeKind::Circle, 0) => tr!("hint.circle.center"),
                 (ShapeKind::Circle, _) => tr!("hint.circle.edge"),
                 (ShapeKind::Circle3, 0) => tr!("hint.circle3.first"),
@@ -268,13 +296,17 @@ impl Canvas {
                     tr!("hint.area.next")
                 }
                 (ShapeKind::Marker, _) => tr!("hint.marker"),
+                (ShapeKind::LineAngle, 0) => tr!("hint.line_angle.first"),
+                (ShapeKind::LineAngle, 1) => tr!("hint.line_angle.first_end"),
+                (ShapeKind::LineAngle, 2) => tr!("hint.line_angle.second"),
+                (ShapeKind::LineAngle, _) => tr!("hint.line_angle.second_end"),
             },
         };
         s.to_owned()
     }
 
     fn xf(&self) -> Xf {
-        self.view.xf(self.last_rect.min)
+        self.view.xf(self.last_rect.min).rotated(self.rotation, self.img_size)
     }
 
     /// Affiche la vue dans tout l'espace disponible de `ui` et gère les
@@ -295,10 +327,11 @@ impl Canvas {
         let resized = rect.size() != self.last_rect.size() || img != self.img_size;
         self.last_rect = rect;
         self.img_size = img;
+        self.sync_rotation(doc.rotation);
         match self.pending.take() {
             Some(Pending::Fit) => self.fit_now(),
             Some(Pending::Actual) => {
-                self.view = View::actual(rect.size(), img);
+                self.view = View::actual(rect.size(), self.vimg());
                 self.fitted = false;
             }
             None if resized && self.fitted => self.fit_now(),
@@ -338,7 +371,7 @@ impl Canvas {
             if scroll != Vec2::ZERO {
                 ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
             }
-            self.view.clamp(rect.size(), img);
+            self.view.clamp(rect.size(), self.vimg());
         }
 
         // Souris, dans l'ordre des événements.
@@ -392,16 +425,16 @@ impl Canvas {
 
         // Rendu.
         self.has_selection = doc.selected().is_some();
-        let img_rect = Rect::from_min_size(xf.origin, img * xf.zoom);
-        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        painter.rect_filled(img_rect.expand(1.0), 0.0, Color32::from_gray(10));
-        painter.image(tex.id(), img_rect, uv, Color32::WHITE);
+        let outline = render::image_outline(xf, [w, h]);
+        painter.add(egui::Shape::convex_polygon(outline, Color32::from_gray(10), Stroke::new(1.0, Color32::from_gray(10))));
+        render::paint_image(&painter, tex.id(), [w, h], xf);
         self.paint_measurements(&painter, xf, doc);
 
         // Aperçu du tracé (le point sous le curseur suit la contrainte Maj).
         let pointer = if self.gesture.is_some() { hover } else { hover_in };
         let draw_tool = draft_kind(self.tool).is_some();
-        let preview_pt = pointer.filter(|_| draw_tool).map(|p| self.draft.constrain(xf.to_image(p), shift));
+        let rot = self.rotation;
+        let preview_pt = pointer.filter(|_| draw_tool).map(|p| self.draft.constrain(xf.to_image(p), shift, rot));
         if self.tool == Tool::Calibrate
             && !self.draft.is_active()
             && let Some((a, b)) = self.calib_seg
@@ -427,15 +460,17 @@ impl Canvas {
             let panning = space || self.gesture.as_ref().is_some_and(|g| g.dragged && !matches!(g.kind, GestureKind::Handle(..) | GestureKind::Draw));
             if draw_tool && !panning && let Some(p) = preview_pt {
                 let pts = self.draft.preview(Some(p));
-                render::paint_loupe(&painter, tex.id(), [w, h], p, cur, rect, mag, |lp, lxf| {
+                render::paint_loupe(&painter, tex.id(), [w, h], xf, p, cur, rect, mag, |lp, lxf| {
                     self.paint_draft(lp, lxf, &pts, None)
                 });
             } else if let Some(Gesture { kind: GestureKind::Handle(id, i), dragged: true, .. }) = &self.gesture
                 && let Some(m) = doc.get(*id)
+                // Pas de loupe pour la rotation d'un rectangle : la position exacte n'y compte pas.
+                && !(matches!(m.shape, Shape::Rect { .. }) && *i == edit::ROTATE_HANDLE)
             {
-                let hp = edit::handles(&m.shape)[*i];
+                let hp = edit::handles(&m.shape, xf.img_len(ROTATE_GAP))[*i];
                 let color = render::color32(m.color);
-                render::paint_loupe(&painter, tex.id(), [w, h], hp, cur, rect, mag, |lp, lxf| {
+                render::paint_loupe(&painter, tex.id(), [w, h], xf, hp, cur, rect, mag, |lp, lxf| {
                     render::paint_shape(lp, lxf, &m.shape, color, 1.5, 0);
                 });
             }
@@ -444,14 +479,38 @@ impl Canvas {
         std::mem::take(&mut self.out)
     }
 
+    /// Forme d'un tracé. Un rectangle par deux coins suit l'horizontale et
+    /// la verticale de la vue (redressée).
+    fn shape_from_draft(&self, kind: ShapeKind, pts: &[Pt]) -> Option<Shape> {
+        let shape = Shape::from_points(kind, pts)?;
+        Some(if kind == ShapeKind::Rect { shape.oriented(-self.rotation) } else { shape })
+    }
+
     fn fit_now(&mut self) {
-        self.view = View::fit(self.last_rect.size(), self.img_size);
+        self.view = View::fit(self.last_rect.size(), self.vimg());
         self.fitted = true;
+    }
+
+    /// Applique une nouvelle rotation d'affichage. Vue ajustée : on réajuste ;
+    /// sinon le point de l'image au centre de la vue y reste.
+    fn sync_rotation(&mut self, rotation: f64) {
+        if rotation == self.rotation {
+            return;
+        }
+        let center = self.last_rect.center();
+        let keep = self.known().then(|| self.xf().to_image(center));
+        self.rotation = rotation;
+        if self.fitted {
+            self.pending = Some(Pending::Fit);
+        } else if let Some(p) = keep {
+            self.view.pan += center - self.xf().to_screen(p);
+            self.view.clamp(self.last_rect.size(), self.vimg());
+        }
     }
 
     /// Élément sous le point écran `pos` : poignées, puis étiquettes, puis traits.
     fn hit(&self, doc: &Document, pos: Pos2, xf: Xf) -> Option<Hit> {
-        let h = edit::hit_test(doc, xf.to_image(pos), xf.img_len(HIT_TOL), xf.img_len(HANDLE_TOL));
+        let h = edit::hit_test(doc, xf.to_image(pos), xf.img_len(HIT_TOL), xf.img_len(HANDLE_TOL), xf.img_len(ROTATE_GAP));
         if matches!(h, Some(Hit::Handle(..))) {
             return h;
         }
@@ -500,7 +559,7 @@ impl Canvas {
                 Tool::Select => match self.hit(doc, pos, xf) {
                     Some(Hit::Handle(id, i)) => {
                         if let Some(m) = doc.get(id) {
-                            let h = edit::handles(&m.shape)[i];
+                            let h = edit::handles(&m.shape, xf.img_len(ROTATE_GAP))[i];
                             grab = (h.x - ip.x, h.y - ip.y);
                         }
                         GestureKind::Handle(id, i)
@@ -515,7 +574,7 @@ impl Canvas {
                     if !self.draft.is_active() {
                         self.calib_seg = None;
                     }
-                    let p = self.draft.constrain(ip, self.shift);
+                    let p = self.draft.constrain(ip, self.shift, self.rotation);
                     let step = self.draft.press(p, self.draft_tol(xf));
                     self.apply(step, doc);
                     GestureKind::Draw
@@ -556,12 +615,12 @@ impl Canvas {
                 GestureKind::Pan | GestureKind::Void | GestureKind::Secondary => {
                     self.view.pan += delta;
                     self.fitted = false;
-                    self.view.clamp(self.last_rect.size(), self.img_size);
+                    self.view.clamp(self.last_rect.size(), self.vimg());
                 }
                 GestureKind::Handle(id, i) => match doc.get_mut(id) {
                     Some(m) => {
                         let p = Pt::new(ip.x + g.grab.0, ip.y + g.grab.1);
-                        let p = edit::constrain_handle(&m.shape, i, p, self.shift);
+                        let p = edit::constrain_handle(&m.shape, i, p, self.shift, self.rotation);
                         edit::set_handle(&mut m.shape, i, p);
                     }
                     None => return, // mesure disparue (annuler pendant le glisser)
@@ -587,7 +646,7 @@ impl Canvas {
         let xf = self.xf();
         match g.kind {
             GestureKind::Draw => {
-                let p = self.draft.constrain(xf.to_image(pos), self.shift);
+                let p = self.draft.constrain(xf.to_image(pos), self.shift, self.rotation);
                 let step = self.draft.release(p, g.dragged, self.draft_tol(xf));
                 let done = matches!(step, Step::Done(_));
                 self.apply(step, doc);
@@ -611,15 +670,23 @@ impl Canvas {
         }
     }
 
-    /// Traite la fin d'un tracé : ajout au document ou segment d'étalonnage.
+    /// Traite la fin d'un tracé : ajout au document, segment d'étalonnage
+    /// ou redressement de la vue.
     fn apply(&mut self, step: Step, doc: &mut Document) {
         let Step::Done(pts) = step else { return };
-        if self.tool == Tool::Calibrate {
+        if self.tool == Tool::Straighten {
+            if let [a, b] = pts[..]
+                && let Some(r) = straighten_rotation(a, b, doc.rotation)
+                && doc.set_rotation(r)
+            {
+                self.out.straightened = Some(doc.rotation);
+            }
+        } else if self.tool == Tool::Calibrate {
             if let [a, b] = pts[..] {
                 self.calib_seg = Some((a, b));
                 self.out.calibration_segment = Some((a, b));
             }
-        } else if let Some(shape) = Shape::from_points(self.draft.kind, &pts) {
+        } else if let Some(shape) = self.shape_from_draft(self.draft.kind, &pts) {
             self.out.created = Some(doc.add(shape));
         }
         self.last_click = None;
@@ -669,7 +736,13 @@ impl Canvas {
                 (None, Some(Hit::Handle(id, i))) if id == m.id => Some(i),
                 _ => None,
             };
-            render::paint_handles(p, xf, &edit::handles(&m.shape), hot);
+            let gap = xf.img_len(ROTATE_GAP);
+            let mut hs = edit::handles(&m.shape, gap);
+            if let Some((base, h)) = edit::rotate_handle(&m.shape, gap) {
+                hs.truncate(edit::ROTATE_HANDLE);
+                render::paint_rotate_handle(p, xf.to_screen(base), xf.to_screen(h), hot == Some(edit::ROTATE_HANDLE));
+            }
+            render::paint_handles(p, xf, &hs, hot);
         }
     }
 
@@ -681,21 +754,43 @@ impl Canvas {
         }
         let calibrate = self.tool == Tool::Calibrate;
         let kind = self.draft.kind;
-        let color = if calibrate { CALIB_COLOR } else { kind_color(kind) };
-        match Shape::from_points(kind, pts) {
-            Some(shape) => {
-                render::paint_shape(p, xf, &shape, color, 2.0, 0);
-                if let Some(cal) = cal {
-                    // Le segment d'étalonnage s'exprime toujours en pixels.
-                    let px = Calibration::default();
-                    let text = render::label_text(&shape, if calibrate { &px } else { cal }, 0);
-                    if !text.is_empty() {
-                        let (pos, align) = render::label_anchor(&shape, xf);
-                        render::label(p, pos, align, &text, color, true);
+        let color = match self.tool {
+            Tool::Calibrate => CALIB_COLOR,
+            Tool::Straighten => STRAIGHTEN_COLOR,
+            _ => kind_color(kind),
+        };
+        if let (Tool::Straighten, [a, b]) = (self.tool, pts) {
+            // Segment de redressement : on affiche son écart à l'horizontale ou
+            // à la verticale de l'écran, c.-à-d. la rotation qui sera appliquée.
+            render::segment(p, xf.to_screen(*a), xf.to_screen(*b), color, 2.0);
+            if cal.is_some()
+                && let Some(r) = straighten_rotation(*a, *b, self.rotation)
+            {
+                let delta = meteroscope_core::geometry::normalize_deg(r - self.rotation);
+                let text = format!("{}°", format_number(delta.abs()));
+                let (pos, align) = render::label_anchor(&Shape::Length { a: *a, b: *b }, xf);
+                render::label(p, pos, align, &text, color, true);
+            }
+        } else if let (ShapeKind::LineAngle, [a, b, c]) = (kind, pts) {
+            // Premier segment posé, début du second.
+            render::segment(p, xf.to_screen(*a), xf.to_screen(*b), color, 2.0);
+            render::dot(p, xf.to_screen(*c), color);
+        } else {
+            match self.shape_from_draft(kind, pts) {
+                Some(shape) => {
+                    render::paint_shape(p, xf, &shape, color, 2.0, 0);
+                    if let Some(cal) = cal {
+                        // Le segment d'étalonnage s'exprime toujours en pixels.
+                        let px = Calibration::default();
+                        let text = render::label_text(&shape, if calibrate { &px } else { cal }, 0);
+                        if !text.is_empty() {
+                            let (pos, align) = render::label_anchor(&shape, xf);
+                            render::label(p, pos, align, &text, color, true);
+                        }
                     }
                 }
+                None => render::outlined(p, pts.iter().map(|q| xf.to_screen(*q)).collect(), false, color, 2.0),
             }
-            None => render::outlined(p, pts.iter().map(|q| xf.to_screen(*q)).collect(), false, color, 2.0),
         }
         for q in &self.draft.pts {
             render::dot(p, xf.to_screen(*q), color);

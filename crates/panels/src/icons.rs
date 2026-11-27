@@ -45,6 +45,32 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                 painter.line_segment([p(x, 0.32), p(x, 0.32 + len)], Stroke::new(w * 0.8, color));
             }
         }
+        Tool::Straighten => {
+            // Horizon penché et flèche de rotation qui le redresse.
+            let c = p(0.5, 0.56);
+            let t: f32 = -0.30;
+            let d = vec2(t.cos(), t.sin()) * 0.44 * s;
+            painter.line_segment([c - d, c + d], Stroke::new(w * 0.8, light.gamma_multiply(3.0)));
+            painter.line_segment([p(0.06, 0.56), p(0.94, 0.56)], stroke);
+            let radius = 0.36 * s;
+            let arc: Vec<Pos2> = (0..=10)
+                .map(|i| {
+                    let a = -2.55 + 1.0 * i as f32 / 10.0;
+                    c + radius * vec2(a.cos(), a.sin())
+                })
+                .collect();
+            let tip = *arc.last().unwrap();
+            painter.add(Shape::line(arc, Stroke::new(w * 0.85, color)));
+            // Pointe de flèche (sens horaire).
+            let dir = vec2(-(-1.55f32).sin(), (-1.55f32).cos());
+            let side = vec2(-dir.y, dir.x);
+            let h = 0.16 * s;
+            painter.add(Shape::convex_polygon(
+                vec![tip + dir * h * 0.6, tip - dir * h * 0.5 + side * h * 0.55, tip - dir * h * 0.5 - side * h * 0.55],
+                color,
+                Stroke::NONE,
+            ));
+        }
         Tool::Draw(kind) => match kind {
             ShapeKind::Length => {
                 let (a, b) = (p(0.14, 0.80), p(0.86, 0.20));
@@ -98,6 +124,35 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                 for i in 0..3 {
                     let t = -TAU / 4.0 + i as f32 * TAU / 3.0;
                     painter.circle_filled(c + radius * vec2(t.cos(), t.sin()), w * 1.6, color);
+                }
+            }
+            ShapeKind::LineAngle => {
+                // Deux segments distants prolongés en pointillés jusqu'à leur
+                // intersection, avec l'arc de l'angle.
+                let v = p(0.94, 0.84);
+                let (a, b) = (p(0.04, 0.84), p(0.52, 0.84));
+                let (c, d) = (p(0.76, 0.50), p(0.48, 0.0));
+                painter.line_segment([a, b], stroke);
+                painter.line_segment([c, d], stroke);
+                let dash = Stroke::new(w * 0.7, color);
+                painter.extend(Shape::dashed_line(&[b, v], dash, w * 1.6, w * 1.4));
+                painter.extend(Shape::dashed_line(&[c, v], dash, w * 1.6, w * 1.4));
+                let radius = 0.30 * s;
+                let (t0, t1) = (std::f32::consts::PI, (d - v).angle() + TAU);
+                let arc: Vec<Pos2> = (0..=10)
+                    .map(|i| {
+                        let t = t0 + (t1 - t0) * i as f32 / 10.0;
+                        v + radius * vec2(t.cos(), t.sin())
+                    })
+                    .collect();
+                painter.add(Shape::line(arc, Stroke::new(w * 0.85, color)));
+            }
+            ShapeKind::Rect3 => {
+                // Rectangle incliné : deux points pour un côté, un troisième pour la largeur.
+                let pts = [p(0.10, 0.55), p(0.62, 0.17), p(0.856, 0.493), p(0.336, 0.873)];
+                painter.add(Shape::convex_polygon(pts.to_vec(), light, stroke));
+                for q in &pts[..3] {
+                    dot(*q);
                 }
             }
             ShapeKind::Marker => {
