@@ -168,6 +168,8 @@ fn trou_de_serrure_exact() {
     // Un filtre d'aire max. à 350 garde le carré évidé, mesuré 300 px².
     let det = detect(&prep, &DetectParams { max_area: 350.0, ..p }, true);
     assert_eq!(polygon_area(&det.objects[0].polygon), 300.0);
+    // Périmètre : bords extérieur (80) et du trou (40), sans la fente.
+    assert_eq!(meteroscope_core::geometry::polygon_perimeter(&det.objects[0].polygon), 120.0);
     // Trous bouchés : le contour extérieur seul.
     let det = detect(&prep, &DetectParams { fill_holes: true, ..p }, true);
     assert_eq!((det.objects[0].area, polygon_area(&det.objects[0].polygon)), (400.0, 400.0));

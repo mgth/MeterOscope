@@ -28,11 +28,23 @@ pub fn polyline_length(pts: &[Pt]) -> f64 {
 }
 
 /// Périmètre d'un polygone fermé.
+///
+/// Une arête parcourue aussi en sens inverse (fente aller-retour qui raccorde
+/// un trou au contour, en « trou de serrure ») ne compte pas : seuls le bord
+/// extérieur et celui des trous font le périmètre.
 pub fn polygon_perimeter(pts: &[Pt]) -> f64 {
-    match pts.len() {
-        0 | 1 => 0.0,
-        n => polyline_length(pts) + pts[n - 1].dist(pts[0]),
+    let n = pts.len();
+    if n < 2 {
+        return 0.0;
     }
+    let key = |a: Pt, b: Pt| [a.x.to_bits(), a.y.to_bits(), b.x.to_bits(), b.y.to_bits()];
+    let edges = (0..n).map(|i| (pts[i], pts[(i + 1) % n]));
+    let mut seen: Vec<[u64; 4]> = edges.clone().map(|(a, b)| key(a, b)).collect();
+    seen.sort_unstable();
+    edges
+        .filter(|&(a, b)| seen.binary_search(&key(b, a)).is_err())
+        .map(|(a, b)| a.dist(b))
+        .sum()
 }
 
 /// Aire (positive) d'un polygone simple, formule du lacet.
@@ -230,6 +242,11 @@ mod tests {
         let sq = [Pt::new(0., 0.), Pt::new(10., 0.), Pt::new(10., 10.), Pt::new(0., 10.)];
         assert_eq!(polygon_area(&sq), 100.0);
         assert_eq!(polygon_perimeter(&sq), 40.0);
+        // Trou de serrure : carré 10 × 10 évidé de 4 × 4, la fente (0,0)–(3,3)
+        // est parcourue deux fois et ne compte pas.
+        let p = |x, y| Pt::new(x, y);
+        let keyhole = [p(0., 0.), p(3., 3.), p(3., 7.), p(7., 7.), p(7., 3.), p(3., 3.), p(0., 0.), p(10., 0.), p(10., 10.), p(0., 10.)];
+        assert_eq!((polygon_area(&keyhole), polygon_perimeter(&keyhole)), (84.0, 56.0));
         assert_eq!(polyline_length(&sq), 30.0);
         assert!((angle_deg(sq[1], sq[0], sq[3]) - 90.0).abs() < 1e-9);
         let (c, r) = circle_from_3_points(Pt::new(1., 0.), Pt::new(0., 1.), Pt::new(-1., 0.)).unwrap();
