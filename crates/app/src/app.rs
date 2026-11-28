@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+mod live;
+#[cfg(test)]
+mod undo_tests;
+
 #[derive(PartialEq)]
 enum Mode {
     Image,
@@ -86,7 +90,20 @@ const CTRL_SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND };
 
 impl MeterOscopeApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
-        let mut app = Self {
+        let mut app = Self::blank();
+        meteroscope_core::measure::set_decimals(app.settings.decimals);
+        if let Some(u) = &app.settings.calibration_unit {
+            app.calibration.set_unit(u);
+        }
+        if let Some(p) = initial {
+            app.open_path(&cc.egui_ctx, &p);
+        }
+        app
+    }
+
+    /// Application sans image, en mode Image.
+    fn blank() -> Self {
+        Self {
             doc: Document::new(),
             image: None,
             image_gen: 0,
@@ -111,15 +128,7 @@ impl MeterOscopeApp {
             profiles: Default::default(),
             toast: None,
             settings: crate::settings::Settings::load(),
-        };
-        meteroscope_core::measure::set_decimals(app.settings.decimals);
-        if let Some(u) = &app.settings.calibration_unit {
-            app.calibration.set_unit(u);
         }
-        if let Some(p) = initial {
-            app.open_path(&cc.egui_ctx, &p);
-        }
-        app
     }
 
     // ---------- messages ----------
@@ -189,6 +198,10 @@ impl MeterOscopeApp {
     /// Remet les pixels dans l'orientation du document : un quart de tour ou
     /// un miroir annulé (ou rétabli) revient avec les mesures et l'angle.
     fn sync_orientation(&mut self) {
+        // En mode caméra, `self.doc` est le document du flux, pas celui de l'image.
+        if self.mode == Mode::Camera {
+            return;
+        }
         let Some(img) = &self.image else { return };
         if let Some(out) = io::sync_orientation(img, &mut self.applied, &self.doc) {
             self.image = Some(Arc::new(out));
@@ -299,6 +312,8 @@ impl MeterOscopeApp {
     /// Installe une nouvelle image avec un document vierge (qui garde
     /// l'échelle en cours si l'option est cochée).
     fn set_image(&mut self, ctx: &egui::Context, img: RgbaImage, path: Option<PathBuf>) {
+        // D'abord rendre à l'image son document, pour ne pas écraser celui du flux.
+        self.mode_image();
         self.image = Some(Arc::new(img));
         self.pixels_changed();
         self.image_path = path;
@@ -311,7 +326,6 @@ impl MeterOscopeApp {
         self.saved_revision = 0;
         self.brightness = 0.0;
         self.contrast = 0.0;
-        self.mode_image();
         self.canvas.set_tool(Tool::Select);
         self.canvas.fit();
         // La texture se construit à la prochaine frame de la vue image.
@@ -320,13 +334,15 @@ impl MeterOscopeApp {
 
     fn mode_image(&mut self) {
         if self.mode == Mode::Camera {
-            self.camera.stop();
-            self.mode = Mode::Image;
+            self.leave_camera();
         }
     }
 
+    /// L'image fixe a des modifications non enregistrées (en mode caméra, son
+    /// document est mis de côté : les mesures du flux ne comptent pas).
     fn is_dirty(&self) -> bool {
-        self.doc.revision() != self.saved_revision
+        let doc = if self.mode == Mode::Camera { &self.camera.other_doc } else { &self.doc };
+        doc.revision() != self.saved_revision
     }
 
     // ---------- fichiers ----------
@@ -335,6 +351,7 @@ impl MeterOscopeApp {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         if ext == io::PROJECT_EXTENSION {
             let Some(project) = self.report(io::load_project(path), "") else { return };
+            self.mode_image();
             let img = match &project.image_path {
                 Some(p) => self.report(io::load_image(p), ""),
                 None => None,
@@ -399,7 +416,7 @@ impl MeterOscopeApp {
     /// d'abord enregistrée en PNG à côté du projet.
     fn save_project(&mut self, save_as: bool) {
         self.sync_orientation();
-        if self.image.is_none() {
+        if self.image.is_none() || self.mode == Mode::Camera {
             return;
         }
         let path = match (&self.project_path, save_as) {
@@ -483,8 +500,7 @@ impl MeterOscopeApp {
         if self.mode == Mode::Camera {
             self.mode_image();
         } else {
-            self.mode = Mode::Camera;
-            self.camera.start(ctx);
+            self.enter_camera(ctx);
         }
     }
 
@@ -516,10 +532,7 @@ impl MeterOscopeApp {
         }
 
         // Touches simples : seulement si aucun champ de texte n'a le focus.
-        if ctx.egui_wants_keyboard_input() || self.calibration.is_open() || self.mode == Mode::Camera {
-            if self.mode == Mode::Camera && ctx.input(|i| i.key_pressed(Key::Escape)) {
-                self.mode_image();
-            }
+        if ctx.egui_wants_keyboard_input() || self.calibration.is_open() {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
@@ -527,8 +540,10 @@ impl MeterOscopeApp {
                 self.canvas.cancel();
             } else if self.canvas.tool() != Tool::Select {
                 self.canvas.set_tool(Tool::Select);
-            } else {
+            } else if self.doc.selected.is_some() || self.mode == Mode::Image {
                 self.doc.selected = None;
+            } else {
+                self.mode_image();
             }
         }
         if ctx.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) && !self.canvas.is_drawing()
@@ -561,22 +576,26 @@ impl MeterOscopeApp {
                 self.toggle_camera(&ctx);
             }
             ui.separator();
-            ui.add_enabled_ui(has_image, |ui| {
-                let dirty = if self.is_dirty() { " •" } else { "" };
-                if ui.button(format!("💾  {}{dirty}", tr!("toolbar.save"))).on_hover_text(tr!("toolbar.save_tip")).clicked() {
-                    self.save_project(false);
-                }
-                ui.menu_button(format!("⬇  {}", tr!("toolbar.export")), |ui| {
-                    if ui.button(tr!("toolbar.export_csv")).clicked() {
-                        self.export_csv();
+            // En mode caméra : annuler et zoom servent sur le flux ; enregistrer,
+            // exporter et le menu Image ne concernent que l'image fixe.
+            ui.add_enabled_ui(has_image || self.mode == Mode::Camera, |ui| {
+                ui.add_enabled_ui(has_image, |ui| {
+                    let dirty = if self.is_dirty() { " •" } else { "" };
+                    if ui.button(format!("💾  {}{dirty}", tr!("toolbar.save"))).on_hover_text(tr!("toolbar.save_tip")).clicked() {
+                        self.save_project(false);
                     }
-                    if ui.button(tr!("toolbar.export_image")).clicked() {
-                        self.export_image();
-                    }
-                    if ui.button(tr!("toolbar.copy_table")).clicked() {
-                        ui.ctx().copy_text(io::clipboard_table(&self.doc));
-                        self.info(tr!("msg.table_copied"));
-                    }
+                    ui.menu_button(format!("⬇  {}", tr!("toolbar.export")), |ui| {
+                        if ui.button(tr!("toolbar.export_csv")).clicked() {
+                            self.export_csv();
+                        }
+                        if ui.button(tr!("toolbar.export_image")).clicked() {
+                            self.export_image();
+                        }
+                        if ui.button(tr!("toolbar.copy_table")).clicked() {
+                            ui.ctx().copy_text(io::clipboard_table(&self.doc));
+                            self.info(tr!("msg.table_copied"));
+                        }
+                    });
                 });
                 ui.separator();
                 if ui.add_enabled(self.doc.can_undo(), egui::Button::new("↩")).on_hover_text(tr!("toolbar.undo_tip")).clicked() {
@@ -586,48 +605,50 @@ impl MeterOscopeApp {
                     self.doc.redo();
                 }
                 ui.separator();
-                ui.menu_button(format!("🖼  {}", tr!("toolbar.image")), |ui| {
-                    for (label, t) in [
-                        (format!("⟲  {}", tr!("image.rotate_left")), io::Transform::RotateLeft),
-                        (format!("⟳  {}", tr!("image.rotate_right")), io::Transform::RotateRight),
-                        (format!("⇆  {}", tr!("image.flip_h")), io::Transform::FlipHorizontal),
-                        (format!("⇅  {}", tr!("image.flip_v")), io::Transform::FlipVertical),
-                    ] {
-                        if ui.button(label).clicked() {
-                            self.transform(t);
+                ui.add_enabled_ui(has_image, |ui| {
+                    ui.menu_button(format!("🖼  {}", tr!("toolbar.image")), |ui| {
+                        for (label, t) in [
+                            (format!("⟲  {}", tr!("image.rotate_left")), io::Transform::RotateLeft),
+                            (format!("⟳  {}", tr!("image.rotate_right")), io::Transform::RotateRight),
+                            (format!("⇆  {}", tr!("image.flip_h")), io::Transform::FlipHorizontal),
+                            (format!("⇅  {}", tr!("image.flip_v")), io::Transform::FlipVertical),
+                        ] {
+                            if ui.button(label).clicked() {
+                                self.transform(t);
+                            }
                         }
-                    }
-                    ui.separator();
-                    if ui.button(format!("📐  {}", tr!("image.straighten"))).on_hover_text(tr!("tool_help.straighten")).clicked() {
-                        self.canvas.set_tool(Tool::Straighten);
-                        ui.close();
-                    }
-                    let reset = ui.add_enabled(self.doc.rotation != 0.0, egui::Button::new(tr!("image.straighten_reset")));
-                    if reset.clicked() {
-                        self.doc.set_rotation(0.0);
-                    }
-                    ui.menu_button(tr!("image.filter"), |ui| {
-                        let mut wanted = self.filter;
-                        ui.radio_value(&mut wanted, None, tr!("filter.gpu")).on_hover_text(tr!("filter.gpu_tip"));
                         ui.separator();
-                        for f in io::RotationFilter::ALL {
-                            let (label, tip) = filter_texts(f);
-                            ui.radio_value(&mut wanted, Some(f), label).on_hover_text(tip);
+                        if ui.button(format!("📐  {}", tr!("image.straighten"))).on_hover_text(tr!("tool_help.straighten")).clicked() {
+                            self.canvas.set_tool(Tool::Straighten);
+                            ui.close();
                         }
-                        self.set_filter(wanted);
+                        let reset = ui.add_enabled(self.doc.rotation != 0.0, egui::Button::new(tr!("image.straighten_reset")));
+                        if reset.clicked() {
+                            self.doc.set_rotation(0.0);
+                        }
+                        ui.menu_button(tr!("image.filter"), |ui| {
+                            let mut wanted = self.filter;
+                            ui.radio_value(&mut wanted, None, tr!("filter.gpu")).on_hover_text(tr!("filter.gpu_tip"));
+                            ui.separator();
+                            for f in io::RotationFilter::ALL {
+                                let (label, tip) = filter_texts(f);
+                                ui.radio_value(&mut wanted, Some(f), label).on_hover_text(tip);
+                            }
+                            self.set_filter(wanted);
+                        });
+                        ui.separator();
+                        let mut changed = false;
+                        changed |= ui.add(egui::Slider::new(&mut self.brightness, -1.0..=1.0).text(tr!("image.brightness"))).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.contrast, -1.0..=1.0).text(tr!("image.contrast"))).changed();
+                        if ui.button(tr!("image.reset")).clicked() {
+                            self.brightness = 0.0;
+                            self.contrast = 0.0;
+                            changed = true;
+                        }
+                        if changed {
+                            self.refresh_texture(&ctx);
+                        }
                     });
-                    ui.separator();
-                    let mut changed = false;
-                    changed |= ui.add(egui::Slider::new(&mut self.brightness, -1.0..=1.0).text(tr!("image.brightness"))).changed();
-                    changed |= ui.add(egui::Slider::new(&mut self.contrast, -1.0..=1.0).text(tr!("image.contrast"))).changed();
-                    if ui.button(tr!("image.reset")).clicked() {
-                        self.brightness = 0.0;
-                        self.contrast = 0.0;
-                        changed = true;
-                    }
-                    if changed {
-                        self.refresh_texture(&ctx);
-                    }
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("1:1").on_hover_text(tr!("zoom.actual_tip")).clicked() {
@@ -664,7 +685,7 @@ impl MeterOscopeApp {
                 crate::language::selector(ui);
                 crate::settings::decimals_selector(ui, &mut self.settings);
                 ui.separator();
-                if let Some(img) = &self.image {
+                if let Some(img) = self.image.as_ref().filter(|_| self.mode == Mode::Image) {
                     ui.label(format!("{} × {} px", img.width(), img.height()));
                     ui.separator();
                 }
@@ -740,7 +761,7 @@ impl eframe::App for MeterOscopeApp {
             ui.add_space(4.0);
         });
 
-        let show_tools = self.image.is_some() && self.mode == Mode::Image;
+        let show_tools = self.image.is_some() || self.mode == Mode::Camera;
         let mut cursor = None;
         // La barre d'état est déclarée avant le centre mais affiche le curseur de la frame précédente.
         let cursor_id = egui::Id::unique("meteroscope_cursor");
@@ -750,8 +771,9 @@ impl eframe::App for MeterOscopeApp {
         if show_tools {
             // Profils d'intensité : résultats recalculés sur l'image d'origine,
             // remise d'abord dans l'orientation du document (annulation d'un miroir).
+            // Pas en mode caméra : `self.doc` est alors celui du flux.
             self.sync_orientation();
-            if let Some(img) = &self.image {
+            if let Some(img) = self.image.as_ref().filter(|_| self.mode == Mode::Image) {
                 self.profiles.sync(&mut self.doc, img);
             }
             egui::Panel::left("tools").resizable(false).show(ui, |ui| {
@@ -787,12 +809,7 @@ impl eframe::App for MeterOscopeApp {
         }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match self.mode {
-            Mode::Camera => {
-                if let Some(img) = self.camera.show(ui) {
-                    self.set_image(&ctx, img, None);
-                    self.info(tr!("msg.image_captured"));
-                }
-            }
+            Mode::Camera => cursor = self.live_view(ui),
             Mode::Image if self.image.is_none() => self.welcome(ui),
             Mode::Image => {
                 // Quart de tour ou miroir annulé, redressement ou filtre changé

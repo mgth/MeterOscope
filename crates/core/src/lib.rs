@@ -10,6 +10,7 @@ pub mod measure;
 pub mod orientation;
 pub mod presets;
 pub mod profile;
+pub mod rescale;
 pub mod stats;
 
 pub use calibration::{Calibration, Scale};
