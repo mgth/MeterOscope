@@ -167,23 +167,19 @@ fn recent_buttons(ui: &mut Ui, settings: &Settings) -> Option<PathBuf> {
     picked
 }
 
-/// Menu attaché au bouton « Ouvrir » ; renvoie le fichier choisi.
-pub fn recent_menu(ui: &mut Ui, settings: &mut Settings) -> Option<PathBuf> {
-    let mut picked = None;
-    ui.menu_button("⏷", |ui| {
-        if existing_recent(&settings.recent, Path::exists).is_empty() {
-            ui.weak(tr!("recent.none"));
-            return;
-        }
-        picked = recent_buttons(ui, settings);
-        ui.separator();
-        if ui.button(tr!("recent.clear")).clicked() {
-            settings.recent.clear();
-            settings.save();
-        }
-    })
-    .response
-    .on_hover_text(tr!("recent.tip"));
+/// Fichiers récents (liste et « effacer »), dans le menu du bouton
+/// « Ouvrir » ; renvoie le fichier choisi.
+pub fn recent_items(ui: &mut Ui, settings: &mut Settings) -> Option<PathBuf> {
+    if existing_recent(&settings.recent, Path::exists).is_empty() {
+        ui.weak(tr!("recent.none"));
+        return None;
+    }
+    let picked = recent_buttons(ui, settings);
+    ui.separator();
+    if ui.button(tr!("recent.clear")).clicked() {
+        settings.recent.clear();
+        settings.save();
+    }
     picked
 }
 
