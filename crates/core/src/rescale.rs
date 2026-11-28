@@ -43,7 +43,7 @@ pub fn rescale(doc: &mut Document, from: (u32, u32), to: (u32, u32)) -> Rescale 
     if !doc.measurements.is_empty() || doc.calibration.is_calibrated() {
         doc.checkpoint();
         for m in &mut doc.measurements {
-            m.shape.map_points(|p| crate::Pt::new(p.x * s, p.y * s));
+            m.shape.map_similar(|p| crate::Pt::new(p.x * s, p.y * s), 0.0, s);
         }
         if let Some(scale) = &mut doc.calibration.scale {
             scale.units_per_px /= s;
@@ -226,5 +226,26 @@ mod tests {
         r.follow(&mut e, (1280, 720));
         assert_eq!(r.follow(&mut e, (640, 480)), Rescale::Mismatch);
         assert_eq!(r.size(), Some((640, 480)));
+    }
+
+    #[test]
+    fn profil_suit_la_resolution() {
+        use crate::profile::ProfileResult;
+        meteroscope_i18n::set_language("fr");
+        let mut doc = Document::new();
+        let mut shape = Shape::profile(Pt::new(0., 50.), Pt::new(100., 50.));
+        if let Shape::Profile { params, result, .. } = &mut shape {
+            params.band = 20.0;
+            *result = Some(ProfileResult { edges: [10.0, 30.0], tilt: 0.0 });
+        }
+        let id = doc.add(shape);
+        doc.calibration.set_from_reference(10.0, 1.0, "mm");
+        let before = doc.get(id).unwrap().shape.values(&doc.calibration);
+        assert_eq!(rescale(&mut doc, (100, 100), (50, 50)), Rescale::Scaled(0.5));
+        let s = &doc.get(id).unwrap().shape;
+        // Bords et bande en pixels de la nouvelle image, largeur mesurée inchangée.
+        assert_eq!(s.profile_edges(), Some([Pt::new(5., 25.), Pt::new(15., 25.)]));
+        assert_eq!(s.profile_band().map(|b| b.0), Some(5.0));
+        assert!(approx(s.values(&doc.calibration)[0].value, before[0].value));
     }
 }

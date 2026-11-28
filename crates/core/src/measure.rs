@@ -302,6 +302,29 @@ impl Shape {
         }
     }
 
+    /// Reporte la forme dans un repère obtenu par la similitude `f` : rotation
+    /// de `deg` degrés (sens horaire) et facteur `scale`. Tout ce qui est
+    /// exprimé en pixels suit, pas seulement les points : les côtés d'un
+    /// rectangle tournent, la bande et les bords d'un profil changent d'échelle.
+    pub fn map_similar(&mut self, f: impl Fn(Pt) -> Pt, deg: f64, scale: f64) {
+        self.map_points(f);
+        match self {
+            Shape::Rect { angle, .. } if deg != 0.0 => {
+                *angle = geo::normalize_deg(*angle + deg);
+                if angle.abs() < 1e-9 {
+                    *angle = 0.0;
+                }
+            }
+            Shape::Profile { params, result, .. } => {
+                params.band *= scale;
+                if let Some(r) = result {
+                    r.edges = r.edges.map(|e| e * scale);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Reporte la forme dans une image reprojetée par `f` (correction de
     /// perspective). Les droites restent des droites : longueurs, chemins,
     /// angles, surfaces et cercles par trois points suivent exactement leurs
@@ -533,6 +556,36 @@ pub fn format_number_with(v: f64, decimals: Option<u8>) -> String {
     }
 }
 
+/// Formate un nombre avec `sig` chiffres significatifs, séparateur décimal
+/// de la langue, sans notation scientifique ni zéros inutiles (« 0,01235 »,
+/// « 81,3 », « 120 »). Vide pour une valeur non finie.
+pub fn format_significant(v: f64, sig: usize) -> String {
+    if !v.is_finite() {
+        return String::new();
+    }
+    if v == 0.0 {
+        return "0".to_owned();
+    }
+    let magnitude = v.abs().log10().floor() as i32;
+    let decimals = (sig as i32 - 1 - magnitude).clamp(0, 15) as usize;
+    let mut s = format!("{v:.decimals$}");
+    if s.contains('.') {
+        s = s.trim_end_matches('0').trim_end_matches('.').to_owned();
+    }
+    if s == "-0" {
+        s = "0".to_owned();
+    }
+    match meteroscope_i18n::decimal_separator() {
+        '.' => s,
+        sep => s.replace('.', &sep.to_string()),
+    }
+}
+
+/// Nombre des tableaux et des exports : ~6 chiffres significatifs.
+pub fn format_precise(v: f64) -> String {
+    format_significant(v, 6)
+}
+
 /// Une mesure posée sur l'image.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Measurement {
@@ -691,5 +744,31 @@ mod tests {
         assert!(pl.1 == Quantity::Distance && pl.3.n == 2 && close(pl.3.mean, 5.0));
         assert_eq!(sum.iter().find(|g| g.0 == ShapeKind::Parallel).unwrap().3.n, 1);
         assert_eq!(sum.iter().find(|g| g.0 == ShapeKind::Arc).unwrap().1, Quantity::Radius);
+    }
+
+    #[test]
+    fn chiffres_significatifs() {
+        meteroscope_i18n::set_language("fr");
+        assert_eq!(format_significant(0.0123456, 4), "0,01235");
+        assert_eq!(format_significant(12345.6, 4), "12346");
+        assert_eq!(format_significant(-0.5, 3), "-0,5");
+        assert_eq!(format_precise(0.0), "0");
+        assert_eq!(format_precise(-0.0), "0");
+        assert_eq!(format_precise(1.0 / 3.0), "0,333333");
+        assert_eq!(format_precise(1234567.89), "1234568");
+        assert_eq!(format_precise(-0.000123456789), "-0,000123457");
+        assert_eq!(format_precise(f64::NAN), "");
+    }
+
+    #[test]
+    fn report_par_similitude() {
+        // Demi-tour et réduction de moitié autour de l'origine.
+        let f = |p: Pt| Pt::new(-p.x / 2.0, -p.y / 2.0);
+        let mut r = Shape::Rect { a: Pt::new(0., 0.), b: Pt::new(20., 10.), angle: 350.0 };
+        r.map_similar(f, 180.0, 0.5);
+        assert_eq!(r, Shape::Rect { a: Pt::new(0., 0.), b: Pt::new(-10., -5.), angle: 170.0 });
+        let mut l = Shape::Length { a: Pt::new(2., 4.), b: Pt::new(6., 8.) };
+        l.map_similar(f, 180.0, 0.5);
+        assert_eq!(l, Shape::Length { a: Pt::new(-1., -2.), b: Pt::new(-3., -4.) });
     }
 }

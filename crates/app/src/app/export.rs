@@ -51,8 +51,7 @@ impl MeterOscopeApp {
                 .unwrap_or_default(),
             date: io::today(),
         };
-        // Filtre de redressement : celui choisi, ou bicubique si c'est la carte graphique.
-        let filter = self.filter.unwrap_or(io::RotationFilter::Bicubic);
+        let filter = export_filter(self.filter);
         let r = io::export_pdf(&base, &self.doc, filter, &info, &path);
         self.report(r, tr!("msg.pdf_exported"));
     }
@@ -79,5 +78,23 @@ impl MeterOscopeApp {
         if ui.button(tr!("toolbar.export_pdf")).on_hover_text(tr!("toolbar.export_pdf_tip")).clicked() {
             self.export_pdf();
         }
+    }
+}
+
+/// Filtre de redressement d'un export : celui choisi, ou le filtre par défaut
+/// (le même pour tous les exports) quand l'affichage laisse faire la carte graphique.
+fn export_filter(chosen: Option<io::RotationFilter>) -> io::RotationFilter {
+    chosen.unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Le rapport PDF redresse avec le même filtre par défaut que l'image annotée.
+    #[test]
+    fn meme_filtre_par_defaut_que_l_image_annotee() {
+        assert_eq!(export_filter(None), io::RotationFilter::default());
+        assert_eq!(export_filter(Some(io::RotationFilter::Shear)), io::RotationFilter::Shear);
     }
 }

@@ -18,33 +18,10 @@ pub fn parse_number(text: &str) -> Option<f64> {
     cleaned.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
-/// Formate un nombre avec `sig` chiffres significatifs, virgule décimale,
-/// sans zéros inutiles en fin de partie décimale (« 0,01235 », « 81,3 », « 120 »).
+/// Formate un nombre avec `sig` chiffres significatifs (voir
+/// [`meteroscope_core::measure::format_significant`]) ; « — » s'il n'est pas fini.
 pub fn format_significant(v: f64, sig: usize) -> String {
-    if !v.is_finite() {
-        return "—".to_owned();
-    }
-    if v == 0.0 {
-        return "0".to_owned();
-    }
-    let magnitude = v.abs().log10().floor() as i32;
-    let decimals = (sig as i32 - 1 - magnitude).clamp(0, 12) as usize;
-    let mut s = format!("{v:.decimals$}");
-    if s.contains('.') {
-        while s.ends_with('0') {
-            s.pop();
-        }
-        if s.ends_with('.') {
-            s.pop();
-        }
-    }
-    if s == "-0" {
-        s = "0".to_owned();
-    }
-    match meteroscope_i18n::decimal_separator() {
-        '.' => s,
-        sep => s.replace('.', &sep.to_string()),
-    }
+    if v.is_finite() { meteroscope_core::measure::format_significant(v, sig) } else { "—".to_owned() }
 }
 
 /// Textes décrivant une échelle : (« 1 px = 0,04082 mm », « 24,5 px par mm »).

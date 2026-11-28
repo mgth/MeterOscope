@@ -1,16 +1,15 @@
 //! Image annotée : les mesures visibles dessinées à la résolution de l'image.
 //!
-//! Le dessin se fait sur un calque transparent (tiny-skia, antialiasé) puis est
-//! composé sur une copie de l'image : les pixels non touchés restent identiques.
+//! Le dessin (commun à tous les exports, voir [`crate::draw`]) se fait sur un
+//! calque transparent (tiny-skia, antialiasé) puis est composé sur une copie
+//! de l'image : les pixels non touchés restent identiques.
 
+use crate::draw::{Geom, Metrics, Pen, Rgba, Surface, WHITE, draw_measurements, draw_scale_bar};
 use crate::fonts;
+use crate::rotate::{Frame, RotationFilter, WORK_BUDGET, straighten};
 use ab_glyph::{Font, OutlineCurve};
 use image::RgbaImage;
-use crate::rotate::Frame;
-use meteroscope_core::geometry as geo;
-use meteroscope_core::scale_bar::TARGET_FRACTION;
-use meteroscope_core::{Corner, Document, Pt, Shape};
-use std::f32::consts::PI;
+use meteroscope_core::Document;
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 
 /// Police d'un caractère : Ubuntu Light embarquée (licence libre UFL, fournie
@@ -20,13 +19,6 @@ fn font_for(ch: char) -> &'static ab_glyph::FontRef<'static> {
     &fonts::get(fonts::index_for(ch)).font
 }
 
-type Rgba = [u8; 4];
-/// Point du calque (pixels).
-type P2 = (f32, f32);
-const SHADOW: Rgba = [0, 0, 0, 190];
-const LABEL_BG: Rgba = [0, 0, 0, 185];
-const WHITE: Rgba = [255, 255, 255, 255];
-
 fn paint(c: Rgba) -> Paint<'static> {
     let mut p = Paint::default();
     p.set_color_rgba8(c[0], c[1], c[2], c[3]);
@@ -34,606 +26,121 @@ fn paint(c: Rgba) -> Paint<'static> {
     p
 }
 
-fn stroke(width: f32) -> Stroke {
-    Stroke { width, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() }
-}
-
-fn rgb(c: [u8; 3], a: u8) -> Rgba {
-    [c[0], c[1], c[2], a]
-}
-
-fn p32(p: Pt) -> (f32, f32) {
-    (p.x as f32, p.y as f32)
-}
-
-/// Peintre : calque + dimensions de référence proportionnelles à l'image.
+/// Calque de pixels sur lequel se dessinent les mesures.
 struct Painter {
     pm: Pixmap,
-    w: f32,
-    h: f32,
-    /// Épaisseur du trait coloré.
-    line: f32,
-    /// Largeur du contour sombre de chaque côté.
-    halo: f32,
-    /// Taille du texte (em, pixels).
-    text: f32,
+    m: Metrics,
 }
 
 impl Painter {
     fn new(w: u32, h: u32) -> Option<Painter> {
-        let pm = Pixmap::new(w, h)?;
-        // Unité : 1 pour une image de 1000 px de grand côté.
-        let u = (w.max(h) as f32 / 1000.0).max(0.6);
-        Some(Painter {
-            pm,
-            w: w as f32,
-            h: h as f32,
-            line: (2.4 * u).max(1.8),
-            halo: (1.2 * u).max(1.0),
-            text: (17.0 * u).max(13.0),
-        })
+        Some(Painter { pm: Pixmap::new(w, h)?, m: Metrics::new(w as f32, h as f32) })
     }
+}
 
-    fn fill(&mut self, path: &Path, c: Rgba) {
-        self.pm.fill_path(path, &paint(c), FillRule::Winding, Transform::identity(), None);
-    }
-
-    fn stroke(&mut self, path: &Path, c: Rgba, width: f32) {
-        self.pm.stroke_path(path, &paint(c), &stroke(width), Transform::identity(), None);
-    }
-
-    /// Trait coloré avec contour sombre.
-    fn outlined(&mut self, path: &Path, color: [u8; 3]) {
-        self.stroke(path, SHADOW, self.line + 2.0 * self.halo);
-        self.stroke(path, rgb(color, 255), self.line);
-    }
-
-    /// Petite poignée ronde sur un point de contrôle.
-    fn handle(&mut self, p: Pt, color: [u8; 3]) {
-        let (x, y) = p32(p);
-        if let Some(c) = PathBuilder::from_circle(x, y, self.line * 1.3) {
-            self.fill(&c, rgb(color, 255));
-            self.stroke(&c, SHADOW, self.halo);
-        }
-    }
-
-    /// Traits en pointillés avec contour sombre.
-    fn dashed(&mut self, segs: &[(P2, P2)], color: [u8; 3]) {
-        let mut pb = PathBuilder::new();
-        for (a, b) in segs {
-            pb.move_to(a.0, a.1);
-            pb.line_to(b.0, b.1);
-        }
-        let Some(path) = pb.finish() else { return };
-        let dash = self.line * 2.0;
-        for (c, width) in [(SHADOW, self.line * 0.6 + 2.0 * self.halo), (rgb(color, 255), self.line * 0.6)] {
-            let mut st = stroke(width);
-            st.dash = tiny_skia::StrokeDash::new(vec![dash, dash], 0.0);
-            self.pm.stroke_path(&path, &paint(c), &st, Transform::identity(), None);
-        }
-    }
-
-    /// Trait fin (arc d'angle, symbole d'angle droit) avec contour sombre.
-    fn thin(&mut self, path: &Path, color: [u8; 3]) {
-        self.stroke(path, SHADOW, self.line * 0.6 + 2.0 * self.halo);
-        self.stroke(path, rgb(color, 255), self.line * 0.6);
-    }
-
-    /// Petite croix (centre d'ellipse ou d'arc).
-    fn cross(&mut self, c: (f32, f32), color: [u8; 3]) -> f32 {
-        let t = self.line * 3.0;
-        let mut cross = PathBuilder::new();
-        cross.move_to(c.0 - t, c.1);
-        cross.line_to(c.0 + t, c.1);
-        cross.move_to(c.0, c.1 - t);
-        cross.line_to(c.0, c.1 + t);
-        if let Some(p) = cross.finish() {
-            self.outlined(&p, color);
-        }
-        t
-    }
-
-    // ----- texte -----
-
-    /// Segment avec petits traits perpendiculaires aux extrémités. Renvoie
-    /// la normale unitaire orientée vers le haut de l'image.
-    fn segment(&mut self, pa: (f32, f32), pb: (f32, f32), color: [u8; 3]) -> (f32, f32) {
-        let (dx, dy) = (pb.0 - pa.0, pb.1 - pa.1);
-        let len = dx.hypot(dy).max(1e-6);
-        let mut n = (-dy / len, dx / len);
-        if n.1 > 0.0 || (n.1 == 0.0 && n.0 > 0.0) {
-            n = (-n.0, -n.1);
-        }
-        let mut pbld = PathBuilder::new();
-        pbld.move_to(pa.0, pa.1);
-        pbld.line_to(pb.0, pb.1);
-        let t = self.line * 3.0;
-        for p in [pa, pb] {
-            pbld.move_to(p.0 - n.0 * t, p.1 - n.1 * t);
-            pbld.line_to(p.0 + n.0 * t, p.1 + n.1 * t);
-        }
-        if let Some(p) = pbld.finish() {
-            self.outlined(&p, color);
-        }
-        n
-    }
-
-    /// Largeur du texte en pixels.
-    fn text_width(&self, s: &str, size: f32) -> f32 {
-        text_width(s, size)
-    }
-
-    /// Contours du texte, ligne de base en (x, y).
-    fn text_path(&self, s: &str, x: f32, y: f32, size: f32) -> Option<Path> {
-        let mut pb = PathBuilder::new();
-        let mut caret = x;
-        let mut prev = None;
-        for ch in s.chars() {
-            let f = font_for(ch);
-            let k = scale(f, size);
-            let id = f.glyph_id(ch);
-            if let Some((pf, p)) = prev
-                && std::ptr::eq(pf, f)
-            {
-                caret += f.kern_unscaled(p, id) * k;
-            }
-            if let Some(outline) = f.outline(id) {
-                // Unités de police (y vers le haut) → pixels image (y vers le bas).
-                let tr = |p: ab_glyph::Point| (caret + p.x * k, y - p.y * k);
-                let mut last: Option<(f32, f32)> = None;
-                for c in &outline.curves {
-                    let start = match c {
-                        OutlineCurve::Line(a, _) | OutlineCurve::Quad(a, _, _) | OutlineCurve::Cubic(a, _, _, _) => tr(*a),
-                    };
-                    if last.is_none_or(|l| (l.0 - start.0).abs() > 1e-3 || (l.1 - start.1).abs() > 1e-3) {
-                        if last.is_some() {
-                            pb.close();
-                        }
-                        pb.move_to(start.0, start.1);
-                    }
-                    let end = match c {
-                        OutlineCurve::Line(_, b) => {
-                            let b = tr(*b);
-                            pb.line_to(b.0, b.1);
-                            b
-                        }
-                        OutlineCurve::Quad(_, c1, b) => {
-                            let (c1, b) = (tr(*c1), tr(*b));
-                            pb.quad_to(c1.0, c1.1, b.0, b.1);
-                            b
-                        }
-                        OutlineCurve::Cubic(_, c1, c2, b) => {
-                            let (c1, c2, b) = (tr(*c1), tr(*c2), tr(*b));
-                            pb.cubic_to(c1.0, c1.1, c2.0, c2.1, b.0, b.1);
-                            b
-                        }
-                    };
-                    last = Some(end);
+fn path_of(g: &Geom) -> Option<Path> {
+    match *g {
+        Geom::Lines(lines) => {
+            let mut pb = PathBuilder::new();
+            for l in lines {
+                for (i, p) in l.pts.iter().enumerate() {
+                    if i == 0 { pb.move_to(p.0, p.1) } else { pb.line_to(p.0, p.1) }
                 }
-                if last.is_some() {
+                if l.closed {
                     pb.close();
                 }
             }
-            caret += f.h_advance_unscaled(id) * k;
-            prev = Some((f, id));
+            pb.finish()
         }
-        pb.finish()
+        Geom::Circle(c, r) => PathBuilder::from_circle(c.0, c.1, r),
+        Geom::Rect { x, y, w, h, r } if r <= 0.0 => tiny_skia::Rect::from_xywh(x, y, w, h).map(PathBuilder::from_rect),
+        Geom::Rect { x, y, w, h, r } => rounded_rect(x, y, w, h, r),
+    }
+}
+
+impl Surface for Painter {
+    fn metrics(&self) -> Metrics {
+        self.m
     }
 
-    /// Dimensions (largeur, hauteur) de la boîte d'étiquette.
-    fn label_size(&self, s: &str, size: f32) -> (f32, f32) {
-        let pad = size * 0.35;
-        (self.text_width(s, size) + 2.0 * pad, size * 1.1 + pad)
-    }
-
-    /// Étiquette : texte blanc sur fond sombre arrondi, liseré de couleur,
-    /// centrée en (cx, cy) et ramenée dans l'image.
-    fn label(&mut self, s: &str, cx: f32, cy: f32, size: f32, accent: [u8; 3]) {
-        let (bw, bh) = self.label_size(s, size);
-        let m = self.halo;
-        let x0 = (cx - bw / 2.0).clamp(m, (self.w - bw - m).max(m));
-        let y0 = (cy - bh / 2.0).clamp(m, (self.h - bh - m).max(m));
-        if let Some(r) = rounded_rect(x0, y0, bw, bh, bh * 0.22) {
-            self.fill(&r, LABEL_BG);
-            self.stroke(&r, rgb(accent, 230), (self.line * 0.5).max(1.0));
+    fn paint(&mut self, g: &Geom, fill: Option<Rgba>, pen: Option<Pen>) {
+        let Some(path) = path_of(g) else { return };
+        if let Some(c) = fill {
+            self.pm.fill_path(&path, &paint(c), FillRule::Winding, Transform::identity(), None);
         }
-        // Centrage vertical sur la hauteur des capitales/chiffres (~0,7 em).
-        let baseline = y0 + bh / 2.0 + size * 0.35;
-        let tw = self.text_width(s, size);
-        if let Some(p) = self.text_path(s, x0 + (bw - tw) / 2.0, baseline, size) {
-            self.fill(&p, WHITE);
-            // Léger épaississement : la police Light seule est un peu fine.
-            self.stroke(&p, WHITE, size * 0.035);
+        if let Some(pen) = pen {
+            let mut st = Stroke { width: pen.width, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() };
+            st.dash = pen.dash.and_then(|d| tiny_skia::StrokeDash::new(vec![d, d], 0.0));
+            self.pm.stroke_path(&path, &paint(pen.color), &st, Transform::identity(), None);
         }
     }
 
-    /// Place une étiquette à côté d'un point, décalée selon la normale (nx, ny)
-    /// d'une distance qui tient compte de la taille de la boîte.
-    fn label_beside(&mut self, s: &str, at: (f32, f32), n: (f32, f32), gap: f32, size: f32, accent: [u8; 3]) {
-        let (bw, bh) = self.label_size(s, size);
-        let d = n.0.abs() * bw / 2.0 + n.1.abs() * bh / 2.0 + gap;
-        self.label(s, at.0 + n.0 * d, at.1 + n.1 * d, size, accent);
+    fn text(&mut self, s: &str, x: f32, y: f32, size: f32, _width: f32) {
+        // Léger épaississement : la police Light seule est un peu fine.
+        let outline = Pen { color: WHITE, width: size * 0.035, dash: None };
+        if let Some(p) = text_path(s, x, y, size) {
+            self.pm.fill_path(&p, &paint(WHITE), FillRule::Winding, Transform::identity(), None);
+            let st = Stroke { width: outline.width, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Stroke::default() };
+            self.pm.stroke_path(&p, &paint(outline.color), &st, Transform::identity(), None);
+        }
     }
+}
 
-    // ----- mesures -----
-
-    fn draw(&mut self, shape: &Shape, color: [u8; 3], main: Option<String>, marker_no: usize) {
-        let gap = self.line * 2.0 + self.halo;
-        let size = self.text;
-        match shape {
-            Shape::Length { a, b } => {
-                let (pa, pb_) = (p32(*a), p32(*b));
-                let n = self.segment(pa, pb_, color);
-                if let Some(s) = main {
-                    let mid = ((pa.0 + pb_.0) / 2.0, (pa.1 + pb_.1) / 2.0);
-                    self.label_beside(&s, mid, n, gap + self.line * 3.0, size, color);
-                }
-            }
-            Shape::LineAngle { a, b, c, d } => {
-                let (pa, pb_, pc, pd) = (p32(*a), p32(*b), p32(*c), p32(*d));
-                let dash = self.line * 2.0;
-                let mut st = stroke(self.line * 0.6);
-                st.dash = tiny_skia::StrokeDash::new(vec![dash, dash], 0.0);
-                let mut dashes = PathBuilder::new();
-                let (at, n) = match meteroscope_core::geometry::line_angle_vertex(*a, *b, *c, *d) {
-                    Some((x, u1, u2)) => {
-                        // Segments prolongés jusqu'à leur intersection, arc au sommet.
-                        let v = p32(x);
-                        let r = self.text * 2.6;
-                        let reach = r + self.text * 0.6;
-                        for (p0, p1, u) in [(pa, pb_, u1), (pc, pd, u2)] {
-                            let tip = (v.0 + u.x as f32 * reach, v.1 + u.y as f32 * reach);
-                            for (e0, e1) in extensions(p0, p1, &[v, tip]) {
-                                dashes.move_to(e0.0, e0.1);
-                                dashes.line_to(e1.0, e1.1);
-                            }
-                        }
-                        let (t1, t2) = ((u1.y as f32).atan2(u1.x as f32), (u2.y as f32).atan2(u2.x as f32));
-                        let mut sweep = t2 - t1;
-                        while sweep > PI {
-                            sweep -= 2.0 * PI;
-                        }
-                        while sweep <= -PI {
-                            sweep += 2.0 * PI;
-                        }
-                        let mut arc = PathBuilder::new();
-                        let steps = 48;
-                        for i in 0..=steps {
-                            let t = t1 + sweep * i as f32 / steps as f32;
-                            let (px, py) = (v.0 + r * t.cos(), v.1 + r * t.sin());
-                            if i == 0 { arc.move_to(px, py) } else { arc.line_to(px, py) }
-                        }
-                        if let Some(p) = arc.finish() {
-                            self.stroke(&p, SHADOW, self.line * 0.8 + 2.0 * self.halo);
-                            self.stroke(&p, rgb(color, 255), self.line * 0.8);
-                        }
-                        let tm = t1 + sweep / 2.0;
-                        ((v.0 + tm.cos() * r, v.1 + tm.sin() * r), (tm.cos(), tm.sin()))
+/// Contours du texte, ligne de base en (x, y).
+fn text_path(s: &str, x: f32, y: f32, size: f32) -> Option<Path> {
+    let mut pb = PathBuilder::new();
+    let mut caret = x;
+    let mut prev = None;
+    for ch in s.chars() {
+        let f = font_for(ch);
+        let k = scale(f, size);
+        let id = f.glyph_id(ch);
+        if let Some((pf, p)) = prev
+            && std::ptr::eq(pf, f)
+        {
+            caret += f.kern_unscaled(p, id) * k;
+        }
+        if let Some(outline) = f.outline(id) {
+            // Unités de police (y vers le haut) → pixels image (y vers le bas).
+            let tr = |p: ab_glyph::Point| (caret + p.x * k, y - p.y * k);
+            let mut last: Option<(f32, f32)> = None;
+            for c in &outline.curves {
+                let start = match c {
+                    OutlineCurve::Line(a, _) | OutlineCurve::Quad(a, _, _) | OutlineCurve::Cubic(a, _, _, _) => tr(*a),
+                };
+                if last.is_none_or(|l| (l.0 - start.0).abs() > 1e-3 || (l.1 - start.1).abs() > 1e-3) {
+                    if last.is_some() {
+                        pb.close();
                     }
-                    None => {
-                        // Presque parallèles : lien entre les milieux des deux segments.
-                        let m1 = ((pa.0 + pb_.0) / 2.0, (pa.1 + pb_.1) / 2.0);
-                        let m2 = ((pc.0 + pd.0) / 2.0, (pc.1 + pd.1) / 2.0);
-                        dashes.move_to(m1.0, m1.1);
-                        dashes.line_to(m2.0, m2.1);
-                        (((m1.0 + m2.0) / 2.0, (m1.1 + m2.1) / 2.0), (0.0, 0.0))
+                    pb.move_to(start.0, start.1);
+                }
+                let end = match c {
+                    OutlineCurve::Line(_, b) => {
+                        let b = tr(*b);
+                        pb.line_to(b.0, b.1);
+                        b
+                    }
+                    OutlineCurve::Quad(_, c1, b) => {
+                        let (c1, b) = (tr(*c1), tr(*b));
+                        pb.quad_to(c1.0, c1.1, b.0, b.1);
+                        b
+                    }
+                    OutlineCurve::Cubic(_, c1, c2, b) => {
+                        let (c1, c2, b) = (tr(*c1), tr(*c2), tr(*b));
+                        pb.cubic_to(c1.0, c1.1, c2.0, c2.1, b.0, b.1);
+                        b
                     }
                 };
-                if let Some(p) = dashes.finish() {
-                    let mut halo = stroke(self.line * 0.6 + 2.0 * self.halo);
-                    halo.dash = tiny_skia::StrokeDash::new(vec![dash, dash], 0.0);
-                    self.pm.stroke_path(&p, &paint(SHADOW), &halo, Transform::identity(), None);
-                    self.pm.stroke_path(&p, &paint(rgb(color, 255)), &st, Transform::identity(), None);
-                }
-                self.segment(pa, pb_, color);
-                self.segment(pc, pd, color);
-                if let Some(s) = main {
-                    if n == (0.0, 0.0) {
-                        self.label(&s, at.0, at.1, size, color);
-                    } else {
-                        self.label_beside(&s, at, n, gap, size, color);
-                    }
-                }
+                last = Some(end);
             }
-            Shape::Path { pts } => {
-                if let Some(p) = polyline(pts, false) {
-                    self.outlined(&p, color);
-                }
-                for p in pts {
-                    self.handle(*p, color);
-                }
-                if let (Some(s), Some(last)) = (main, pts.last()) {
-                    // Dans le prolongement du dernier segment, pour ne pas le masquer.
-                    let at = p32(*last);
-                    let prev = p32(pts[pts.len().saturating_sub(2)]);
-                    let (dx, dy) = (at.0 - prev.0, at.1 - prev.1);
-                    let l = dx.hypot(dy);
-                    let n = if l > 1e-6 { (dx / l, dy / l) } else { (0.0, -1.0) };
-                    self.label_beside(&s, at, n, gap, size, color);
-                }
-            }
-            Shape::Angle { a, vertex, b } => {
-                let (pa, pv, pb_) = (p32(*a), p32(*vertex), p32(*b));
-                let la = (pa.0 - pv.0).hypot(pa.1 - pv.1);
-                let lb = (pb_.0 - pv.0).hypot(pb_.1 - pv.1);
-                let ta = (pa.1 - pv.1).atan2(pa.0 - pv.0);
-                let tb = (pb_.1 - pv.1).atan2(pb_.0 - pv.0);
-                // Balayage du plus petit angle, de a vers b.
-                let mut sweep = tb - ta;
-                while sweep > PI {
-                    sweep -= 2.0 * PI;
-                }
-                while sweep <= -PI {
-                    sweep += 2.0 * PI;
-                }
-                let r = (0.35 * la.min(lb)).min(self.text * 3.0).max(self.line * 4.0);
-                let mut rays = PathBuilder::new();
-                rays.move_to(pa.0, pa.1);
-                rays.line_to(pv.0, pv.1);
-                rays.line_to(pb_.0, pb_.1);
-                let steps = 48;
-                let mut arc = PathBuilder::new();
-                for i in 0..=steps {
-                    let t = ta + sweep * i as f32 / steps as f32;
-                    let (x, y) = (pv.0 + r * t.cos(), pv.1 + r * t.sin());
-                    if i == 0 { arc.move_to(x, y) } else { arc.line_to(x, y) }
-                }
-                if let Some(p) = rays.finish() {
-                    self.outlined(&p, color);
-                }
-                if let Some(p) = arc.finish() {
-                    self.stroke(&p, SHADOW, self.line * 0.8 + 2.0 * self.halo);
-                    self.stroke(&p, rgb(color, 255), self.line * 0.8);
-                }
-                for p in [*a, *vertex, *b] {
-                    self.handle(p, color);
-                }
-                if let Some(s) = main {
-                    let tm = ta + sweep / 2.0;
-                    let n = (tm.cos(), tm.sin());
-                    let at = (pv.0 + n.0 * r, pv.1 + n.1 * r);
-                    self.label_beside(&s, at, n, gap, size, color);
-                }
-            }
-            Shape::Area { pts } => {
-                if let Some(p) = polyline(pts, true) {
-                    self.fill(&p, rgb(color, 40));
-                    self.outlined(&p, color);
-                }
-                for p in pts {
-                    self.handle(*p, color);
-                }
-                if let Some(s) = main {
-                    let n = pts.len().max(1) as f64;
-                    let c = pts.iter().fold(Pt::default(), |acc, p| acc.offset(p.x / n, p.y / n));
-                    let c = p32(c);
-                    self.label(&s, c.0, c.1, size, color);
-                }
-            }
-            Shape::Rect { a, b, angle } => {
-                let corners = meteroscope_core::geometry::rect_corners(*a, *b, *angle);
-                if let Some(p) = polyline(&corners, true) {
-                    self.fill(&p, rgb(color, 40));
-                    self.outlined(&p, color);
-                }
-                for p in [*a, *b] {
-                    self.handle(p, color);
-                }
-                if let Some(s) = main {
-                    self.label(&s, ((a.x + b.x) / 2.0) as f32, ((a.y + b.y) / 2.0) as f32, size, color);
-                }
-            }
-            Shape::Circle { .. } | Shape::Circle3 { .. } => {
-                if let Some((c, r)) = shape.circle() {
-                    let (cx, cy) = p32(c);
-                    if let Some(p) = PathBuilder::from_circle(cx, cy, r as f32) {
-                        self.fill(&p, rgb(color, 35));
-                        self.outlined(&p, color);
-                    }
-                    // Croix au centre.
-                    let t = self.line * 3.0;
-                    let mut cross = PathBuilder::new();
-                    cross.move_to(cx - t, cy);
-                    cross.line_to(cx + t, cy);
-                    cross.move_to(cx, cy - t);
-                    cross.line_to(cx, cy + t);
-                    if let Some(p) = cross.finish() {
-                        self.outlined(&p, color);
-                    }
-                    if let Some(s) = main {
-                        self.label_beside(&s, (cx, cy), (0.0, -1.0), gap + t, size, color);
-                    }
-                }
-                for p in shape.points() {
-                    if !matches!(shape, Shape::Circle { center, .. } if *center == p) {
-                        self.handle(p, color);
-                    }
-                }
-            }
-            Shape::Profile { a, b, .. } => {
-                // Segment fin, puis un trait en travers sur chaque bord
-                // détecté, de la largeur de la bande moyennée.
-                let (pa, pb_) = (p32(*a), p32(*b));
-                let mut pbld = PathBuilder::new();
-                pbld.move_to(pa.0, pa.1);
-                pbld.line_to(pb_.0, pb_.1);
-                let mut mid = ((pa.0 + pb_.0) / 2.0, (pa.1 + pb_.1) / 2.0);
-                let (half, nrm) = shape.profile_band().unwrap_or((0.0, Pt::default()));
-                let t = (half as f32).max(self.line * 3.0);
-                let n = (nrm.x as f32, nrm.y as f32);
-                if let Some([e0, e1]) = shape.profile_edges().map(|e| e.map(p32)) {
-                    for e in [e0, e1] {
-                        pbld.move_to(e.0 - n.0 * t, e.1 - n.1 * t);
-                        pbld.line_to(e.0 + n.0 * t, e.1 + n.1 * t);
-                    }
-                    mid = ((e0.0 + e1.0) / 2.0, (e0.1 + e1.1) / 2.0);
-                }
-                if let Some(path) = pbld.finish() {
-                    self.outlined(&path, color);
-                }
-                if let Some(s) = main {
-                    // Étiquette du côté haut de l'image, au-delà des traits de bord.
-                    let up = if n.1 > 0.0 || (n.1 == 0.0 && n.0 > 0.0) { (-n.0, -n.1) } else { n };
-                    self.label_beside(&s, mid, up, gap + t, size, color);
-                }
-            }
-            Shape::PointLine { a, b, p } => {
-                let (foot, t) = geo::foot_on_line(*p, *a, *b);
-                let (pa, pb_, pp, pf) = (p32(*a), p32(*b), p32(*p), p32(foot));
-                // Droite prolongée en pointillés jusqu'au pied de la perpendiculaire.
-                let ext = extensions(pa, pb_, &[pf]);
-                self.dashed(&ext, color);
-                if let Some(path) = polyline(&[*a, *b], false) {
-                    self.outlined(&path, color);
-                }
-                // Symbole d'angle droit, un côté vers le segment, l'autre vers le point.
-                let k = self.line * 4.0;
-                let along = if t > 0.5 { *a } else { *b };
-                let (lu, lw) = (foot.dist(along), foot.dist(*p));
-                if lu > 0.0 && lw > k as f64 {
-                    let u = ((along.x - foot.x) / lu * k as f64, (along.y - foot.y) / lu * k as f64);
-                    let w = ((p.x - foot.x) / lw * k as f64, (p.y - foot.y) / lw * k as f64);
-                    let corner = [foot.offset(u.0, u.1), foot.offset(u.0 + w.0, u.1 + w.1), foot.offset(w.0, w.1)];
-                    if let Some(path) = polyline(&corner, false) {
-                        self.thin(&path, color);
-                    }
-                }
-                let n = self.segment(pf, pp, color);
-                for q in [*a, *b, *p] {
-                    self.handle(q, color);
-                }
-                if let Some(s) = main {
-                    let mid = ((pf.0 + pp.0) / 2.0, (pf.1 + pp.1) / 2.0);
-                    self.label_beside(&s, mid, n, gap + self.line * 3.0, size, color);
-                }
-            }
-            Shape::Parallel { a, b, p } => {
-                let (start, end, c0, c1) = geo::parallel_through(*a, *b, *p);
-                for line in [[*a, *b], [start, end]] {
-                    if let Some(path) = polyline(&line, false) {
-                        self.outlined(&path, color);
-                    }
-                }
-                let (q0, q1) = (p32(c0), p32(c1));
-                let n = self.segment(q0, q1, color);
-                for q in [*a, *b, *p] {
-                    self.handle(q, color);
-                }
-                if let Some(s) = main {
-                    let mid = ((q0.0 + q1.0) / 2.0, (q0.1 + q1.1) / 2.0);
-                    self.label_beside(&s, mid, n, gap + self.line * 3.0, size, color);
-                }
-            }
-            Shape::Ellipse { center, a, b } => {
-                if let Some(path) = polyline(&geo::ellipse_outline(*center, *a, *b, 180), true) {
-                    self.fill(&path, rgb(color, 35));
-                    self.outlined(&path, color);
-                }
-                let c = p32(*center);
-                let t = self.cross(c, color);
-                let axes = [(c, p32(*a)), (c, p32(*b))];
-                self.dashed(&axes, color);
-                if let Some(s) = main {
-                    self.label_beside(&s, c, (0.0, -1.0), gap + t, size, color);
-                }
-            }
-            Shape::Arc { a, m, b } => {
-                match geo::arc_from_3_points(*a, *m, *b) {
-                    Some(arc) => {
-                        let pts: Vec<Pt> = (0..=180).map(|i| arc.point(i as f64 / 180.0)).collect();
-                        let (mid, c) = (p32(arc.point(0.5)), p32(arc.center));
-                        // Rayon en pointillés du milieu de l'arc vers le centre.
-                        self.dashed(&[(mid, c)], color);
-                        self.cross(c, color);
-                        if let Some(path) = polyline(&pts, false) {
-                            self.outlined(&path, color);
-                        }
-                        if let Some(s) = main {
-                            let (dx, dy) = (mid.0 - c.0, mid.1 - c.1);
-                            let l = dx.hypot(dy).max(1e-6);
-                            self.label_beside(&s, mid, (dx / l, dy / l), gap, size, color);
-                        }
-                    }
-                    None => {
-                        if let Some(path) = polyline(&[*a, *m, *b], false) {
-                            self.outlined(&path, color);
-                        }
-                    }
-                }
-                for q in [*a, *m, *b] {
-                    self.handle(q, color);
-                }
-            }
-            Shape::Marker { p } => {
-                let (x, y) = p32(*p);
-                let r = self.line * 2.2;
-                if let Some(c) = PathBuilder::from_circle(x, y, r) {
-                    self.fill(&c, rgb(color, 255));
-                    self.stroke(&c, SHADOW, self.halo * 1.5);
-                }
-                let s = marker_no.to_string();
-                let size = size * 0.85;
-                let d = std::f32::consts::FRAC_1_SQRT_2;
-                self.label_beside(&s, (x, y), (d, -d), r + self.halo, size, color);
-            }
-            Shape::Text { p, text } => {
-                let (x, y) = p32(*p);
-                if text.is_empty() {
-                    self.handle(*p, color);
-                } else {
-                    self.label(text, x, y, size, color);
-                }
-            }
-            Shape::Arrow { a, b, text } => {
-                let (pa, pb_) = (p32(*a), p32(*b));
-                if let Some((shaft, head)) = arrow_paths(pa, pb_, self.line) {
-                    self.outlined(&shaft, color);
-                    self.stroke(&head, SHADOW, 2.0 * self.halo);
-                    self.fill(&head, rgb(color, 255));
-                }
-                if !text.is_empty() {
-                    // À la base, du côté opposé à la pointe.
-                    let (dx, dy) = (pa.0 - pb_.0, pa.1 - pb_.1);
-                    let l = dx.hypot(dy);
-                    let n = if l > 1e-6 { (dx / l, dy / l) } else { (0.0, -1.0) };
-                    self.label_beside(text, pa, n, gap, size, color);
-                }
+            if last.is_some() {
+                pb.close();
             }
         }
+        caret += f.h_advance_unscaled(id) * k;
+        prev = Some((f, id));
     }
-
-    /// Barre d'échelle dans le coin choisi : longueur ronde visant ~17,5 %
-    /// de la largeur de l'image, sur fond sombre pour rester lisible.
-    fn scale_bar(&mut self, units_per_px: f64, unit: &str, corner: Corner) {
-        let Some(bar) = meteroscope_core::scale_bar(units_per_px, unit, self.w as f64 * TARGET_FRACTION) else { return };
-        let len = bar.px as f32;
-        let size = self.text;
-        let pad = size * 0.5;
-        let bar_h = self.line * 1.6;
-        let tw = self.text_width(&bar.label, size);
-        let bw = len.max(tw) + 2.0 * pad;
-        let bh = size * 1.1 + bar_h + 2.5 * pad;
-        let (x0, y0) = corner.place((0.0, 0.0, self.w, self.h), (bw, bh), self.text);
-        if let Some(r) = rounded_rect(x0, y0, bw, bh, pad * 0.6) {
-            self.fill(&r, LABEL_BG);
-        }
-        let bx = x0 + (bw - len) / 2.0;
-        let by = y0 + bh - pad - bar_h;
-        if let Some(r) = tiny_skia::Rect::from_xywh(bx, by, len, bar_h) {
-            self.fill(&PathBuilder::from_rect(r), WHITE);
-        }
-        // Graduations aux extrémités.
-        for x in [bx, bx + len - self.halo] {
-            if let Some(r) = tiny_skia::Rect::from_xywh(x, by - bar_h, self.halo.max(1.0), bar_h * 2.0) {
-                self.fill(&PathBuilder::from_rect(r), WHITE);
-            }
-        }
-        let baseline = by - pad * 0.9;
-        if let Some(p) = self.text_path(&bar.label, x0 + (bw - tw) / 2.0, baseline, size) {
-            self.fill(&p, WHITE);
-            self.stroke(&p, WHITE, size * 0.035);
-        }
-    }
+    pb.finish()
 }
 
 fn scale(f: &ab_glyph::FontRef<'static>, size: f32) -> f32 {
@@ -657,72 +164,6 @@ pub(crate) fn text_width(s: &str, size: f32) -> f32 {
         prev = Some((f, id));
     }
     x
-}
-
-/// Parties à ajouter au segment `p0→p1` pour qu'il atteigne les points
-/// `reach` (pris sur sa droite).
-fn extensions(p0: (f32, f32), p1: (f32, f32), reach: &[(f32, f32)]) -> Vec<((f32, f32), (f32, f32))> {
-    let d = (p1.0 - p0.0, p1.1 - p0.1);
-    let l2 = d.0 * d.0 + d.1 * d.1;
-    if l2 == 0.0 {
-        return vec![];
-    }
-    let at = |t: f32| (p0.0 + d.0 * t, p0.1 + d.1 * t);
-    let (lo, hi) = reach
-        .iter()
-        .map(|q| ((q.0 - p0.0) * d.0 + (q.1 - p0.1) * d.1) / l2)
-        .fold((0.0f32, 1.0f32), |(lo, hi), t| (lo.min(t), hi.max(t)));
-    let mut v = vec![];
-    if lo < 0.0 {
-        v.push((at(lo), p0));
-    }
-    if hi > 1.0 {
-        v.push((p1, at(hi)));
-    }
-    v
-}
-
-/// Géométrie d'une flèche : longueur de la pointe et ses trois sommets
-/// (pointe, puis les deux coins de la base), pour un trait d'épaisseur `line`.
-pub(crate) fn arrow_head(a: (f32, f32), b: (f32, f32), line: f32) -> Option<(f32, [(f32, f32); 3])> {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len = dx.hypot(dy);
-    if len < 1e-6 {
-        return None;
-    }
-    let (ux, uy) = (dx / len, dy / len);
-    let head = (line * 5.0 + 4.0).min(len * 0.6);
-    let (bx, by) = (b.0 - ux * head, b.1 - uy * head);
-    let w = head * 0.45;
-    Some((head, [b, (bx - uy * w, by + ux * w), (bx + uy * w, by - ux * w)]))
-}
-
-/// Trait (arrêté dans la pointe) et pointe pleine d'une flèche.
-fn arrow_paths(a: (f32, f32), b: (f32, f32), line: f32) -> Option<(Path, Path)> {
-    let (head, tri) = arrow_head(a, b, line)?;
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len = dx.hypot(dy);
-    let mut shaft = PathBuilder::new();
-    shaft.move_to(a.0, a.1);
-    shaft.line_to(b.0 - dx / len * head * 0.5, b.1 - dy / len * head * 0.5);
-    let mut tip = PathBuilder::new();
-    tip.move_to(tri[0].0, tri[0].1);
-    tip.line_to(tri[1].0, tri[1].1);
-    tip.line_to(tri[2].0, tri[2].1);
-    tip.close();
-    Some((shaft.finish()?, tip.finish()?))
-}
-
-fn polyline(pts: &[Pt], closed: bool) -> Option<Path> {
-    let mut pb = PathBuilder::new();
-    for (i, p) in pts.iter().enumerate() {
-        let (x, y) = p32(*p);
-        if i == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
-    }
-    if closed {
-        pb.close();
-    }
-    pb.finish()
 }
 
 fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<Path> {
@@ -763,54 +204,40 @@ fn composite(dst: &mut RgbaImage, overlay: &Pixmap) {
     }
 }
 
+/// Dessine les mesures de `doc` sur `image`, la photo telle quelle (le
+/// redressement du document n'est pas appliqué, voir [`render_view`]).
 pub fn render_annotated(image: &RgbaImage, doc: &Document) -> RgbaImage {
-    render_annotated_in(image, doc, None)
+    render_annotated_in(image, doc, &Frame::rotation(image.width(), image.height(), 0.0))
 }
 
-/// Dessine les mesures de `doc` sur `image`. Avec `frame`, `image` est la
-/// photo redressée : les formes y sont reportées, les valeurs restent celles
-/// des mesures d'origine.
-pub fn render_annotated_in(image: &RgbaImage, doc: &Document, frame: Option<&Frame>) -> RgbaImage {
+/// Dessine les mesures de `doc` sur `image`, qui est la photo dans le repère
+/// `frame` (redressée, éventuellement réduite) : les formes y sont reportées,
+/// les valeurs restent celles des mesures d'origine.
+pub fn render_annotated_in(image: &RgbaImage, doc: &Document, frame: &Frame) -> RgbaImage {
     let mut out = image.clone();
     let Some(mut p) = Painter::new(image.width(), image.height()) else { return out };
-    let mut marker_no = 0;
-    for m in &doc.measurements {
-        if matches!(m.shape, Shape::Marker { .. }) {
-            marker_no += 1;
-        }
-        if !m.visible {
-            continue;
-        }
-        let main = m.shape.values(&doc.calibration).first().map(|v| v.text());
-        match frame {
-            Some(f) => {
-                let mut shape = m.shape.clone();
-                shape.map_points(|q| f.map(q));
-                // Les côtés d'un rectangle tournent avec la photo.
-                if let Shape::Rect { angle, .. } = &mut shape {
-                    *angle += f.deg;
-                }
-                p.draw(&shape, m.color, main, marker_no);
-            }
-            None => p.draw(&m.shape, m.color, main, marker_no),
-        }
-    }
-    // La barre est horizontale dans l'image écrite : la photo telle quelle, ou
-    // redressée (`frame`), dont les pixels valent alors `1 / échelle` pixels
-    // d'origine.
-    if let Some(s) = &doc.calibration.scale
-        && doc.scale_bar.visible
-    {
-        p.scale_bar(s.units_per_px / frame.map_or(1.0, |f| f.scale), &s.unit, doc.scale_bar.corner);
-    }
+    draw_measurements(&mut p, doc, frame);
+    draw_scale_bar(&mut p, doc, frame);
     composite(&mut out, &p.pm);
     out
+}
+
+/// Image annotée telle que la vue la montre : la photo est redressée de
+/// `doc.rotation` avec `filter`, réduite si son grand côté dépasserait
+/// `max_side`, et les mesures y sont reportées.
+pub fn render_view(image: &RgbaImage, doc: &Document, filter: RotationFilter, max_side: u32) -> RgbaImage {
+    if doc.rotation == 0.0 && image.width().max(image.height()) <= max_side {
+        return render_annotated(image, doc);
+    }
+    let s = straighten(image, doc.rotation, filter, max_side, WORK_BUDGET);
+    render_annotated_in(&s.image, doc, &s.frame)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::Rgba;
+    use meteroscope_core::{Pt, Shape};
 
     #[test]
     fn font_has_needed_glyphs() {
@@ -900,5 +327,28 @@ mod tests {
         let img = RgbaImage::from_pixel(50, 40, Rgba([10, 20, 30, 0]));
         let out = render_annotated(&img, &Document::new());
         assert_eq!(out, img);
+    }
+
+    /// Profil sur une image réduite : les traits de bord suivent les bords.
+    #[test]
+    fn profil_reporte_sur_une_image_reduite() {
+        use meteroscope_core::profile::ProfileResult;
+        meteroscope_i18n::set_language("fr");
+        let img = RgbaImage::from_pixel(600, 400, Rgba([90, 90, 90, 255]));
+        let mut doc = Document::new();
+        let mut shape = Shape::profile(Pt::new(100., 200.), Pt::new(500., 200.));
+        if let Shape::Profile { params, result, .. } = &mut shape {
+            params.band = 80.0;
+            *result = Some(ProfileResult { edges: [100.0, 300.0], tilt: 0.0 });
+        }
+        let id = doc.add(shape);
+        let color = doc.get(id).unwrap().color;
+        // Réduite de moitié : bords en (100, 100) et (200, 100), bande de ± 20.
+        let s = crate::rotate::straighten(&img, 0.0, crate::rotate::RotationFilter::Bicubic, 300, u64::MAX);
+        assert_eq!(s.image.dimensions(), (300, 200));
+        let out = render_annotated_in(&s.image, &doc, &s.frame);
+        assert_eq!(&out.get_pixel(100, 85).0[..3], &color[..], "trait du premier bord");
+        assert_eq!(&out.get_pixel(200, 115).0[..3], &color[..], "trait du second bord");
+        assert_eq!(out.get_pixel(150, 85), s.image.get_pixel(150, 85), "pas de trait hors des bords");
     }
 }

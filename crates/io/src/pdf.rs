@@ -8,14 +8,13 @@
 //! du système qui les a, intégrée elle aussi au PDF (voir [`crate::fonts`]).
 //! Sans telle police installée, ils restent des boîtes vides.
 //!
-//! L'image est l'image annotée (mêmes traits et étiquettes que l'export PNG),
-//! redressée selon `Document::rotation`, réduite à 2400 pixels au plus.
+//! L'image est l'image annotée de l'export PNG (même redressement, mêmes
+//! traits, mêmes étiquettes), réduite à 2400 pixels au plus.
 
 use crate::fonts;
 use crate::render::text_width;
-use crate::rotate::{RotationFilter, rotate_image};
-use crate::table::format_precise;
-use crate::upright::upright_document;
+use crate::rotate::RotationFilter;
+use crate::table::{format_precise, stats_cells, stats_sections};
 use anyhow::{Result, anyhow};
 use image::RgbaImage;
 use krilla::color::rgb;
@@ -24,7 +23,7 @@ use krilla::num::NormalizedF32;
 use krilla::paint::{Fill, Stroke};
 use krilla::page::PageSettings;
 use krilla::text::{Font, TextDirection};
-use meteroscope_core::{Document, Measurement, Shape, Stats};
+use meteroscope_core::{Document, Measurement, Shape};
 use meteroscope_i18n::tr;
 use std::collections::HashMap;
 
@@ -219,47 +218,10 @@ fn values_text(doc: &Document, m: &Measurement) -> String {
     }
 }
 
-fn stats_rows(summary: &[(meteroscope_core::ShapeKind, meteroscope_core::Quantity, String, Stats)]) -> Vec<Vec<String>> {
-    summary
-        .iter()
-        .map(|(k, q, u, s)| {
-            let sd = if s.n < 2 { "—".to_owned() } else { format_precise(s.sd) };
-            vec![
-                k.label().to_owned(),
-                q.label().to_owned(),
-                u.clone(),
-                s.n.to_string(),
-                format_precise(s.mean),
-                sd,
-                format_precise(s.min),
-                format_precise(s.max),
-            ]
-        })
-        .collect()
-}
-
-/// Image annotée redressée, réduite, et sa taille.
+/// Image annotée du rapport : la même que l'export PNG (même redressement,
+/// mêmes traits, mêmes valeurs), réduite à [`MAX_IMAGE_PX`] de grand côté.
 fn annotated_image(image: &RgbaImage, doc: &Document, filter: RotationFilter) -> RgbaImage {
-    let (w, h) = (image.width() as f64, image.height() as f64);
-    let mut up = upright_document(doc, w, h);
-    let mut img = if doc.rotation == 0.0 { image.clone() } else { rotate_image(image, doc.rotation, filter) };
-    let side = img.width().max(img.height());
-    if side > MAX_IMAGE_PX {
-        let k = MAX_IMAGE_PX as f64 / side as f64;
-        let nw = ((img.width() as f64 * k).round() as u32).max(1);
-        let nh = ((img.height() as f64 * k).round() as u32).max(1);
-        // Échelle effective (arrondi de la largeur), la même sur les deux axes.
-        let k = nw as f64 / img.width() as f64;
-        img = image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
-        for m in &mut up.measurements {
-            m.shape.map_points(|p| meteroscope_core::Pt::new(p.x * k, p.y * k));
-        }
-        // Mêmes valeurs mesurées : un pixel réduit vaut 1/k pixel d'origine.
-        if let Some(s) = &mut up.calibration.scale {
-            s.units_per_px /= k;
-        }
-    }
-    crate::render::render_annotated(&img, &up)
+    crate::render::render_view(image, doc, filter, MAX_IMAGE_PX)
 }
 
 /// Rapport PDF de l'image mesurée. `image` : l'image telle qu'affichée
@@ -335,22 +297,16 @@ pub fn pdf_report(image: &RgbaImage, doc: &Document, filter: RotationFilter, inf
     .map(str::to_owned);
     let widths = [90.0, 75.0, 40.0, 30.0, 70.0, 70.0, 68.0, content_w - 443.0];
     let right = [false, false, false, true, true, true, true, true];
-    let sections: Vec<(String, Vec<_>)> =
-        if doc.groups().is_empty() { vec![(String::new(), doc.summary())] } else { doc.summary_by_group() };
     heading(&mut l, tr!("stats.title"));
-    let mut any = false;
-    for (g, summary) in sections {
-        if summary.is_empty() {
-            continue;
-        }
-        any = true;
-        if !doc.groups().is_empty() {
+    let sections = stats_sections(doc);
+    let any = !sections.is_empty();
+    for (group, stats) in sections {
+        if let Some(name) = group {
             l.ensure(3.0 * ROW_H);
-            let name = if g.is_empty() { tr!("group.ungrouped") } else { g.as_str() };
             l.text(MARGIN, l.y + 12.0, 10.5, name, INK);
             l.y += 17.0;
         }
-        table(&mut l, &widths, &header, &stats_rows(&summary), &right);
+        table(&mut l, &widths, &header, &stats.iter().map(stats_cells).collect::<Vec<_>>(), &right);
         l.y += 6.0;
     }
     if !any {
@@ -493,5 +449,23 @@ mod tests {
         let body: Vec<String> = texts.into_iter().filter(|s| s != "#" && s != "Nom" && s != "1" && s != "2").collect();
         assert_eq!(body.last().map(String::as_str), Some("fin"));
         assert_eq!(body[..body.len() - 1].join(" "), long, "aucune ligne perdue");
+    }
+
+    /// Image de plus de 2400 px sans échelle : l'image réduite du rapport
+    /// affiche les mêmes valeurs que le tableau (pixels de l'image d'origine).
+    #[test]
+    fn image_reduite_non_etalonnee_garde_ses_valeurs() {
+        use meteroscope_core::Pt;
+        meteroscope_i18n::set_language("fr");
+        let img = RgbaImage::from_pixel(4800, 600, image::Rgba([90, 90, 90, 255]));
+        let mut doc = Document::new();
+        doc.add(Shape::Length { a: Pt::new(400., 300.), b: Pt::new(3400., 300.) });
+        // Référence : le même document « étalonné » à 1 px par pixel, dont la
+        // réduction a toujours été compensée.
+        let mut reference = doc.clone();
+        reference.calibration.set_from_reference(1.0, 1.0, "px");
+        reference.scale_bar.visible = false;
+        let f = RotationFilter::Bicubic;
+        assert!(annotated_image(&img, &doc, f) == annotated_image(&img, &reference, f), "valeurs recalculées sur l'image réduite");
     }
 }
