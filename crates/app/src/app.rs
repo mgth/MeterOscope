@@ -642,6 +642,9 @@ impl eframe::App for MeterOscopeApp {
                 if self.wanted_key() != self.texture_key {
                     ctx.request_repaint();
                 }
+                if let Some(id) = out.created {
+                    self.profiles.created(&mut self.doc, id);
+                }
                 if let Some((a, b)) = out.calibration_segment {
                     self.calibration.open(a.dist(b));
                 }

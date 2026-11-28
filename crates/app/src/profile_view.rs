@@ -30,16 +30,21 @@ impl ProfileView {
         self.cache.clear();
     }
 
+    /// Une mesure vient d'être tracée : un profil reprend les derniers réglages
+    /// choisis. Seul le tracé les applique ; les réglages d'un profil
+    /// enregistré dans un projet ne sont jamais remplacés.
+    pub fn created(&mut self, doc: &mut Document, id: u64) {
+        if let Some(Shape::Profile { params, .. }) = doc.get_mut(id).map(|m| &mut m.shape) {
+            *params = self.defaults.clone();
+        }
+    }
+
     /// Met à jour les résultats de tous les profils du document à partir de
     /// l'image d'origine (jamais l'image réglée en luminosité/contraste).
     pub fn sync(&mut self, doc: &mut Document, image: &image::RgbaImage) {
         self.cache.retain(|id, _| doc.get(*id).is_some());
         for m in &mut doc.measurements {
             let Shape::Profile { a, b, params, result } = &mut m.shape else { continue };
-            // Profil tout juste tracé : il reprend les derniers réglages.
-            if !self.cache.contains_key(&m.id) && result.is_none() && *params == ProfileParams::default() {
-                *params = self.defaults.clone();
-            }
             let key = (*a, *b, params.clone());
             let entry = match self.cache.get(&m.id) {
                 Some(e) if e.key == key => e,
@@ -138,12 +143,31 @@ mod tests {
         meteroscope_i18n::set_language("fr");
         let mut view = ProfileView { defaults: ProfileParams { band: 25.0, ..Default::default() }, ..Default::default() };
         let mut doc = Document::new();
-        let id = doc.add(Shape::profile(Pt::new(10.0, 20.0), Pt::new(70.0, 20.0)));
+        let band = |doc: &Document, id| match &doc.get(id).unwrap().shape {
+            Shape::Profile { params, .. } => params.band,
+            _ => panic!(),
+        };
+        // Profil d'un projet ouvert, réglages standard et aucun bord trouvé
+        // (segment hors de la barre) : ses réglages enregistrés sont gardés.
+        let saved = doc.add(Shape::profile(Pt::new(2.0, 20.0), Pt::new(22.0, 20.0)));
         view.sync(&mut doc, &bar());
-        let Shape::Profile { params, .. } = &doc.get(id).unwrap().shape else { panic!() };
-        assert_eq!(params.band, 25.0);
+        assert_eq!(width(&doc, saved), None);
+        assert_eq!(band(&doc, saved), ProfileParams::default().band);
+        // Profil tout juste tracé : les derniers réglages, sans étape
+        // d'annulation de plus (annuler retire la mesure, rétablir la rend
+        // avec ses réglages).
+        let id = doc.add(Shape::profile(Pt::new(10.0, 20.0), Pt::new(70.0, 20.0)));
+        view.created(&mut doc, id);
+        view.sync(&mut doc, &bar());
+        assert_eq!(band(&doc, id), 25.0);
+        assert_eq!(band(&doc, saved), ProfileParams::default().band);
+        assert!(doc.undo());
+        assert!(doc.get(id).is_none());
+        assert!(doc.redo());
+        assert_eq!(band(&doc, id), 25.0);
         // Mesure supprimée : son analyse est oubliée.
         doc.remove(id);
+        doc.remove(saved);
         view.sync(&mut doc, &bar());
         assert!(view.cache.is_empty());
     }
