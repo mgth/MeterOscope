@@ -218,14 +218,13 @@ fn new_draft(tool: Tool) -> Draft {
     }
 }
 
-/// La poignée `i` de la mesure `id` peut s'aimanter. Ni la rotation d'un
-/// rectangle (seul l'angle compte), ni un marqueur (deux marqueurs superposés
-/// se compteraient sans se voir).
+/// La poignée `i` de la mesure `id` peut s'aimanter. Ni une poignée de
+/// rotation (rectangle, ellipse : seul l'angle compte), ni un marqueur (deux
+/// marqueurs superposés se compteraient sans se voir).
 fn handle_snaps(doc: &Document, id: u64, i: usize) -> bool {
-    doc.get(id).is_some_and(|m| match m.shape {
-        Shape::Rect { .. } => i != edit::ROTATE_HANDLE,
+    doc.get(id).is_some_and(|m| match &m.shape {
         Shape::Marker { .. } => false,
-        _ => true,
+        s => !edit::is_rotate_handle(s, i),
     })
 }
 

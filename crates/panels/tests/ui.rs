@@ -518,3 +518,93 @@ fn panneau_garde_sa_largeur() {
     let last = *widths.last().unwrap();
     assert!((last - widths[0]).abs() < 0.5, "le volet s'est élargi : {} → {last}", widths[0]);
 }
+
+/// Changer de document (autre image d'une série, caméra) n'emporte ni la
+/// sélection multiple ni le renommage en cours : les identifiants de mesures
+/// se recoupent d'un document à l'autre.
+#[test]
+fn selection_multiple_propre_au_document() {
+    meteroscope_i18n::set_language("fr");
+    let image = |l: f64| {
+        let mut doc = Document::new();
+        for i in 1..=3 {
+            doc.add(length(l * i as f64));
+        }
+        doc
+    };
+    let mut harness = panel_harness(image(10.0));
+    harness.run();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 1").click();
+    harness.run();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 3").click_modifiers(egui::Modifiers::COMMAND);
+    harness.run();
+    let ids: Vec<u64> = harness.state().doc.measurements.iter().map(|m| m.id).collect();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![ids[0], ids[2]]);
+
+    // Image 2 : mêmes identifiants, la dernière mesure sélectionnée. Suppr
+    // (lu par l'application avant le panneau) ne doit viser qu'elle.
+    let other = image(15.0);
+    let last = other.selected.unwrap();
+    assert_eq!(last, ids[2]);
+    let first = std::mem::replace(&mut harness.state_mut().doc, other);
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![last]);
+    harness.run();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![last]);
+    assert!(harness.query_by_label_contains("sélectionnées").is_none());
+
+    // Retour à l'image 1 : la sélection multiple n'y revient pas non plus.
+    harness.state_mut().doc = first;
+    harness.run();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![ids[2]]);
+
+    // Image 2 dont la longueur 1 est identique à celle de l'image 1 (même
+    // identifiant, nom et géométrie), la 3 différente : pas confondue non plus.
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 1").click();
+    harness.run();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 3").click_modifiers(egui::Modifiers::COMMAND);
+    harness.run();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc).len(), 2);
+    let mut twin = image(15.0);
+    twin.measurements[0].shape = harness.state().doc.measurements[0].shape.clone();
+    let first = std::mem::replace(&mut harness.state_mut().doc, twin);
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![last]);
+    harness.run();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![last]);
+    harness.state_mut().doc = first;
+    harness.run();
+
+    // Renommage en cours sur l'image 1, puis image 2 : le champ disparaît.
+    let fields = harness.query_all_by_role(egui::Role::TextInput).count();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 2").click();
+    harness.step();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 2").click();
+    harness.run();
+    assert_eq!(harness.query_all_by_role(egui::Role::TextInput).count(), fields + 1);
+    harness.state_mut().doc = image(15.0);
+    harness.run();
+    assert_eq!(harness.query_all_by_role(egui::Role::TextInput).count(), fields);
+}
+
+/// Modifier une mesure de la sélection multiple (glisser une poignée dans la
+/// vue) ne passe pas pour un changement de document.
+#[test]
+fn selection_multiple_survit_a_une_edition() {
+    meteroscope_i18n::set_language("fr");
+    let mut doc = Document::new();
+    let a = doc.add(length(10.0));
+    doc.add(length(20.0));
+    let c = doc.add(length(30.0));
+    let mut harness = panel_harness(doc);
+    harness.run();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 1").click();
+    harness.run();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 3").click_modifiers(egui::Modifiers::COMMAND);
+    harness.run();
+    for x in [31.0, 32.0, 33.0] {
+        harness.state_mut().doc.get_mut(c).unwrap().shape = length(x);
+        harness.run();
+    }
+    harness.state_mut().doc.get_mut(a).unwrap().name = "Bord".into();
+    harness.run();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![a, c]);
+}

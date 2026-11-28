@@ -41,10 +41,52 @@ fn multi_id() -> egui::Id {
     egui::Id::unique("meteroscope_selection_multiple")
 }
 
+/// Sélection multiple gardée d'une frame à l'autre, avec l'empreinte du
+/// document où elle a été faite.
+#[derive(Clone, Default)]
+struct Multi {
+    ids: Vec<u64>,
+    /// Adresse du tableau des mesures du document (voir [`Multi::same_doc`]).
+    buf: usize,
+    /// Identifiant, nom et forme des mesures que la liste retient (sélection
+    /// multiple, ancre de Maj + clic, renommage), relevés à la fin de chaque
+    /// frame du panneau.
+    marks: Vec<(u64, String, Shape)>,
+}
+
+impl Multi {
+    fn load(ctx: &egui::Context) -> Self {
+        ctx.data(|d| d.get_temp(multi_id())).unwrap_or_default()
+    }
+
+    /// Le document est celui de la frame précédente. Les identifiants, et
+    /// parfois des mesures entières, se recoupent d'un document à l'autre
+    /// (images d'une série, caméra) ; l'application les échange sans prévenir
+    /// le panneau. Le tableau des mesures, lui, suit son document quand on
+    /// les échange (`mem::swap`) : même adresse, même document. Elle change
+    /// aussi quand le tableau est réalloué (ajout, annulation), ce qui ne
+    /// coûte que la sélection multiple. Les mesures retenues, dont une au
+    /// moins doit être restée identique (une édition entre deux frames n'en
+    /// touche qu'une), écartent le cas d'une adresse libérée puis reprise par
+    /// le tableau d'un autre document.
+    fn same_doc(&self, doc: &Document) -> bool {
+        self.marks.is_empty()
+            || (self.buf == buf_of(doc)
+                && self.marks.iter().any(|(id, name, shape)| doc.get(*id).is_some_and(|m| m.name == *name && m.shape == *shape)))
+    }
+}
+
+/// Adresse du tableau des mesures de `doc`.
+fn buf_of(doc: &Document) -> usize {
+    doc.measurements.as_ptr() as usize
+}
+
 /// Mesures sélectionnées : la sélection multiple de la liste si elle
-/// contient la mesure sélectionnée du document, sinon celle-ci seule.
+/// contient la mesure sélectionnée du document (et a été faite dans ce
+/// document), sinon celle-ci seule.
 pub fn selection(ctx: &egui::Context, doc: &Document) -> Vec<u64> {
-    let multi: Vec<u64> = ctx.data(|d| d.get_temp(multi_id())).unwrap_or_default();
+    let multi = Multi::load(ctx);
+    let multi = if multi.same_doc(doc) { multi.ids } else { Vec::new() };
     match doc.selected {
         Some(id) if multi.contains(&id) => multi.into_iter().filter(|m| doc.get(*m).is_some()).collect(),
         Some(id) => vec![id],
@@ -98,6 +140,11 @@ fn panel(ui: &mut Ui, doc: &mut Document, presets: Option<&mut ScalePresets>) ->
     let mut out = PanelOutput::default();
     let state_id = ui.scope_id().with("meteroscope_panneau_mesures");
     let mut st: ListState = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
+    // Autre document : le renommage et l'ancre visaient ses homonymes.
+    if !Multi::load(ui.ctx()).same_doc(doc) {
+        st.renaming = None;
+        st.anchor = None;
+    }
 
     ui.add_space(6.0);
     scale_card(ui, doc, presets, &mut out);
@@ -156,10 +203,13 @@ fn panel(ui: &mut Ui, doc: &mut Document, presets: Option<&mut ScalePresets>) ->
             }
         });
     st.last_selected = doc.selected;
-    apply_actions(ui.ctx(), doc, &mut st, &order, actions);
+    let multi = apply_actions(ui.ctx(), doc, &mut st, &order, actions);
     if st.renaming.as_ref().is_some_and(|(id, ..)| doc.get(*id).is_none()) {
         st.renaming = None;
     }
+    let kept = multi.iter().copied().chain(st.anchor).chain(st.renaming.as_ref().map(|r| r.0));
+    let marks = kept.filter_map(|id| doc.get(id)).map(|m| (m.id, m.name.clone(), m.shape.clone())).collect();
+    ui.data_mut(|d| d.insert_temp(multi_id(), Multi { ids: multi, buf: buf_of(doc), marks }));
 
     // Zone du bas : statistiques puis boutons ; sa hauteur sert à la frame suivante.
     let top = ui.cursor().top();
@@ -446,7 +496,8 @@ fn values_box(
         .response
 }
 
-fn apply_actions(ctx: &egui::Context, doc: &mut Document, st: &mut ListState, order: &[u64], actions: Vec<(u64, RowAction)>) {
+/// Applique les actions de la frame ; renvoie la nouvelle sélection multiple.
+fn apply_actions(ctx: &egui::Context, doc: &mut Document, st: &mut ListState, order: &[u64], actions: Vec<(u64, RowAction)>) -> Vec<u64> {
     let mut multi = selection(ctx, doc);
     for (id, action) in actions {
         match action {
@@ -534,7 +585,7 @@ fn apply_actions(ctx: &egui::Context, doc: &mut Document, st: &mut ListState, or
             }
         }
     }
-    ctx.data_mut(|d| d.insert_temp(multi_id(), multi));
+    multi
 }
 
 /// Nouvelle sélection multiple après un clic sur `id` : seul (clic simple),
