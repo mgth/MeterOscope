@@ -466,3 +466,30 @@ fn prereglage_enregistre_renomme_supprime() {
     harness.run();
     assert!(harness.state().presets.presets.is_empty());
 }
+
+/// Le panneau, dans un volet latéral redimensionnable, garde sa largeur :
+/// le champ « Groupe » de la mesure sélectionnée débordait de quelques
+/// pixels, et le volet s'élargissait à chaque image jusqu'à tout occuper.
+#[test]
+fn panneau_garde_sa_largeur() {
+    meteroscope_i18n::set_language("fr");
+    let mut doc = Document::new();
+    let ids: Vec<u64> = (0..3).map(|i| doc.add(length(10.0 + i as f64))).collect();
+    doc.set_group(&ids[..2], "Lot A");
+    doc.selected = Some(ids[0]);
+    let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, st: &mut (Document, ScalePresets, Vec<f32>)| {
+            let r = egui::Panel::right("mesures").default_size(300.0).show(ui, |ui| {
+                measurements_panel_with_presets(ui, &mut st.0, &mut st.1);
+            });
+            st.2.push(r.response.rect.width());
+        },
+        (doc, ScalePresets::default(), Vec::new()),
+    );
+    for _ in 0..30 {
+        harness.step();
+    }
+    let widths = &harness.state().2;
+    let last = *widths.last().unwrap();
+    assert!((last - widths[0]).abs() < 0.5, "le volet s'est élargi : {} → {last}", widths[0]);
+}
