@@ -164,6 +164,14 @@ pub fn label_anchor(shape: &Shape, xf: Xf) -> (Pos2, Align2) {
     };
     match shape {
         Shape::Length { a, b } => beside_segment(s(*a), s(*b)),
+        Shape::Profile { a, b, .. } => {
+            // Entre les deux bords détectés, au-delà des traits qui les marquent.
+            let [e0, e1] = shape.profile_edges().unwrap_or([*a, *b]);
+            let (pos, align) = beside_segment(s(e0), s(e1));
+            let mid = s(e0.lerp(e1, 0.5));
+            let out = (pos - mid).normalized();
+            (pos + out * (profile_tick(shape, xf) - 4.0), align)
+        }
         Shape::Path { pts } => {
             let i = (pts.len().saturating_sub(1)) / 2;
             beside_segment(s(pts[i]), s(pts[(i + 1).min(pts.len() - 1)]))
@@ -239,6 +247,12 @@ pub fn segment(p: &Painter, a: Pos2, b: Pos2, color: Color32, width: f32) {
     }
 }
 
+/// Demi-longueur écran des traits qui marquent les bords d'un profil : la
+/// demi-largeur de la bande, sans descendre sous une taille lisible.
+fn profile_tick(shape: &Shape, xf: Xf) -> f32 {
+    shape.profile_band().map_or(0.0, |(h, _)| h as f32 * xf.zoom).max(7.0)
+}
+
 /// Dessine l'image (taille `img` en pixels) selon `xf`, rotation comprise.
 /// `baked` : la texture contient déjà l'image pivotée dans sa boîte
 /// englobante, dont c'est la taille en pixels image ; elle se dessine droite.
@@ -267,6 +281,26 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
     let s = |q: Pt| xf.to_screen(q);
     match shape {
         Shape::Length { a, b } => segment(p, s(*a), s(*b), color, width),
+        Shape::Profile { a, b, .. } => {
+            let (sa, sb) = (s(*a), s(*b));
+            let d = sb - sa;
+            let n = if d.length() > 0.0 { vec2(-d.y, d.x).normalized() } else { vec2(0.0, 1.0) };
+            // Bande moyennée, en pointillés fins de part et d'autre du segment.
+            let half = shape.profile_band().map_or(0.0, |(h, _)| h as f32 * xf.zoom);
+            if half >= 3.0 {
+                for side in [-half, half] {
+                    p.extend(EShape::dashed_line(&[sa + n * side, sb + n * side], Stroke::new(1.0, color.gamma_multiply(0.7)), 4.0, 4.0));
+                }
+            }
+            outlined(p, vec![sa, sb], false, color, width * 0.75);
+            dot(p, sa, color);
+            dot(p, sb, color);
+            // Un trait en travers sur chaque bord détecté.
+            let t = profile_tick(shape, xf);
+            for e in shape.profile_edges().into_iter().flatten() {
+                outlined(p, vec![s(e) - n * t, s(e) + n * t], false, color, width);
+            }
+        }
         Shape::LineAngle { a: pa, b: pb, c: pc, d: pd } => {
             let (a, b, c, d) = (s(*pa), s(*pb), s(*pc), s(*pd));
             match line_angle_arc(xf, *pa, *pb, *pc, *pd) {
@@ -426,6 +460,33 @@ pub fn paint_rotate_handle(p: &Painter, base: Pos2, h: Pos2, hot: bool) {
     outlined(p, vec![base, h], false, Color32::WHITE, 1.2);
     let r = if hot { HANDLE_SIZE / 2.0 + 2.5 } else { HANDLE_SIZE / 2.0 + 1.0 };
     p.circle(h, r, Color32::WHITE, Stroke::new(1.5, Color32::BLACK));
+}
+
+/// Couleur du repère d'aimantation.
+const SNAP_COLOR: Color32 = Color32::from_rgb(255, 220, 60);
+
+/// Repère d'aimantation en `c` (écran), dont la forme dit la nature de
+/// l'accroche : carré pour un point ou un coin, triangle pour un milieu,
+/// cercle pour un centre, croix pour une intersection.
+pub fn paint_snap(p: &Painter, c: Pos2, kind: crate::snap::SnapKind) {
+    use crate::snap::SnapKind;
+    const R: f32 = 6.0;
+    match kind {
+        SnapKind::Point => {
+            let q = [vec2(-R, -R), vec2(R, -R), vec2(R, R), vec2(-R, R)];
+            outlined(p, q.iter().map(|d| c + *d).collect(), true, SNAP_COLOR, 1.5);
+        }
+        SnapKind::Midpoint => {
+            let q = [vec2(0.0, -R * 1.15), vec2(R, R * 0.7), vec2(-R, R * 0.7)];
+            outlined(p, q.iter().map(|d| c + *d).collect(), true, SNAP_COLOR, 1.5);
+        }
+        SnapKind::Center => circle_outlined(p, c, R + 0.75, SNAP_COLOR, 1.5),
+        SnapKind::Intersection => {
+            for d in [vec2(R, R), vec2(R, -R)] {
+                outlined(p, vec![c - d, c + d], false, SNAP_COLOR, 1.5);
+            }
+        }
+    }
 }
 
 /// Poignées carrées blanches ; `hot` : poignée survolée ou saisie.

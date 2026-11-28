@@ -327,3 +327,151 @@ fn perspective_quatre_coins() {
     h.step();
     assert!(h.state().canvas.is_drawing(), "Entrée ne valide pas un quadrilatère incomplet");
 }
+
+#[test]
+fn points_d_accroche() {
+    use crate::snap::{Snap, SnapKind, find_snap, snap_or};
+    meteroscope_i18n::set_language("fr");
+    let p = Pt::new;
+    let mut doc = Document::new();
+    // Rectangle incliné à 30° : ses quatre coins, pas seulement a et b.
+    let t = 30f64.to_radians();
+    let b = p(10. * (t.cos() - t.sin()), 10. * (t.sin() + t.cos()));
+    let rect = doc.add(Shape::Rect { a: p(0., 0.), b, angle: 30.0 });
+    let corner = p(10. * t.cos(), 10. * t.sin());
+    let s = find_snap(&doc, corner.offset(0.5, 0.5), 2.0, None).unwrap();
+    assert_eq!(s.kind, SnapKind::Point);
+    assert!(s.pt.dist(corner) < 1e-9, "{s:?}");
+    // Milieu d'un côté du rectangle.
+    let s = find_snap(&doc, p(0., 0.).lerp(corner, 0.5).offset(0.3, 0.), 2.0, None).unwrap();
+    assert_eq!(s.kind, SnapKind::Midpoint);
+    // Une mesure ne s'aimante pas sur elle-même ; hors tolérance : rien.
+    assert_eq!(find_snap(&doc, corner, 2.0, Some(rect)), None);
+    assert_eq!(find_snap(&doc, corner.offset(3., 0.), 2.0, None), None);
+
+    let len = doc.add(Shape::Length { a: p(100., 100.), b: p(140., 100.) });
+    let s = find_snap(&doc, p(119., 101.), 2.0, None).unwrap();
+    assert_eq!(s, Snap { pt: p(120., 100.), kind: SnapKind::Midpoint });
+    assert_eq!(find_snap(&doc, p(141., 99.), 2.0, None).map(|s| s.pt), Some(p(140., 100.)));
+    // Mesure masquée : ignorée.
+    doc.get_mut(len).unwrap().visible = false;
+    assert_eq!(find_snap(&doc, p(141., 99.), 2.0, None), None);
+
+    // Centre des deux types de cercle.
+    doc.add(Shape::Circle { center: p(200., 0.), edge: p(210., 0.) });
+    doc.add(Shape::Circle3 { a: p(290., 0.), b: p(310., 0.), c: p(300., 10.) });
+    assert_eq!(find_snap(&doc, p(201., 1.), 2.0, None), Some(Snap { pt: p(200., 0.), kind: SnapKind::Center }));
+    let s = find_snap(&doc, p(300.5, 0.5), 2.0, None).unwrap();
+    assert_eq!(s.kind, SnapKind::Center);
+    assert!(s.pt.dist(p(300., 0.)) < 1e-9);
+    assert_eq!(find_snap(&doc, p(210., 1.), 2.0, None).map(|s| s.kind), Some(SnapKind::Point));
+
+    // Intersection des droites d'une inclinaison, hors des segments.
+    doc.add(Shape::LineAngle { a: p(400., 0.), b: p(410., 0.), c: p(400., 20.), d: p(410., 10.) });
+    let s = find_snap(&doc, p(419., 1.), 2.0, None).unwrap();
+    assert_eq!(s.kind, SnapKind::Intersection);
+    assert!(s.pt.dist(p(420., 0.)) < 1e-9, "{s:?}");
+
+    // Centre d'une ellipse et d'un arc.
+    doc.add(Shape::Ellipse { center: p(500., 0.), a: p(520., 0.), b: p(500., 10.) });
+    assert_eq!(find_snap(&doc, p(501., 1.), 2.0, None), Some(Snap { pt: p(500., 0.), kind: SnapKind::Center }));
+    doc.add(Shape::Arc { a: p(590., 50.), m: p(600., 40.), b: p(610., 50.) });
+    let s = find_snap(&doc, p(600.5, 50.5), 2.0, None).unwrap();
+    assert_eq!(s.kind, SnapKind::Center);
+    assert!(s.pt.dist(p(600., 50.)) < 1e-9, "{s:?}");
+
+    // À distance égale, un point l'emporte sur un milieu.
+    let mut d2 = Document::new();
+    d2.add(Shape::Length { a: p(0., 0.), b: p(20., 0.) });
+    d2.add(Shape::Marker { p: p(10., 4.) });
+    assert_eq!(find_snap(&d2, p(10., 2.), 3.0, None).map(|s| s.kind), Some(SnapKind::Point));
+
+    // Ordre des contraintes : l'aimantation l'emporte sur la contrainte Maj.
+    let snap = Some(Snap { pt: p(5., 5.), kind: SnapKind::Point });
+    assert_eq!(snap_or(snap, p(4., 6.), |_| p(4., 0.)), p(5., 5.));
+    assert_eq!(snap_or(None, p(4., 6.), |_| p(4., 0.)), p(4., 0.));
+}
+
+/// Clic (appui + relâchement) avec des touches de modification maintenues.
+fn click_mod(h: &mut Harness<'_, St>, x: f64, y: f64, modifiers: Modifiers) {
+    let p = scr(h, x, y);
+    h.event(Event::ModifiersChanged(modifiers));
+    for pressed in [true, false] {
+        h.event(Event::PointerMoved(p));
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers });
+        h.step();
+    }
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.step();
+}
+
+#[test]
+fn aimantation_pendant_le_trace() {
+    meteroscope_i18n::set_language("fr");
+    let mut h = harness();
+    h.state_mut().doc.add(Shape::Rect { a: Pt::new(20.0, 20.0), b: Pt::new(80.0, 60.0), angle: 0.0 });
+    h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::Length));
+    // Le curseur à environ un pixel image (≈ 5 px écran) du coin haut-droit.
+    h.event(Event::PointerMoved(scr(&h, 81.0, 19.0)));
+    h.step();
+    assert!(h.state().canvas.hint().contains("Aimanté : point"), "{}", h.state().canvas.hint());
+    click(&mut h, 81.0, 19.0);
+    assert_eq!(h.state().canvas.draft.pts, vec![Pt::new(80.0, 20.0)]);
+    // Maj et un point remarquable : l'aimantation l'emporte sur les 45°
+    // (le milieu du côté bas n'est pas sur une direction à 45° du coin).
+    click_mod(&mut h, 50.5, 60.5, Modifiers::SHIFT);
+    let Shape::Length { a, b } = h.state().doc.measurements[1].shape else { panic!() };
+    assert_eq!((a, b), (Pt::new(80.0, 20.0), Pt::new(50.0, 60.0)));
+    // Alt : pas d'aimantation, le point suit le curseur.
+    click_mod(&mut h, 20.5, 59.5, Modifiers::ALT);
+    click(&mut h, 150.0, 90.0);
+    let Shape::Length { a, .. } = h.state().doc.measurements[2].shape else { panic!() };
+    assert!(near(a, Pt::new(20.5, 59.5)), "{a:?}");
+    // Maj seul loin de tout point : alignement habituel.
+    click(&mut h, 120.0, 10.0);
+    click_mod(&mut h, 170.0, 13.0, Modifiers::SHIFT);
+    let Shape::Length { b, .. } = h.state().doc.measurements[3].shape else { panic!() };
+    assert!(near(b, Pt::new(170.0, 10.0)), "{b:?}");
+
+    // L'étalonnage s'aimante aussi.
+    h.state_mut().canvas.set_tool(Tool::Calibrate);
+    click(&mut h, 19.5, 20.5);
+    click(&mut h, 79.5, 59.5);
+    let seg = h.state().canvas.calibration_segment();
+    assert_eq!(seg, Some((Pt::new(20.0, 20.0), Pt::new(80.0, 60.0))));
+}
+
+#[test]
+fn aimantation_d_une_poignee() {
+    meteroscope_i18n::set_language("fr");
+    let mut h = harness();
+    h.state_mut().doc.add(Shape::Circle { center: Pt::new(100.0, 50.0), edge: Pt::new(120.0, 50.0) });
+    let id = h.state_mut().doc.add(Shape::Length { a: Pt::new(10.0, 10.0), b: Pt::new(60.0, 10.0) });
+    // Poignée b vers le centre du cercle : accrochée exactement.
+    let (p, q) = (scr(&h, 60.0, 10.0), scr(&h, 101.0, 49.0));
+    drag(&mut h, p, q, PointerButton::Primary);
+    let Shape::Length { b, .. } = h.state().doc.get(id).unwrap().shape else { panic!() };
+    assert_eq!(b, Pt::new(100.0, 50.0));
+    // Pas d'aimantation sur la mesure elle-même (son autre extrémité, son milieu).
+    let (p, q) = (scr(&h, 100.0, 50.0), scr(&h, 11.0, 11.0));
+    drag(&mut h, p, q, PointerButton::Primary);
+    let Shape::Length { a, b } = h.state().doc.get(id).unwrap().shape else { panic!() };
+    assert_eq!(a, Pt::new(10.0, 10.0));
+    assert!(near(b, Pt::new(11.0, 11.0)), "{b:?}");
+    // Les marqueurs ne s'aimantent pas (pas de doublon invisible au comptage).
+    h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::Marker));
+    click(&mut h, 101.0, 49.0);
+    let Shape::Marker { p: m } = h.state().doc.measurements[2].shape else { panic!() };
+    assert!(near(m, Pt::new(101.0, 49.0)), "{m:?}");
+    // Ni quand on déplace un marqueur, même près d'un autre marqueur.
+    let other = h.state_mut().doc.add(Shape::Marker { p: Pt::new(150.0, 80.0) });
+    let moved = h.state().doc.measurements[2].id;
+    h.state_mut().canvas.set_tool(Tool::Select);
+    h.state_mut().doc.selected = Some(moved);
+    h.step();
+    let (p, q) = (scr(&h, 101.0, 49.0), scr(&h, 149.0, 79.0));
+    drag(&mut h, p, q, PointerButton::Primary);
+    let Shape::Marker { p: m } = h.state().doc.get(moved).unwrap().shape else { panic!() };
+    assert!(near(m, Pt::new(149.0, 79.0)), "{m:?}");
+    assert!(matches!(h.state().doc.get(other).unwrap().shape, Shape::Marker { p } if p == Pt::new(150.0, 80.0)));
+}
