@@ -251,3 +251,66 @@ fn render_demo() {
         save_image(&out, &Path::new(&out_dir).join(format!("demo-{w}.png"))).unwrap();
     }
 }
+
+/// Plus long segment horizontal de pixels blancs purs dans la zone donnée.
+fn longest_white_run(img: &RgbaImage, xs: std::ops::Range<u32>, ys: std::ops::Range<u32>) -> u32 {
+    let mut best = 0;
+    for y in ys {
+        let mut run = 0;
+        for x in xs.clone() {
+            run = if img.get_pixel(x, y).0 == [255, 255, 255, 255] { run + 1 } else { 0 };
+            best = best.max(run);
+        }
+    }
+    best
+}
+
+#[test]
+fn export_scale_bar_corner_length_and_settings() {
+    use meteroscope_core::{Corner, ScaleBarSettings};
+    meteroscope_i18n::set_language("fr");
+    let (w, h) = (1000u32, 800u32);
+    let img = RgbaImage::from_pixel(w, h, Rgba([120, 120, 120, 255]));
+    let mut d = Document::new();
+    // Sans échelle : rien n'est dessiné, même si la barre est activée.
+    assert!(d.scale_bar.visible);
+    assert_eq!(render_annotated(&img, &d), img);
+    // 0,01 mm/px : 17,5 % de 1000 px = 1,75 mm → barre de 2 mm = 200 px.
+    d.calibration.set_from_reference(100.0, 1.0, "mm");
+    let (hw, hh) = (w / 2, h / 2);
+    for corner in Corner::ALL {
+        assert!(d.set_scale_bar(ScaleBarSettings { visible: true, corner }) || corner == Corner::BottomRight);
+        let out = render_annotated(&img, &d);
+        let xs = if corner.is_left() { 0..hw } else { hw..w };
+        let ys = if corner.is_top() { 0..hh } else { hh..h };
+        let run = longest_white_run(&out, xs, ys);
+        assert!((198..=201).contains(&run), "{corner:?} : barre de {run} px");
+        // Les trois autres coins restent intacts.
+        for other in Corner::ALL.into_iter().filter(|c| *c != corner) {
+            let xs = if other.is_left() { 0..hw } else { hw..w };
+            let ys = if other.is_top() { 0..hh } else { hh..h };
+            assert_eq!(longest_white_run(&out, xs, ys), 0, "{other:?} touché");
+        }
+    }
+    // Plus grande image, même échelle : la barre grandit (6000 px → 10,5 mm → 10 mm).
+    let big = RgbaImage::from_pixel(6000, 400, Rgba([120, 120, 120, 255]));
+    let run = longest_white_run(&render_annotated(&big, &d), 0..6000, 0..400);
+    assert!((998..=1001).contains(&run), "barre de {run} px");
+    // Masquée : image inchangée ; annulable.
+    assert!(d.set_scale_bar(ScaleBarSettings { visible: false, ..d.scale_bar }));
+    assert_eq!(render_annotated(&img, &d), img);
+    assert!(d.undo());
+    assert_ne!(render_annotated(&img, &d), img);
+
+    // Réglages enregistrés dans le projet ; un ancien projet garde les valeurs par défaut.
+    let dir = TestDir::new("scale_bar");
+    let settings = ScaleBarSettings { visible: false, corner: Corner::TopLeft };
+    d.set_scale_bar(settings);
+    let path = dir.path("p.meteroscope");
+    save_project(&Project { image_path: None, document: d.clone() }, &path).unwrap();
+    assert_eq!(load_project(&path).unwrap().document.scale_bar, settings);
+    let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    json["document"].as_object_mut().unwrap().remove("scale_bar");
+    std::fs::write(&path, json.to_string()).unwrap();
+    assert_eq!(load_project(&path).unwrap().document.scale_bar, ScaleBarSettings::default());
+}

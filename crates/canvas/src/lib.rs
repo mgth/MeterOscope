@@ -437,6 +437,7 @@ impl Canvas {
         // Rendu.
         self.has_selection = doc.selected().is_some();
         let outline = render::image_outline(xf, [w, h]);
+        let image_box = Rect::from_points(&outline);
         painter.add(egui::Shape::convex_polygon(outline, Color32::from_gray(10), Stroke::new(1.0, Color32::from_gray(10))));
         render::paint_image(&painter, tex.id(), [w, h], xf, self.baked);
         self.paint_measurements(&painter, xf, doc);
@@ -461,7 +462,9 @@ impl Canvas {
                 painter.circle_stroke(xf.to_screen(self.draft.pts[0]), 8.0, Stroke::new(2.0, Color32::WHITE));
             }
         }
-        render::paint_scale_bar(&painter, rect, xf.zoom, &doc.calibration);
+        if doc.scale_bar.visible {
+            render::paint_scale_bar(&painter, rect.intersect(image_box), xf.zoom, &doc.calibration, doc.scale_bar.corner);
+        }
 
         // Loupe : pendant un tracé ou le glisser d'une poignée.
         if xf.zoom < LOUPE_MAX_ZOOM
