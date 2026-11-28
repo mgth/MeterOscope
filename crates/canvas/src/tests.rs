@@ -295,3 +295,22 @@ fn inclinaison_entre_deux_segments() {
     let v = m.shape.values(&st.doc.calibration)[0].value;
     assert!((v - (20f64).atan2(80.0).to_degrees()).abs() < 0.1, "{v}");
 }
+
+#[test]
+fn distance_point_droite() {
+    meteroscope_i18n::set_language("fr");
+    let mut h = harness();
+    h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::PointLine));
+    let (p, q) = (scr(&h, 10.0, 10.0), scr(&h, 90.0, 10.0));
+    drag(&mut h, p, q, PointerButton::Primary);
+    assert!(h.state().canvas.is_drawing());
+    assert!(h.state().canvas.hint().contains("point à mesurer"));
+    // Point au-delà de l'extrémité du segment : distance à la droite prolongée.
+    click(&mut h, 150.0, 50.0);
+    let st = h.state();
+    assert_eq!(st.doc.measurements.len(), 1);
+    let m = &st.doc.measurements[0];
+    assert_eq!(m.shape.kind(), ShapeKind::PointLine);
+    let v = m.shape.values(&st.doc.calibration)[0].value;
+    assert!((v - 40.0).abs() < 0.5, "{v}");
+}
