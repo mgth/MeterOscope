@@ -45,6 +45,9 @@ pub enum ShapeKind {
     Ellipse,
     /// Arc de cercle par trois points.
     Arc,
+    /// Profil d'intensité : largeur entre deux bords détectés au sous-pixel
+    /// le long d'un segment (voir [`crate::profile`]).
+    Profile,
     /// Annotation : texte libre posé sur l'image (pas une mesure).
     Text,
     /// Annotation : flèche, avec un texte facultatif à sa base (pas une mesure).
@@ -52,7 +55,7 @@ pub enum ShapeKind {
 }
 
 impl ShapeKind {
-    pub const ALL: [ShapeKind; 16] = [
+    pub const ALL: [ShapeKind; 17] = [
         ShapeKind::Length,
         ShapeKind::Path,
         ShapeKind::Angle,
@@ -67,6 +70,7 @@ impl ShapeKind {
         ShapeKind::Parallel,
         ShapeKind::Ellipse,
         ShapeKind::Arc,
+        ShapeKind::Profile,
         ShapeKind::Text,
         ShapeKind::Arrow,
     ];
@@ -101,6 +105,7 @@ impl ShapeKind {
             ShapeKind::Parallel => tr!("shape.parallel"),
             ShapeKind::Ellipse => tr!("shape.ellipse"),
             ShapeKind::Arc => tr!("shape.arc"),
+            ShapeKind::Profile => tr!("shape.profile"),
             ShapeKind::Text => tr!("shape.text"),
             ShapeKind::Arrow => tr!("shape.arrow"),
         }
@@ -110,7 +115,7 @@ impl ShapeKind {
     /// terminé par double-clic / Entrée).
     pub fn point_count(self) -> Option<usize> {
         match self {
-            ShapeKind::Length | ShapeKind::Rect | ShapeKind::Circle | ShapeKind::Arrow => Some(2),
+            ShapeKind::Length | ShapeKind::Rect | ShapeKind::Circle | ShapeKind::Profile | ShapeKind::Arrow => Some(2),
             ShapeKind::Angle | ShapeKind::Circle3 | ShapeKind::Rect3 => Some(3),
             ShapeKind::Marker | ShapeKind::Text => Some(1),
             ShapeKind::PointLine | ShapeKind::Parallel | ShapeKind::Ellipse | ShapeKind::Arc => Some(3),
@@ -139,6 +144,9 @@ pub enum Tool {
     /// Tracer un segment qui doit être horizontal ou vertical : l'affichage
     /// de la photo pivote en conséquence (l'image n'est pas modifiée).
     Straighten,
+    /// Cliquer les quatre coins d'un objet rectangulaire photographié de
+    /// biais : la photo est reprojetée pour le redresser (`Document::perspective`).
+    Perspective,
     /// Créer une mesure du type donné.
     Draw(ShapeKind),
 }
@@ -178,6 +186,16 @@ pub enum Shape {
     Ellipse { center: Pt, a: Pt, b: Pt },
     /// Arc de cercle d'extrémités `a`, `b`, passant par `m`.
     Arc { a: Pt, m: Pt, b: Pt },
+    /// Profil d'intensité le long de `a→b`. `result` est un cache : il dépend
+    /// des pixels et c'est l'application qui le recalcule.
+    Profile {
+        a: Pt,
+        b: Pt,
+        #[serde(default)]
+        params: crate::profile::ProfileParams,
+        #[serde(default)]
+        result: Option<crate::profile::ProfileResult>,
+    },
     /// Annotation : texte (une ou plusieurs lignes) centré sur `p`.
     Text { p: Pt, text: String },
     /// Annotation : flèche de la base `a` vers la pointe `b`, texte facultatif à la base.
@@ -218,6 +236,7 @@ impl Shape {
                 Shape::Ellipse { center, a, b }
             }
             ShapeKind::Arc => Shape::Arc { a: p[0], m: p[1], b: p[2] },
+            ShapeKind::Profile => Shape::profile(p[0], p[1]),
             ShapeKind::Text => Shape::Text { p: p[0], text: String::new() },
             ShapeKind::Arrow => Shape::Arrow { a: p[0], b: p[1], text: String::new() },
         })
@@ -238,6 +257,7 @@ impl Shape {
             Shape::Parallel { .. } => ShapeKind::Parallel,
             Shape::Ellipse { .. } => ShapeKind::Ellipse,
             Shape::Arc { .. } => ShapeKind::Arc,
+            Shape::Profile { .. } => ShapeKind::Profile,
             Shape::Text { .. } => ShapeKind::Text,
             Shape::Arrow { .. } => ShapeKind::Arrow,
         }
@@ -246,7 +266,7 @@ impl Shape {
     /// Points de contrôle (poignées), dans l'ordre de saisie.
     pub fn points(&self) -> Vec<Pt> {
         match self {
-            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Arrow { a, b, .. } => vec![*a, *b],
+            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } | Shape::Arrow { a, b, .. } => vec![*a, *b],
             Shape::Path { pts } | Shape::Area { pts } => pts.clone(),
             Shape::Angle { a, vertex, b } => vec![*a, *vertex, *b],
             Shape::Circle { center, edge } => vec![*center, *edge],
@@ -262,7 +282,7 @@ impl Shape {
     /// Accès mutable aux points de contrôle, même ordre que [`Shape::points`].
     pub fn points_mut(&mut self) -> Vec<&mut Pt> {
         match self {
-            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Arrow { a, b, .. } => vec![a, b],
+            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } | Shape::Arrow { a, b, .. } => vec![a, b],
             Shape::Path { pts } | Shape::Area { pts } => pts.iter_mut().collect(),
             Shape::Angle { a, vertex, b } => vec![a, vertex, b],
             Shape::Circle { center, edge } => vec![center, edge],
@@ -280,6 +300,27 @@ impl Shape {
         for p in self.points_mut() {
             *p = f(*p);
         }
+    }
+
+    /// Reporte la forme dans une image reprojetée par `f` (correction de
+    /// perspective). Les droites restent des droites : longueurs, chemins,
+    /// angles, surfaces et cercles par trois points suivent exactement leurs
+    /// points. Un rectangle garde ses deux coins et s'aligne sur l'image de
+    /// son premier côté ; un cercle garde son centre et son point de bord
+    /// (leur image exacte serait un quadrilatère et une ellipse).
+    pub fn reproject(&mut self, f: impl Fn(Pt) -> Pt) {
+        if let Shape::Rect { a, b, angle } = self {
+            let side = geo::rect_corners(*a, *b, *angle)[1];
+            // Le premier côté part de `a` dans le sens de l'axe du rectangle, ou à l'opposé.
+            let backwards = geo::to_frame(*b, *angle).x < geo::to_frame(*a, *angle).x;
+            let (na, ns) = (f(*a), f(side));
+            (*a, *b) = (na, f(*b));
+            if na.dist(ns) > 0.0 {
+                *angle = geo::normalize_deg(geo::direction_deg(na, ns) + if backwards { 180.0 } else { 0.0 });
+            }
+            return;
+        }
+        self.map_points(f);
     }
 
     /// Oriente un rectangle à `deg` degrés (sans effet sur les autres formes).
@@ -383,6 +424,8 @@ impl Shape {
                 ],
                 None => vec![],
             },
+            // Sans bords détectés : pas de valeur.
+            Shape::Profile { result, .. } => result.iter().map(|r| len(Quantity::Width, r.width_px())).collect(),
         }
     }
 }

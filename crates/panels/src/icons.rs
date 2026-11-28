@@ -71,6 +71,17 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                 Stroke::NONE,
             ));
         }
+        Tool::Perspective => {
+            // Quadrilatère fuyant (pâle) ramené à un rectangle droit.
+            let quad = vec![p(0.30, 0.16), p(0.70, 0.16), p(0.96, 0.84), p(0.04, 0.84)];
+            painter.add(Shape::closed_line(quad, Stroke::new(w * 0.8, light.gamma_multiply(3.0))));
+            let rr = Rect::from_min_max(p(0.20, 0.16), p(0.80, 0.84));
+            painter.rect_filled(rr, 0.0, light);
+            painter.rect_stroke(rr, 0.0, stroke, StrokeKind::Middle);
+            for c in [rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom()] {
+                dot(c);
+            }
+        }
         Tool::Draw(kind) => match kind {
             ShapeKind::Length => {
                 let (a, b) = (p(0.14, 0.80), p(0.86, 0.20));
@@ -171,6 +182,15 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                 painter.line_segment([a, b - u * h * 0.5], stroke);
                 painter.add(Shape::convex_polygon(vec![b, b - u * h + n * h * 0.45, b - u * h - n * h * 0.45], color, Stroke::NONE));
                 dot(a);
+            }
+            ShapeKind::Profile => {
+                // Courbe d'intensité en créneau adouci, les deux bords repérés.
+                let curve = [p(0.06, 0.74), p(0.26, 0.74), p(0.38, 0.26), p(0.62, 0.26), p(0.74, 0.74), p(0.94, 0.74)];
+                painter.add(Shape::line(curve.to_vec(), stroke));
+                let thin = Stroke::new(w * 0.7, color);
+                for x in [0.32, 0.68] {
+                    painter.extend(Shape::dashed_line(&[p(x, 0.10), p(x, 0.92)], thin, w * 1.6, w * 1.4));
+                }
             }
             ShapeKind::PointLine => {
                 // Droite, point au-dessus, perpendiculaire avec son angle droit.

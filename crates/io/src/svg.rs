@@ -414,6 +414,29 @@ impl Svg {
                     }
                 }
             }
+            Shape::Profile { a, b, .. } => {
+                // Segment fin, puis un trait en travers sur chaque bord
+                // détecté, de la largeur de la bande moyennée.
+                let (pa, pb) = (p32(*a), p32(*b));
+                let mut d = D::default();
+                d.m(pa).l(pb);
+                let mut mid = ((pa.0 + pb.0) / 2.0, (pa.1 + pb.1) / 2.0);
+                let (half, nrm) = shape.profile_band().unwrap_or((0.0, Pt::default()));
+                let t = (half as f32).max(self.line * 3.0);
+                let nv = (nrm.x as f32, nrm.y as f32);
+                if let Some([e0, e1]) = shape.profile_edges().map(|e| e.map(p32)) {
+                    for e in [e0, e1] {
+                        d.m((e.0 - nv.0 * t, e.1 - nv.1 * t)).l((e.0 + nv.0 * t, e.1 + nv.1 * t));
+                    }
+                    mid = ((e0.0 + e1.0) / 2.0, (e0.1 + e1.1) / 2.0);
+                }
+                self.outlined(&d, color);
+                if let Some(s) = main {
+                    // Étiquette du côté haut de l'image, au-delà des traits de bord.
+                    let up = if nv.1 > 0.0 || (nv.1 == 0.0 && nv.0 > 0.0) { (-nv.0, -nv.1) } else { nv };
+                    self.label_beside(&s, mid, up, gap + t, size, color);
+                }
+            }
             Shape::PointLine { a, b, p } => {
                 let (foot, t) = geo::foot_on_line(*p, *a, *b);
                 let (pa, pb, pp, pf) = (p32(*a), p32(*b), p32(*p), p32(foot));

@@ -448,6 +448,33 @@ impl Painter {
                     }
                 }
             }
+            Shape::Profile { a, b, .. } => {
+                // Segment fin, puis un trait en travers sur chaque bord
+                // détecté, de la largeur de la bande moyennée.
+                let (pa, pb_) = (p32(*a), p32(*b));
+                let mut pbld = PathBuilder::new();
+                pbld.move_to(pa.0, pa.1);
+                pbld.line_to(pb_.0, pb_.1);
+                let mut mid = ((pa.0 + pb_.0) / 2.0, (pa.1 + pb_.1) / 2.0);
+                let (half, nrm) = shape.profile_band().unwrap_or((0.0, Pt::default()));
+                let t = (half as f32).max(self.line * 3.0);
+                let n = (nrm.x as f32, nrm.y as f32);
+                if let Some([e0, e1]) = shape.profile_edges().map(|e| e.map(p32)) {
+                    for e in [e0, e1] {
+                        pbld.move_to(e.0 - n.0 * t, e.1 - n.1 * t);
+                        pbld.line_to(e.0 + n.0 * t, e.1 + n.1 * t);
+                    }
+                    mid = ((e0.0 + e1.0) / 2.0, (e0.1 + e1.1) / 2.0);
+                }
+                if let Some(path) = pbld.finish() {
+                    self.outlined(&path, color);
+                }
+                if let Some(s) = main {
+                    // Étiquette du côté haut de l'image, au-delà des traits de bord.
+                    let up = if n.1 > 0.0 || (n.1 == 0.0 && n.0 > 0.0) { (-n.0, -n.1) } else { n };
+                    self.label_beside(&s, mid, up, gap + t, size, color);
+                }
+            }
             Shape::PointLine { a, b, p } => {
                 let (foot, t) = geo::foot_on_line(*p, *a, *b);
                 let (pa, pb_, pp, pf) = (p32(*a), p32(*b), p32(*p), p32(foot));
