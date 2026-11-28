@@ -3,19 +3,20 @@
 //! Le dessin se fait sur un calque transparent (tiny-skia, antialiasé) puis est
 //! composé sur une copie de l'image : les pixels non touchés restent identiques.
 
-use ab_glyph::{Font, FontRef, OutlineCurve};
+use crate::fonts;
+use ab_glyph::{Font, OutlineCurve};
 use image::RgbaImage;
 use meteroscope_core::geometry as geo;
 use meteroscope_core::scale_bar::TARGET_FRACTION;
 use meteroscope_core::{Corner, Document, Pt, Shape};
 use std::f32::consts::PI;
-use std::sync::OnceLock;
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 
-/// Police embarquée (Ubuntu Light, licence libre UFL, fournie par egui).
-fn font() -> &'static FontRef<'static> {
-    static FONT: OnceLock<FontRef<'static>> = OnceLock::new();
-    FONT.get_or_init(|| FontRef::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).expect("police embarquée valide"))
+/// Police d'un caractère : Ubuntu Light embarquée (licence libre UFL, fournie
+/// par egui), ou une police du système pour les écritures qu'elle n'a pas
+/// (japonais, coréen, chinois…), voir [`crate::fonts`].
+fn font_for(ch: char) -> &'static ab_glyph::FontRef<'static> {
+    &fonts::get(fonts::index_for(ch)).font
 }
 
 type Rgba = [u8; 4];
@@ -156,37 +157,23 @@ impl Painter {
         n
     }
 
-    fn scale(&self, size: f32) -> f32 {
-        size / font().units_per_em().unwrap_or(1000.0)
-    }
-
     /// Largeur du texte en pixels.
     fn text_width(&self, s: &str, size: f32) -> f32 {
-        let f = font();
-        let k = self.scale(size);
-        let mut x = 0.0;
-        let mut prev = None;
-        for ch in s.chars() {
-            let id = f.glyph_id(ch);
-            if let Some(p) = prev {
-                x += f.kern_unscaled(p, id) * k;
-            }
-            x += f.h_advance_unscaled(id) * k;
-            prev = Some(id);
-        }
-        x
+        text_width(s, size)
     }
 
     /// Contours du texte, ligne de base en (x, y).
     fn text_path(&self, s: &str, x: f32, y: f32, size: f32) -> Option<Path> {
-        let f = font();
-        let k = self.scale(size);
         let mut pb = PathBuilder::new();
         let mut caret = x;
         let mut prev = None;
         for ch in s.chars() {
+            let f = font_for(ch);
+            let k = scale(f, size);
             let id = f.glyph_id(ch);
-            if let Some(p) = prev {
+            if let Some((pf, p)) = prev
+                && std::ptr::eq(pf, f)
+            {
                 caret += f.kern_unscaled(p, id) * k;
             }
             if let Some(outline) = f.outline(id) {
@@ -227,7 +214,7 @@ impl Painter {
                 }
             }
             caret += f.h_advance_unscaled(id) * k;
-            prev = Some(id);
+            prev = Some((f, id));
         }
         pb.finish()
     }
@@ -588,6 +575,29 @@ impl Painter {
                 let d = std::f32::consts::FRAC_1_SQRT_2;
                 self.label_beside(&s, (x, y), (d, -d), r + self.halo, size, color);
             }
+            Shape::Text { p, text } => {
+                let (x, y) = p32(*p);
+                if text.is_empty() {
+                    self.handle(*p, color);
+                } else {
+                    self.label(text, x, y, size, color);
+                }
+            }
+            Shape::Arrow { a, b, text } => {
+                let (pa, pb_) = (p32(*a), p32(*b));
+                if let Some((shaft, head)) = arrow_paths(pa, pb_, self.line) {
+                    self.outlined(&shaft, color);
+                    self.stroke(&head, SHADOW, 2.0 * self.halo);
+                    self.fill(&head, rgb(color, 255));
+                }
+                if !text.is_empty() {
+                    // À la base, du côté opposé à la pointe.
+                    let (dx, dy) = (pa.0 - pb_.0, pa.1 - pb_.1);
+                    let l = dx.hypot(dy);
+                    let n = if l > 1e-6 { (dx / l, dy / l) } else { (0.0, -1.0) };
+                    self.label_beside(text, pa, n, gap, size, color);
+                }
+            }
         }
     }
 
@@ -625,6 +635,29 @@ impl Painter {
     }
 }
 
+fn scale(f: &ab_glyph::FontRef<'static>, size: f32) -> f32 {
+    size / f.units_per_em().unwrap_or(1000.0)
+}
+
+/// Largeur d'un texte en pixels (une ligne), polices de repli comprises.
+pub(crate) fn text_width(s: &str, size: f32) -> f32 {
+    let mut x = 0.0;
+    let mut prev: Option<(&ab_glyph::FontRef<'static>, ab_glyph::GlyphId)> = None;
+    for ch in s.chars() {
+        let f = font_for(ch);
+        let k = scale(f, size);
+        let id = f.glyph_id(ch);
+        if let Some((pf, p)) = prev
+            && std::ptr::eq(pf, f)
+        {
+            x += f.kern_unscaled(p, id) * k;
+        }
+        x += f.h_advance_unscaled(id) * k;
+        prev = Some((f, id));
+    }
+    x
+}
+
 /// Parties à ajouter au segment `p0→p1` pour qu'il atteigne les points
 /// `reach` (pris sur sa droite).
 fn extensions(p0: (f32, f32), p1: (f32, f32), reach: &[(f32, f32)]) -> Vec<((f32, f32), (f32, f32))> {
@@ -646,6 +679,37 @@ fn extensions(p0: (f32, f32), p1: (f32, f32), reach: &[(f32, f32)]) -> Vec<((f32
         v.push((p1, at(hi)));
     }
     v
+}
+
+/// Géométrie d'une flèche : longueur de la pointe et ses trois sommets
+/// (pointe, puis les deux coins de la base), pour un trait d'épaisseur `line`.
+pub(crate) fn arrow_head(a: (f32, f32), b: (f32, f32), line: f32) -> Option<(f32, [(f32, f32); 3])> {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len = dx.hypot(dy);
+    if len < 1e-6 {
+        return None;
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let head = (line * 5.0 + 4.0).min(len * 0.6);
+    let (bx, by) = (b.0 - ux * head, b.1 - uy * head);
+    let w = head * 0.45;
+    Some((head, [b, (bx - uy * w, by + ux * w), (bx + uy * w, by - ux * w)]))
+}
+
+/// Trait (arrêté dans la pointe) et pointe pleine d'une flèche.
+fn arrow_paths(a: (f32, f32), b: (f32, f32), line: f32) -> Option<(Path, Path)> {
+    let (head, tri) = arrow_head(a, b, line)?;
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len = dx.hypot(dy);
+    let mut shaft = PathBuilder::new();
+    shaft.move_to(a.0, a.1);
+    shaft.line_to(b.0 - dx / len * head * 0.5, b.1 - dy / len * head * 0.5);
+    let mut tip = PathBuilder::new();
+    tip.move_to(tri[0].0, tri[0].1);
+    tip.line_to(tri[1].0, tri[1].1);
+    tip.line_to(tri[2].0, tri[2].1);
+    tip.close();
+    Some((shaft.finish()?, tip.finish()?))
 }
 
 fn polyline(pts: &[Pt], closed: bool) -> Option<Path> {
@@ -731,8 +795,8 @@ mod tests {
     #[test]
     fn font_has_needed_glyphs() {
         meteroscope_i18n::set_language("fr");
-        let f = font();
-        for ch in ['°', '²', 'µ', '×', ',', '0', 'é'] {
+        let f = &fonts::main().font;
+        for ch in ['°', '²', 'µ', '×', ',', '0', 'é', 'ł', 'ã', 'ß', 'ñ'] {
             assert_ne!(f.glyph_id(ch).0, 0, "glyphe manquant : {ch}");
         }
     }
@@ -761,6 +825,26 @@ mod tests {
                 .filter(|&(x, y)| out.get_pixel(x, y).0 == [255, 255, 255, 255])
                 .count();
             assert!(white > 50);
+        }
+    }
+
+    #[test]
+    fn annotations_drawn() {
+        meteroscope_i18n::set_language("fr");
+        let img = RgbaImage::from_pixel(640, 480, Rgba([90, 90, 90, 255]));
+        let mut doc = Document::new();
+        doc.add(Shape::Arrow { a: Pt::new(50., 400.), b: Pt::new(300., 400.), text: "base".into() });
+        doc.add(Shape::Text { p: Pt::new(400., 100.), text: "Fissure 裂缝 균열".into() });
+        let out = render_annotated(&img, &doc);
+        assert_eq!(&out.get_pixel(150, 400).0[..3], &doc.measurements[0].color[..]);
+        // Texte : fond d'étiquette sombre et pixels blancs (le texte) autour du point.
+        let white = (330..470u32).flat_map(|x| (85..115u32).map(move |y| (x, y)))
+            .filter(|&(x, y)| out.get_pixel(x, y).0[0] > 200 && out.get_pixel(x, y).0[1] > 200)
+            .count();
+        assert!(white > 30, "{white}");
+        // Les idéogrammes ont des contours (repli sur une police du système).
+        if fonts::index_for('裂') != 0 {
+            assert!(text_width("裂缝", 20.0) > 30.0);
         }
     }
 

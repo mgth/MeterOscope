@@ -48,10 +48,14 @@ pub enum ShapeKind {
     /// Profil d'intensité : largeur entre deux bords détectés au sous-pixel
     /// le long d'un segment (voir [`crate::profile`]).
     Profile,
+    /// Annotation : texte libre posé sur l'image (pas une mesure).
+    Text,
+    /// Annotation : flèche, avec un texte facultatif à sa base (pas une mesure).
+    Arrow,
 }
 
 impl ShapeKind {
-    pub const ALL: [ShapeKind; 15] = [
+    pub const ALL: [ShapeKind; 17] = [
         ShapeKind::Length,
         ShapeKind::Path,
         ShapeKind::Angle,
@@ -67,7 +71,14 @@ impl ShapeKind {
         ShapeKind::Ellipse,
         ShapeKind::Arc,
         ShapeKind::Profile,
+        ShapeKind::Text,
+        ShapeKind::Arrow,
     ];
+
+    /// Annotation (texte, flèche) : ni valeurs, ni statistiques, ni ligne au CSV.
+    pub fn is_annotation(self) -> bool {
+        matches!(self, ShapeKind::Text | ShapeKind::Arrow)
+    }
 
     /// Type de la mesure produite par ce tracé (Rect3 → Rect).
     pub fn produces(self) -> ShapeKind {
@@ -95,6 +106,8 @@ impl ShapeKind {
             ShapeKind::Ellipse => tr!("shape.ellipse"),
             ShapeKind::Arc => tr!("shape.arc"),
             ShapeKind::Profile => tr!("shape.profile"),
+            ShapeKind::Text => tr!("shape.text"),
+            ShapeKind::Arrow => tr!("shape.arrow"),
         }
     }
 
@@ -102,10 +115,10 @@ impl ShapeKind {
     /// terminé par double-clic / Entrée).
     pub fn point_count(self) -> Option<usize> {
         match self {
-            ShapeKind::Length | ShapeKind::Rect | ShapeKind::Circle | ShapeKind::Profile => Some(2),
+            ShapeKind::Length | ShapeKind::Rect | ShapeKind::Circle | ShapeKind::Profile | ShapeKind::Arrow => Some(2),
             ShapeKind::Angle | ShapeKind::Circle3 | ShapeKind::Rect3 => Some(3),
+            ShapeKind::Marker | ShapeKind::Text => Some(1),
             ShapeKind::PointLine | ShapeKind::Parallel | ShapeKind::Ellipse | ShapeKind::Arc => Some(3),
-            ShapeKind::Marker => Some(1),
             ShapeKind::LineAngle => Some(4),
             ShapeKind::Path | ShapeKind::Area => None,
         }
@@ -183,6 +196,15 @@ pub enum Shape {
         #[serde(default)]
         result: Option<crate::profile::ProfileResult>,
     },
+    /// Annotation : texte (une ou plusieurs lignes) centré sur `p`.
+    Text { p: Pt, text: String },
+    /// Annotation : flèche de la base `a` vers la pointe `b`, texte facultatif à la base.
+    Arrow {
+        a: Pt,
+        b: Pt,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        text: String,
+    },
 }
 
 impl Shape {
@@ -215,6 +237,8 @@ impl Shape {
             }
             ShapeKind::Arc => Shape::Arc { a: p[0], m: p[1], b: p[2] },
             ShapeKind::Profile => Shape::profile(p[0], p[1]),
+            ShapeKind::Text => Shape::Text { p: p[0], text: String::new() },
+            ShapeKind::Arrow => Shape::Arrow { a: p[0], b: p[1], text: String::new() },
         })
     }
 
@@ -234,18 +258,20 @@ impl Shape {
             Shape::Ellipse { .. } => ShapeKind::Ellipse,
             Shape::Arc { .. } => ShapeKind::Arc,
             Shape::Profile { .. } => ShapeKind::Profile,
+            Shape::Text { .. } => ShapeKind::Text,
+            Shape::Arrow { .. } => ShapeKind::Arrow,
         }
     }
 
     /// Points de contrôle (poignées), dans l'ordre de saisie.
     pub fn points(&self) -> Vec<Pt> {
         match self {
-            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } => vec![*a, *b],
+            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } | Shape::Arrow { a, b, .. } => vec![*a, *b],
             Shape::Path { pts } | Shape::Area { pts } => pts.clone(),
             Shape::Angle { a, vertex, b } => vec![*a, *vertex, *b],
             Shape::Circle { center, edge } => vec![*center, *edge],
             Shape::Circle3 { a, b, c } => vec![*a, *b, *c],
-            Shape::Marker { p } => vec![*p],
+            Shape::Marker { p } | Shape::Text { p, .. } => vec![*p],
             Shape::LineAngle { a, b, c, d } => vec![*a, *b, *c, *d],
             Shape::PointLine { a, b, p } | Shape::Parallel { a, b, p } => vec![*a, *b, *p],
             Shape::Ellipse { center, a, b } => vec![*center, *a, *b],
@@ -256,12 +282,12 @@ impl Shape {
     /// Accès mutable aux points de contrôle, même ordre que [`Shape::points`].
     pub fn points_mut(&mut self) -> Vec<&mut Pt> {
         match self {
-            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } => vec![a, b],
+            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } | Shape::Arrow { a, b, .. } => vec![a, b],
             Shape::Path { pts } | Shape::Area { pts } => pts.iter_mut().collect(),
             Shape::Angle { a, vertex, b } => vec![a, vertex, b],
             Shape::Circle { center, edge } => vec![center, edge],
             Shape::Circle3 { a, b, c } => vec![a, b, c],
-            Shape::Marker { p } => vec![p],
+            Shape::Marker { p } | Shape::Text { p, .. } => vec![p],
             Shape::LineAngle { a, b, c, d } => vec![a, b, c, d],
             Shape::PointLine { a, b, p } | Shape::Parallel { a, b, p } => vec![a, b, p],
             Shape::Ellipse { center, a, b } => vec![center, a, b],
@@ -321,6 +347,22 @@ impl Shape {
         }
     }
 
+    /// Texte d'une annotation (vide pour une flèche sans texte), `None` pour une mesure.
+    pub fn annotation_text(&self) -> Option<&str> {
+        match self {
+            Shape::Text { text, .. } | Shape::Arrow { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+
+    /// Accès mutable au texte d'une annotation.
+    pub fn annotation_text_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Shape::Text { text, .. } | Shape::Arrow { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+
     /// Valeurs mesurées, converties selon l'étalonnage. La première est la
     /// valeur principale (celle affichée sur l'image).
     pub fn values(&self, cal: &Calibration) -> Vec<Value> {
@@ -355,7 +397,7 @@ impl Shape {
                 ],
                 None => vec![],
             },
-            Shape::Marker { .. } => vec![],
+            Shape::Marker { .. } | Shape::Text { .. } | Shape::Arrow { .. } => vec![],
             Shape::LineAngle { a, b, c, d } => vec![Value {
                 quantity: Quantity::Angle,
                 value: geo::line_angle_deg(*a, *b, *c, *d),
@@ -499,6 +541,9 @@ pub struct Measurement {
     pub shape: Shape,
     pub color: [u8; 3],
     pub visible: bool,
+    /// Groupe (nom libre ; vide : sans groupe).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
 }
 
 #[cfg(test)]
@@ -555,6 +600,28 @@ mod tests {
             let s = Shape::from_points(k, &pts).unwrap();
             assert_eq!((s.kind(), s.points()), (k, pts));
         }
+    }
+
+    #[test]
+    fn annotations() {
+        meteroscope_i18n::set_language("fr");
+        let cal = Calibration::default();
+        let t = Shape::Text { p: Pt::new(1., 2.), text: "Fissure — 裂缝".to_owned() };
+        let a = Shape::Arrow { a: Pt::new(0., 0.), b: Pt::new(10., 5.), text: String::new() };
+        assert!(t.values(&cal).is_empty() && a.values(&cal).is_empty());
+        assert!(t.kind().is_annotation() && a.kind().is_annotation() && !ShapeKind::Marker.is_annotation());
+        assert_eq!(t.annotation_text(), Some("Fissure — 裂缝"));
+        assert_eq!(Shape::Marker { p: Pt::default() }.annotation_text(), None);
+        // Aller-retour JSON ; le texte vide d'une flèche n'est pas écrit.
+        for s in [&t, &a] {
+            let json = serde_json::to_string(s).unwrap();
+            assert_eq!(&serde_json::from_str::<Shape>(&json).unwrap(), s);
+        }
+        assert!(!serde_json::to_string(&a).unwrap().contains("text"));
+        let mut b = a.clone();
+        *b.annotation_text_mut().unwrap() = "ici".to_owned();
+        b.translate(1., 1.);
+        assert_eq!(b, Shape::Arrow { a: Pt::new(1., 1.), b: Pt::new(11., 6.), text: "ici".to_owned() });
     }
 
     #[test]

@@ -9,7 +9,7 @@ use egui::{
 use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
-pub const TOOLS: [Tool; 19] = [
+pub const TOOLS: [Tool; 21] = [
     Tool::Select,
     Tool::Calibrate,
     Tool::Straighten,
@@ -29,6 +29,8 @@ pub const TOOLS: [Tool; 19] = [
     Tool::Draw(ShapeKind::Circle3),
     Tool::Draw(ShapeKind::Arc),
     Tool::Draw(ShapeKind::Marker),
+    Tool::Draw(ShapeKind::Text),
+    Tool::Draw(ShapeKind::Arrow),
 ];
 
 /// Groupe d'outils semblables : un seul bouton dans la palette, qui montre
@@ -52,7 +54,7 @@ impl ToolGroup {
 
 /// Groupes de la palette, dans l'ordre ; ensemble, ils reprennent
 /// exactement [`TOOLS`].
-pub const GROUPS: [ToolGroup; 7] = [
+pub const GROUPS: [ToolGroup; 8] = [
     ToolGroup { label: None, tools: &[Tool::Select] },
     ToolGroup { label: Some(|| tr!("tool_group.reference")), tools: &[Tool::Calibrate, Tool::Straighten, Tool::Perspective] },
     ToolGroup {
@@ -83,6 +85,10 @@ pub const GROUPS: [ToolGroup; 7] = [
         tools: &[Tool::Draw(ShapeKind::Circle), Tool::Draw(ShapeKind::Circle3), Tool::Draw(ShapeKind::Arc)],
     },
     ToolGroup { label: None, tools: &[Tool::Draw(ShapeKind::Marker)] },
+    ToolGroup {
+        label: Some(|| tr!("tool_group.annotations")),
+        tools: &[Tool::Draw(ShapeKind::Text), Tool::Draw(ShapeKind::Arrow)],
+    },
 ];
 
 /// Groupe qui contient `tool`.
@@ -140,6 +146,8 @@ pub fn tool_description(tool: Tool) -> &'static str {
             ShapeKind::Ellipse => tr!("tool_help.ellipse"),
             ShapeKind::Arc => tr!("tool_help.arc"),
             ShapeKind::Profile => tr!("tool_help.profile"),
+            ShapeKind::Text => tr!("tool_help.text"),
+            ShapeKind::Arrow => tr!("tool_help.arrow"),
         },
     }
 }
@@ -152,6 +160,7 @@ pub fn tool_description(tool: Tool) -> &'static str {
 /// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur ·
 /// D Distance point-droite · G écart (« Gap ») entre parallèles · V ellipse (oVale) · U arc (en U).
 /// W profil d'intensité (« Width », largeur d'un trait).
+/// X teXte · F Flèche.
 pub fn tool_shortcut(tool: Tool) -> Option<Key> {
     Some(match tool {
         Tool::Select => Key::S,
@@ -174,6 +183,8 @@ pub fn tool_shortcut(tool: Tool) -> Option<Key> {
             ShapeKind::Ellipse => Key::V,
             ShapeKind::Arc => Key::U,
             ShapeKind::Profile => Key::W,
+            ShapeKind::Text => Key::X,
+            ShapeKind::Arrow => Key::F,
         },
     })
 }
@@ -371,7 +382,7 @@ mod tests {
             assert_eq!(k.name().len(), 1, "{k:?} n'est pas une lettre");
             assert!(k.name().chars().all(|c| c.is_ascii_uppercase()));
         }
-        assert_eq!(seen.len(), 19);
+        assert_eq!(seen.len(), 21);
     }
 
     #[test]

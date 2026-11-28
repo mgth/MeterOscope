@@ -479,11 +479,11 @@ mod tests {
         let vide = doc(&[], Some((10.0, "mm")));
         let images = [("a.jpg".to_owned(), &a), ("vide.jpg".to_owned(), &vide), ("b; 2.jpg".to_owned(), &b)];
         let expected = "\u{feff}\
-Image;Nom;Type;Longueur (mm);Angle (°);Aire (mm²);Périmètre (mm);Largeur (mm);Hauteur (mm);Diamètre (mm);Rayon (mm);Distance (mm);Grand axe (mm);Petit axe (mm);Longueur d'arc (mm);Corde (mm);X (px);Y (px)\r\n\
-a.jpg;Longueur 1;Longueur;5;;;;;;;;;;;;;;\r\n\
-a.jpg;Longueur 2;Longueur;10;;;;;;;;;;;;;;\r\n\
-\"b; 2.jpg\";Longueur 1;Longueur;15;;;;;;;;;;;;;;\r\n\
-\"b; 2.jpg\";Marqueur 1;Marqueur;;;;;;;;;;;;;;3;4\r\n\
+Image;Nom;Type;Longueur (mm);Angle (°);Aire (mm²);Périmètre (mm);Largeur (mm);Hauteur (mm);Diamètre (mm);Rayon (mm);Distance (mm);Grand axe (mm);Petit axe (mm);Longueur d'arc (mm);Corde (mm);X (px);Y (px);Groupe\r\n\
+a.jpg;Longueur 1;Longueur;5;;;;;;;;;;;;;;;\r\n\
+a.jpg;Longueur 2;Longueur;10;;;;;;;;;;;;;;;\r\n\
+\"b; 2.jpg\";Longueur 1;Longueur;15;;;;;;;;;;;;;;;\r\n\
+\"b; 2.jpg\";Marqueur 1;Marqueur;;;;;;;;;;;;;;3;4;\r\n\
 \r\n\
 Statistiques;Grandeur;Unité;n;Moyenne;Écart-type;Min;Max\r\n\
 Longueur;Longueur;mm;3;10;5;5;15\r\n\
@@ -494,7 +494,7 @@ Nombre d'images;3\r\n\
         assert_eq!(series_csv_string(&images), expected);
         let t = series_clipboard_table(&images);
         assert_eq!(t.lines().count(), 5);
-        assert_eq!(t.lines().nth(1).unwrap(), "a.jpg\tLongueur 1\tLongueur\t5\t\t\t\t\t\t\t\t\t\t\t\t\t\t");
+        assert_eq!(t.lines().nth(1).unwrap(), "a.jpg\tLongueur 1\tLongueur\t5\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t");
     }
 
     #[test]
@@ -505,9 +505,9 @@ Nombre d'images;3\r\n\
         let images = [("a.jpg".to_owned(), &a), ("b.jpg".to_owned(), &b)];
         let s = series_csv_string(&images);
         let lines: Vec<&str> = s.trim_start_matches('\u{feff}').split("\r\n").collect();
-        assert_eq!(lines[0], "Image;Unité;Nom;Type;Longueur;Angle (°);Aire;Périmètre;Largeur;Hauteur;Diamètre;Rayon;Distance;Grand axe;Petit axe;Longueur d'arc;Corde;X (px);Y (px)");
-        assert_eq!(lines[1], "a.jpg;mm;Longueur 1;Longueur;5;;;;;;;;;;;;;;");
-        assert_eq!(lines[2], "b.jpg;px;Longueur 1;Longueur;50;;;;;;;;;;;;;;");
+        assert_eq!(lines[0], "Image;Unité;Nom;Type;Longueur;Angle (°);Aire;Périmètre;Largeur;Hauteur;Diamètre;Rayon;Distance;Grand axe;Petit axe;Longueur d'arc;Corde;X (px);Y (px);Groupe");
+        assert_eq!(lines[1], "a.jpg;mm;Longueur 1;Longueur;5;;;;;;;;;;;;;;;");
+        assert_eq!(lines[2], "b.jpg;px;Longueur 1;Longueur;50;;;;;;;;;;;;;;;");
         // Une ligne de statistiques par unité, une ligne d'échelle par image.
         assert!(s.contains("Longueur;Longueur;mm;1;5;0;5;5\r\nLongueur;Longueur;px;1;50;0;50;50\r\n"));
         assert!(s.ends_with("Échelle;a.jpg;0,1;mm/px\r\nÉchelle;b.jpg;non étalonnée (mesures en pixels)\r\n"));
