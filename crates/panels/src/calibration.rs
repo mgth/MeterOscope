@@ -102,6 +102,16 @@ impl CalibrationDialog {
         &self.unit
     }
 
+    /// Propose `unit` à la prochaine ouverture (unité retenue d'un lancement
+    /// à l'autre). Une unité vide est ignorée.
+    pub fn set_unit(&mut self, unit: &str) {
+        let unit = unit.trim();
+        if !unit.is_empty() {
+            self.custom_unit = !UNITS.contains(&unit);
+            self.unit = unit.to_owned();
+        }
+    }
+
     /// Ferme la boîte sans rien appliquer.
     pub fn cancel(&mut self) {
         self.px_len = None;
@@ -301,5 +311,16 @@ mod tests {
 
         doc.undo();
         assert!(!doc.calibration.is_calibrated());
+    }
+
+    #[test]
+    fn unite_retenue() {
+        let mut dlg = CalibrationDialog::default();
+        dlg.set_unit("  ");
+        assert_eq!(dlg.unit(), "mm", "unité vide ignorée");
+        dlg.set_unit("cm");
+        assert_eq!((dlg.unit(), dlg.custom_unit), ("cm", false));
+        dlg.set_unit(" pouce ");
+        assert_eq!((dlg.unit(), dlg.custom_unit), ("pouce", true));
     }
 }

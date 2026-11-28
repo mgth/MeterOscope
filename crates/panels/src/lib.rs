@@ -10,11 +10,12 @@ mod group_ui;
 mod icons;
 mod list;
 mod palette;
+mod presets;
 
 pub use calibration::{CalibrationDialog, CalibrationInput, UNITS, read_calibration_input};
 pub use format::{format_significant, parse_number, scale_texts, scale_texts_raw};
 pub use icons::paint_tool_icon;
-pub use list::{measurements_panel, selection};
+pub use list::{measurements_panel, measurements_panel_with_presets, selection};
 pub use palette::{TOOLS, tool_description, tool_name, tool_palette, tool_shortcut, tool_tooltip};
 
 /// Actions demandées depuis le panneau des mesures.
@@ -26,4 +27,7 @@ pub struct PanelOutput {
     pub copy_table: bool,
     /// Exporter en CSV.
     pub export_csv: bool,
+    /// Les préréglages d'échelle ou l'option « garder l'échelle » ont changé
+    /// (à enregistrer).
+    pub presets_changed: bool,
 }

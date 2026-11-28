@@ -11,7 +11,7 @@ use egui::{
     Modifiers, Sense, Stroke, TextEdit, Ui, UiBuilder, Vec2, vec2,
 };
 use meteroscope_core::measure::format_number;
-use meteroscope_core::{Document, Measurement, PALETTE, Quantity, Shape, ShapeKind, Stats};
+use meteroscope_core::{Document, Measurement, PALETTE, Quantity, ScalePresets, Shape, ShapeKind, Stats};
 
 const ROW_H: f32 = 30.0;
 const ICON_BTN: f32 = 22.0;
@@ -84,12 +84,23 @@ fn rgb(c: [u8; 3]) -> Color32 {
 /// renommage, couleur, visibilité, suppression), valeurs de la mesure
 /// sélectionnée, statistiques par type.
 pub fn measurements_panel(ui: &mut Ui, doc: &mut Document) -> PanelOutput {
+    panel(ui, doc, None)
+}
+
+/// Comme [`measurements_panel`], avec le menu des préréglages d'échelle dans
+/// la carte Échelle. `PanelOutput::presets_changed` signale qu'il faut
+/// enregistrer `presets`.
+pub fn measurements_panel_with_presets(ui: &mut Ui, doc: &mut Document, presets: &mut ScalePresets) -> PanelOutput {
+    panel(ui, doc, Some(presets))
+}
+
+fn panel(ui: &mut Ui, doc: &mut Document, presets: Option<&mut ScalePresets>) -> PanelOutput {
     let mut out = PanelOutput::default();
     let state_id = ui.scope_id().with("meteroscope_panneau_mesures");
     let mut st: ListState = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
 
     ui.add_space(6.0);
-    scale_card(ui, doc, &mut out);
+    scale_card(ui, doc, presets, &mut out);
     ui.add_space(10.0);
 
     let groups = doc.groups();
@@ -168,10 +179,17 @@ pub fn measurements_panel(ui: &mut Ui, doc: &mut Document) -> PanelOutput {
 }
 
 /// Carte « Échelle » en tête du panneau.
-fn scale_card(ui: &mut Ui, doc: &mut Document, out: &mut PanelOutput) {
+fn scale_card(ui: &mut Ui, doc: &mut Document, mut presets: Option<&mut ScalePresets>, out: &mut PanelOutput) {
     Frame::group(ui.style()).inner_margin(10.0).corner_radius(6.0).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.label(RichText::new(tr!("panel.scale")).strong());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(tr!("panel.scale")).strong());
+            if let Some(presets) = presets.as_deref_mut() {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    out.presets_changed |= crate::presets::presets_menu(ui, doc, presets);
+                });
+            }
+        });
         ui.add_space(2.0);
         match doc.calibration.scale.clone() {
             None => {
@@ -194,6 +212,9 @@ fn scale_card(ui: &mut Ui, doc: &mut Document, out: &mut PanelOutput) {
                 let (main, inverse) = scale_texts(&scale);
                 ui.label(RichText::new(main).size(15.0).strong());
                 ui.label(RichText::new(inverse).weak());
+                if let Some(p) = presets.as_deref().and_then(|p| p.matching(&scale)) {
+                    ui.label(RichText::new(tr!("presets.current", name = p.name)).weak().italics());
+                }
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if ui.button(tr!("panel.scale_change")).on_hover_text(tr!("panel.scale_change_tip")).clicked() {
@@ -644,7 +665,7 @@ fn color_choice(ui: &mut Ui, color: Color32, current: bool, index: usize) -> egu
 }
 
 /// Petit bouton carré avec icône dessinée.
-fn icon_button(
+pub(crate) fn icon_button(
     ui: &mut Ui,
     label: &str,
     paint: impl FnOnce(&egui::Painter, Rect, Color32),

@@ -3,8 +3,8 @@
 use egui::Key;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use meteroscope_core::{Document, Pt, Shape, ShapeKind, Tool};
-use meteroscope_panels::{CalibrationDialog, PanelOutput, measurements_panel, tool_palette};
+use meteroscope_core::{Document, Pt, Scale, ScalePresets, Shape, ShapeKind, Tool};
+use meteroscope_panels::{CalibrationDialog, PanelOutput, measurements_panel, measurements_panel_with_presets, tool_palette};
 
 fn length(x: f64) -> Shape {
     Shape::Length { a: Pt::new(0.0, 0.0), b: Pt::new(x, 0.0) }
@@ -295,4 +295,99 @@ fn selection_multiple_groupe_et_suppression() {
     assert!(harness.state().doc.measurements.is_empty());
     assert!(harness.state_mut().doc.undo());
     assert_eq!(harness.state().doc.measurements.len(), 3);
+}
+
+struct PresetState {
+    doc: Document,
+    presets: ScalePresets,
+    changed: usize,
+}
+
+fn presets_harness(doc: Document, presets: ScalePresets) -> Harness<'static, PresetState> {
+    Harness::builder().with_size(egui::vec2(420.0, 700.0)).with_step_dt(0.05).build_ui_state(
+        |ui, st: &mut PresetState| {
+            let out = measurements_panel_with_presets(ui, &mut st.doc, &mut st.presets);
+            if out.presets_changed {
+                st.changed += 1;
+            }
+        },
+        PresetState { doc, presets, changed: 0 },
+    )
+}
+
+fn mm(k: f64) -> Scale {
+    Scale { units_per_px: k, unit: "mm".to_owned() }
+}
+
+#[test]
+fn prereglage_applique_en_un_clic_puis_annule() {
+    meteroscope_i18n::set_language("fr");
+    let mut presets = ScalePresets::default();
+    presets.save("objectif ×10", &mm(0.01));
+    presets.save("caméra atelier", &mm(0.2));
+    let mut harness = presets_harness(Document::new(), presets);
+    harness.run();
+    harness.get_by_label("Préréglages").click();
+    harness.run();
+    harness.get_by_label("caméra atelier").click();
+    harness.run();
+    let st = harness.state();
+    assert_eq!(st.doc.calibration.scale, Some(mm(0.2)));
+    assert_eq!(st.changed, 0, "appliquer ne modifie pas la liste");
+    // La carte rappelle le nom du préréglage reconnu.
+    harness.get_by_label("Préréglage : caméra atelier");
+    harness.state_mut().doc.undo();
+    harness.run();
+    assert!(!harness.state().doc.calibration.is_calibrated());
+}
+
+#[test]
+fn prereglage_enregistre_renomme_supprime() {
+    meteroscope_i18n::set_language("fr");
+    let mut doc = Document::new();
+    doc.calibration.set_from_reference(100.0, 10.0, "mm");
+    let mut harness = presets_harness(doc, ScalePresets::default());
+    harness.run();
+    harness.get_by_label("Préréglages").click();
+    harness.run();
+    harness.get_by_label("Aucun préréglage enregistré.");
+
+    // Enregistrer : taper un nom puis Entrée.
+    harness.get_by_role(egui::Role::TextInput).click();
+    harness.run();
+    harness.get_by_role(egui::Role::TextInput).type_text("objectif ×10");
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    {
+        let st = harness.state();
+        assert_eq!(st.presets.presets.len(), 1);
+        assert_eq!(st.presets.presets[0].name, "objectif ×10");
+        assert_eq!(st.presets.presets[0].scale, mm(0.1));
+        assert!(st.changed >= 1);
+        assert!(!st.doc.can_undo(), "enregistrer ne touche pas au document");
+    }
+
+    // Renommer : crayon, nouveau nom, Entrée.
+    harness.get_by_label("Renommer").click();
+    harness.run();
+    harness.run();
+    let changed = harness.state().changed;
+    let field = harness.get_all_by_role(egui::Role::TextInput).next().unwrap();
+    field.type_text(" Nikon");
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert_eq!(harness.state().presets.presets[0].name, "objectif ×10 Nikon");
+    assert!(harness.state().changed > changed);
+
+    // Option « garder l'échelle ».
+    harness.get_by_label("Garder l'échelle pour l'image suivante").click();
+    harness.run();
+    assert!(harness.state().presets.keep_scale);
+
+    // Supprimer.
+    harness.get_by_label("Supprimer ce préréglage").click();
+    harness.run();
+    assert!(harness.state().presets.presets.is_empty());
 }

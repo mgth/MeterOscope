@@ -318,6 +318,18 @@ impl Canvas {
                 (ShapeKind::LineAngle, 1) => tr!("hint.line_angle.first_end"),
                 (ShapeKind::LineAngle, 2) => tr!("hint.line_angle.second"),
                 (ShapeKind::LineAngle, _) => tr!("hint.line_angle.second_end"),
+                (ShapeKind::PointLine, 0) => tr!("hint.point_line.first"),
+                (ShapeKind::PointLine, 1) => tr!("hint.point_line.second"),
+                (ShapeKind::PointLine, _) => tr!("hint.point_line.point"),
+                (ShapeKind::Parallel, 0) => tr!("hint.parallel.first"),
+                (ShapeKind::Parallel, 1) => tr!("hint.parallel.second"),
+                (ShapeKind::Parallel, _) => tr!("hint.parallel.point"),
+                (ShapeKind::Ellipse, 0) => tr!("hint.ellipse.center"),
+                (ShapeKind::Ellipse, 1) => tr!("hint.ellipse.axis"),
+                (ShapeKind::Ellipse, _) => tr!("hint.ellipse.width"),
+                (ShapeKind::Arc, 0) => tr!("hint.arc.first"),
+                (ShapeKind::Arc, 1) => tr!("hint.arc.middle"),
+                (ShapeKind::Arc, _) => tr!("hint.arc.last"),
                 (ShapeKind::Text, _) => tr!("hint.text"),
                 (ShapeKind::Arrow, 0) => tr!("hint.arrow.base"),
                 (ShapeKind::Arrow, _) => tr!("hint.arrow.tip"),
@@ -487,8 +499,8 @@ impl Canvas {
                 });
             } else if let Some(Gesture { kind: GestureKind::Handle(id, i), dragged: true, .. }) = &self.gesture
                 && let Some(m) = doc.get(*id)
-                // Pas de loupe pour la rotation d'un rectangle : la position exacte n'y compte pas.
-                && !(matches!(m.shape, Shape::Rect { .. }) && *i == edit::ROTATE_HANDLE)
+                // Pas de loupe pour une rotation : la position exacte n'y compte pas.
+                && !edit::is_rotate_handle(&m.shape, *i)
             {
                 let hp = edit::handles(&m.shape, xf.img_len(ROTATE_GAP))[*i];
                 let color = render::color32(m.color);
@@ -779,8 +791,8 @@ impl Canvas {
             let gap = xf.img_len(ROTATE_GAP);
             let mut hs = edit::handles(&m.shape, gap);
             if let Some((base, h)) = edit::rotate_handle(&m.shape, gap) {
-                hs.truncate(edit::ROTATE_HANDLE);
-                render::paint_rotate_handle(p, xf.to_screen(base), xf.to_screen(h), hot == Some(edit::ROTATE_HANDLE));
+                hs.pop();
+                render::paint_rotate_handle(p, xf.to_screen(base), xf.to_screen(h), hot == Some(hs.len()));
             }
             render::paint_handles(p, xf, &hs, hot);
         }

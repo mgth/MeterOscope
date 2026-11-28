@@ -15,6 +15,7 @@ use crate::render::{arrow_head, text_width};
 use crate::upright::{Frame, upright_document};
 use anyhow::{Context, Result};
 use image::RgbaImage;
+use meteroscope_core::geometry as geo;
 use meteroscope_core::{Document, Measurement, Pt, Shape};
 use std::f32::consts::PI;
 use std::fmt::Write as _;
@@ -241,6 +242,21 @@ impl Svg {
         self.stroke(d, &hex(color), 1.0, self.line * 0.6, &extra);
     }
 
+    /// Trait fin (symbole d'angle droit) avec contour sombre.
+    fn thin(&mut self, d: &D, color: [u8; 3]) {
+        self.stroke(d, SHADOW.0, SHADOW.1, self.line * 0.6 + 2.0 * self.halo, "");
+        self.stroke(d, &hex(color), 1.0, self.line * 0.6, "");
+    }
+
+    /// Petite croix (centre d'ellipse ou d'arc). Renvoie sa demi-taille.
+    fn cross(&mut self, c: (f32, f32), color: [u8; 3]) -> f32 {
+        let t = self.line * 3.0;
+        let mut d = D::default();
+        d.m((c.0 - t, c.1)).l((c.0 + t, c.1)).m((c.0, c.1 - t)).l((c.0, c.1 + t));
+        self.outlined(&d, color);
+        t
+    }
+
     fn arc(&mut self, v: (f32, f32), r: f32, t0: f32, sweep: f32, color: [u8; 3]) {
         let steps = 48;
         let pts: Vec<(f32, f32)> = (0..=steps)
@@ -396,6 +412,89 @@ impl Svg {
                     if !matches!(shape, Shape::Circle { center, .. } if *center == p) {
                         self.handle(p32(p), color);
                     }
+                }
+            }
+            Shape::PointLine { a, b, p } => {
+                let (foot, t) = geo::foot_on_line(*p, *a, *b);
+                let (pa, pb, pp, pf) = (p32(*a), p32(*b), p32(*p), p32(foot));
+                // Droite prolongée en pointillés jusqu'au pied de la perpendiculaire.
+                let mut ext = D::default();
+                for (e0, e1) in extensions(pa, pb, &[pf]) {
+                    ext.m(e0).l(e1);
+                }
+                if !ext.0.is_empty() {
+                    self.dashed(&ext, color);
+                }
+                self.outlined(&D::poly(&[pa, pb], false), color);
+                // Symbole d'angle droit, un côté vers le segment, l'autre vers le point.
+                let k = self.line * 4.0;
+                let along = if t > 0.5 { *a } else { *b };
+                let (lu, lw) = (foot.dist(along), foot.dist(*p));
+                if lu > 0.0 && lw > k as f64 {
+                    let u = ((along.x - foot.x) / lu * k as f64, (along.y - foot.y) / lu * k as f64);
+                    let w = ((p.x - foot.x) / lw * k as f64, (p.y - foot.y) / lw * k as f64);
+                    let corner = [foot.offset(u.0, u.1), foot.offset(u.0 + w.0, u.1 + w.1), foot.offset(w.0, w.1)].map(p32);
+                    self.thin(&D::poly(&corner, false), color);
+                }
+                let nn = self.segment(pf, pp, color);
+                for q in [pa, pb, pp] {
+                    self.handle(q, color);
+                }
+                if let Some(s) = main {
+                    let mid = ((pf.0 + pp.0) / 2.0, (pf.1 + pp.1) / 2.0);
+                    self.label_beside(&s, mid, nn, gap + self.line * 3.0, size, color);
+                }
+            }
+            Shape::Parallel { a, b, p } => {
+                let (start, end, c0, c1) = geo::parallel_through(*a, *b, *p);
+                for line in [[*a, *b], [start, end]] {
+                    self.outlined(&D::poly(&line.map(p32), false), color);
+                }
+                let (q0, q1) = (p32(c0), p32(c1));
+                let nn = self.segment(q0, q1, color);
+                for q in [*a, *b, *p] {
+                    self.handle(p32(q), color);
+                }
+                if let Some(s) = main {
+                    let mid = ((q0.0 + q1.0) / 2.0, (q0.1 + q1.1) / 2.0);
+                    self.label_beside(&s, mid, nn, gap + self.line * 3.0, size, color);
+                }
+            }
+            Shape::Ellipse { center, a, b } => {
+                let pts: Vec<(f32, f32)> = geo::ellipse_outline(*center, *a, *b, 180).into_iter().map(p32).collect();
+                let d = D::poly(&pts, true);
+                self.fill(&d, &hex(color), 35.0 / 255.0);
+                self.outlined(&d, color);
+                let c = p32(*center);
+                let t = self.cross(c, color);
+                let mut axes = D::default();
+                axes.m(c).l(p32(*a)).m(c).l(p32(*b));
+                self.dashed(&axes, color);
+                if let Some(s) = main {
+                    self.label_beside(&s, c, (0.0, -1.0), gap + t, size, color);
+                }
+            }
+            Shape::Arc { a, m, b } => {
+                match geo::arc_from_3_points(*a, *m, *b) {
+                    Some(arc) => {
+                        let pts: Vec<(f32, f32)> = (0..=180).map(|i| p32(arc.point(i as f64 / 180.0))).collect();
+                        let (mid, c) = (p32(arc.point(0.5)), p32(arc.center));
+                        // Rayon en pointillés du milieu de l'arc vers le centre.
+                        let mut r = D::default();
+                        r.m(mid).l(c);
+                        self.dashed(&r, color);
+                        self.cross(c, color);
+                        self.outlined(&D::poly(&pts, false), color);
+                        if let Some(s) = main {
+                            let (dx, dy) = (mid.0 - c.0, mid.1 - c.1);
+                            let l = dx.hypot(dy).max(1e-6);
+                            self.label_beside(&s, mid, (dx / l, dy / l), gap, size, color);
+                        }
+                    }
+                    None => self.outlined(&D::poly(&[p32(*a), p32(*m), p32(*b)], false), color),
+                }
+                for q in [*a, *m, *b] {
+                    self.handle(p32(q), color);
                 }
             }
             Shape::Marker { p } => {

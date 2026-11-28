@@ -8,10 +8,13 @@ impl MeterOscopeApp {
     /// Image annotée en SVG. `linked` : l'image de fond est liée (son fichier
     /// tel qu'il est sur le disque) au lieu d'être intégrée.
     pub(super) fn export_svg(&mut self, linked: bool) {
-        let Some(img) = &self.image else { return };
+        if self.image.is_none() {
+            return;
+        }
         let Some(path) = self.save_dialog(tr!("dialog.export_svg"), tr!("file.measurements_suffix"), "svg") else {
             return;
         };
+        let Some(img) = &self.image else { return };
         let base = io::adjust(img, self.brightness, self.contrast);
         let background = match (&self.image_path, linked) {
             (Some(src), true) => io::SvgBackground::Linked(io::link_href(src, &path)),
@@ -23,10 +26,13 @@ impl MeterOscopeApp {
 
     /// Rapport PDF (A4).
     pub(super) fn export_pdf(&mut self) {
-        let Some(img) = &self.image else { return };
+        if self.image.is_none() {
+            return;
+        }
         let Some(path) = self.save_dialog(tr!("dialog.export_pdf"), tr!("file.report_suffix"), "pdf") else {
             return;
         };
+        let Some(img) = &self.image else { return };
         let base = io::adjust(img, self.brightness, self.contrast);
         let info = io::ReportInfo {
             title: tr!("report.title").to_owned(),

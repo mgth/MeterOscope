@@ -135,3 +135,25 @@ fn pdf_cjk_demo() {
     export_pdf(&photo(640, 480), &doc, RotationFilter::Bicubic, &info, &std::path::Path::new(&dir).join("rapport-ja.pdf")).unwrap();
     meteroscope_i18n::set_language("fr");
 }
+
+#[test]
+fn svg_nouvelles_formes() {
+    meteroscope_i18n::set_language("fr");
+    let img = photo(640, 480);
+    let mut doc = Document::new();
+    doc.add(Shape::PointLine { a: Pt::new(50., 100.), b: Pt::new(150., 100.), p: Pt::new(250., 40.) });
+    doc.add(Shape::Parallel { a: Pt::new(50., 200.), b: Pt::new(150., 200.), p: Pt::new(60., 260.) });
+    doc.add(Shape::Ellipse { center: Pt::new(450., 120.), a: Pt::new(550., 120.), b: Pt::new(450., 80.) });
+    doc.add(Shape::Arc { a: Pt::new(350., 400.), m: Pt::new(450., 300.), b: Pt::new(550., 400.) });
+    let svg = svg_string(&img, &doc, &SvgBackground::None).unwrap();
+    let x = roxmltree::Document::parse(&svg).expect("XML bien formé");
+    // Une étiquette (texte) et au moins un tracé par forme.
+    for m in &doc.measurements {
+        let g = x.descendants().find(|n| n.attribute("id") == Some(format!("m{}", m.id).as_str())).unwrap();
+        assert!(g.descendants().any(|n| n.has_tag_name("path")) && g.descendants().any(|n| n.has_tag_name("text")));
+    }
+    if let Some(dir) = std::env::var_os("METEROSCOPE_REPORT_DEMO") {
+        std::fs::write(std::path::Path::new(&dir).join("nouvelles-formes.svg"), &svg).unwrap();
+        meteroscope_io::render_annotated(&img, &doc).save(std::path::Path::new(&dir).join("nouvelles-formes.png")).unwrap();
+    }
+}
