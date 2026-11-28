@@ -198,3 +198,62 @@ fn un_projet_rouvert_n_ecrase_aucun_fichier_existant() {
     assert!(app.write_project(&capture));
     assert_eq!(app.image_path.as_deref(), Some(dir.0.join("capture.png").as_path()));
 }
+
+#[test]
+fn enregistrer_sous_ne_touche_pas_l_image_du_premier_projet() {
+    meteroscope_i18n::set_language("fr");
+    let ctx = egui::Context::default();
+    let dir = TestDir::new("enregistrer_sous");
+    let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
+    let image_of = |project: &std::path::Path| io::load_image(io::load_project(project).unwrap().image_path.as_deref().unwrap()).unwrap();
+
+    // Image collée (sans fichier), retournée, enregistrée dans A.
+    let mut app = MeterOscopeApp::blank();
+    app.set_image(&ctx, photo(), None);
+    app.transform(io::Transform::FlipHorizontal);
+    assert!(app.write_project(&a));
+    let mirrored = image::imageops::flip_horizontal(&photo());
+    assert_eq!(image_of(&a), mirrored);
+
+    // Quart de tour, puis « Enregistrer sous » B dans le même dossier.
+    app.transform(io::Transform::RotateRight);
+    assert!(app.write_project(&b));
+    let turned = image::imageops::rotate90(&mirrored);
+    assert_eq!(image_of(&b), turned);
+    assert_eq!(image_of(&a), mirrored, "l'image du projet A a été réécrite");
+    assert_ne!(io::load_project(&a).unwrap().image_path, io::load_project(&b).unwrap().image_path);
+
+    // B enregistré de nouveau après une autre transformation : son propre fichier, réécrit.
+    app.transform(io::Transform::FlipVertical);
+    assert!(app.write_project(&b));
+    assert_eq!(image_of(&b), image::imageops::flip_vertical(&turned));
+    assert_eq!(image_of(&a), mirrored);
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 4, "deux projets, deux images");
+
+    // « Enregistrer sous » d'abord, transformation ensuite : A reste intact aussi.
+    let dir = TestDir::new("enregistrer_sous_puis_transformer");
+    let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
+    let mut app = MeterOscopeApp::blank();
+    app.set_image(&ctx, photo(), None);
+    assert!(app.write_project(&a));
+    assert!(app.write_project(&b));
+    // Sans changement, les deux projets partagent le même fichier image.
+    assert_eq!(io::load_project(&a).unwrap().image_path, io::load_project(&b).unwrap().image_path);
+    app.transform(io::Transform::RotateLeft);
+    assert!(app.write_project(&b));
+    assert_eq!(image_of(&a), photo(), "l'image du projet A a été réécrite");
+    assert_eq!(image_of(&b), image::imageops::rotate270(&photo()));
+
+    // Fichier partagé par deux projets : réenregistrer sous A après une
+    // transformation ne le réécrit pas non plus sous les pieds de B.
+    let dir = TestDir::new("fichier_partage");
+    let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
+    let mut app = MeterOscopeApp::blank();
+    app.set_image(&ctx, photo(), None);
+    assert!(app.write_project(&a));
+    assert!(app.write_project(&b));
+    app.transform(io::Transform::FlipHorizontal);
+    assert!(app.write_project(&a));
+    assert_eq!(image_of(&b), photo(), "l'image partagée avec B a été réécrite");
+    assert_eq!(image_of(&a), image::imageops::flip_horizontal(&photo()));
+}

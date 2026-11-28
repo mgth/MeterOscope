@@ -57,9 +57,10 @@ pub struct MeterOscopeApp {
     /// Calcul qui a échoué : on ne le relance pas, l'aperçu GPU reste.
     failed: Option<(u64, TexKey)>,
     image_path: Option<PathBuf>,
-    /// Fichier image que cette session a écrit pour le projet (image sans
-    /// fichier, ou transformée) : le seul qu'un enregistrement peut réécrire.
-    owned_image: Option<PathBuf>,
+    /// Fichier image que cette session a écrit (image sans fichier, ou
+    /// transformée) et projet auquel il appartient : le seul fichier qu'un
+    /// enregistrement peut réécrire, et seulement pour ce projet.
+    owned_image: Option<(PathBuf, PathBuf)>,
     project_path: Option<PathBuf>,
     /// Révision du document au dernier enregistrement.
     saved_revision: u64,
@@ -588,11 +589,12 @@ impl MeterOscopeApp {
     /// Fichier où écrire l'image mesurée quand elle n'a pas de fichier
     /// identique (capture, image collée, pivotée ou retournée). Jamais un
     /// fichier existant, la photo d'origine en premier lieu : on reprend le
-    /// fichier que cette session a déjà écrit pour cette image à côté du
-    /// projet, sinon le premier nom libre.
+    /// fichier que cette session a déjà écrit pour ce même projet, sinon le
+    /// premier nom libre. « Enregistrer sous » un autre projet lui réserve
+    /// donc son propre fichier, sans toucher à celui du premier.
     fn image_file_for(&self, project: &Path) -> PathBuf {
-        if let Some(own) = self.owned_image.as_ref().filter(|p| p.parent() == project.parent()) {
-            return own.clone();
+        if let Some((image, _)) = self.owned_image.as_ref().filter(|(_, owner)| owner == project) {
+            return image.clone();
         }
         let stem = project.file_stem().map_or_else(|| self.default_stem(), |s| s.to_string_lossy().into_owned());
         let named = |suffix: &str| project.with_file_name(format!("{stem}{suffix}.png"));
@@ -616,9 +618,13 @@ impl MeterOscopeApp {
             if self.report(r, "").is_none() {
                 return false;
             }
-            self.owned_image = Some(png.clone());
+            self.owned_image = Some((png.clone(), path.to_owned()));
             self.image_path = Some(png);
             self.file_orientation = self.applied;
+        } else if self.owned_image.as_ref().is_some_and(|(image, owner)| owner != path && Some(image) == self.image_path.as_ref()) {
+            // Un autre projet va référencer ce fichier tel quel : désormais
+            // partagé, il ne sera plus réécrit pour aucun des deux.
+            self.owned_image = None;
         }
         let project = io::Project { image_path: self.image_path.clone(), document: self.doc.clone() };
         if self.report(io::save_project(&project, path), tr!("msg.project_saved")).is_none() {

@@ -18,8 +18,8 @@ const LIMIT: usize = 4;
 pub struct Workspace {
     pub image: std::sync::Arc<RgbaImage>,
     pub image_path: Option<PathBuf>,
-    /// Fichier image écrit par la session pour le projet (réutilisable).
-    pub owned_image: Option<PathBuf>,
+    /// Fichier image écrit par la session, et projet auquel il appartient.
+    pub owned_image: Option<(PathBuf, PathBuf)>,
     /// Orientation des pixels de `image`, et celle du fichier `image_path`.
     pub applied: meteroscope_core::Orientation,
     pub file_orientation: meteroscope_core::Orientation,
