@@ -93,6 +93,16 @@ fn is_project(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(io::PROJECT_EXTENSION))
 }
 
+/// Premier nom libre parmi `base` + `tail`, puis `base-2` + `tail`,
+/// `base-3` + `tail`… `free` dit si un nom est disponible.
+fn free_name(base: &str, tail: &str, free: impl Fn(&str) -> bool) -> String {
+    let first = format!("{base}{tail}");
+    if free(&first) {
+        return first;
+    }
+    (2u32..).map(|k| format!("{base}-{k}{tail}")).find(|name| free(name)).unwrap_or(first)
+}
+
 fn placeholder(size: Option<(u32, u32)>) -> RgbaImage {
     let (w, h) = size.unwrap_or(PLACEHOLDER);
     RgbaImage::from_pixel(w.max(1), h.max(1), image::Rgba([72, 72, 78, 255]))
@@ -434,6 +444,9 @@ impl MeterOscopeApp {
         let active = self.series.model.active();
         let stem = path.file_stem().map_or_else(|| "projet".to_owned(), |s| s.to_string_lossy().into_owned());
         let mut failure: Option<anyhow::Error> = None;
+        // Fichiers à ne jamais écraser : les sources de toutes les images.
+        let mut reserved: HashSet<PathBuf> = self.series.model.entries().iter().filter_map(|e| e.path.clone()).collect();
+        reserved.extend(self.image_path.clone());
         for i in 0..n {
             let entry = &self.series.model.entries()[i];
             let (id, entry_path) = (entry.id(), entry.path.clone());
@@ -442,11 +455,15 @@ impl MeterOscopeApp {
             if x.missing || !(current.is_none() || modified) {
                 continue;
             }
-            let mut png = if n == 1 { path.with_extension("png") } else { path.with_file_name(format!("{stem}-{:02}.png", i + 1)) };
-            if current.as_deref() == Some(png.as_path()) {
-                let name = png.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                png = path.with_file_name(format!("{name}-image.png"));
-            }
+            // Nom libre : ni la source d'une image de la série (même pas
+            // encore traitée), ni un fichier déjà présent, ni un nom déjà
+            // attribué pendant cet enregistrement.
+            let base = if n == 1 { stem.clone() } else { format!("{stem}-{:02}", i + 1) };
+            let png = path.with_file_name(free_name(&base, ".png", |name| {
+                let candidate = path.with_file_name(name);
+                !reserved.contains(&candidate) && !candidate.exists()
+            }));
+            reserved.insert(png.clone());
             let loaded;
             let img = if i == active {
                 self.image.as_ref()
@@ -582,11 +599,8 @@ impl MeterOscopeApp {
             };
             let Some(source) = source else { continue };
             let stem = e.path.as_ref().and_then(|p| p.file_stem()).map_or_else(|| format!("capture-{:02}", i + 1), |s| s.to_string_lossy().into_owned());
-            let mut name = format!("{stem}{suffix}.png");
-            if !used.insert(name.clone()) {
-                name = format!("{stem}-{:02}{suffix}.png", i + 1);
-                used.insert(name.clone());
-            }
+            let name = free_name(&stem, &format!("{suffix}.png"), |name| !used.contains(name));
+            used.insert(name.clone());
             items.push((source, doc.clone(), dir.join(name)));
         }
         let total = items.len();
@@ -939,4 +953,32 @@ fn scale_options(ui: &mut Ui, m: &Series, active: usize) -> Option<Act> {
         act = Some(Act::Linked(active, !own));
     }
     act
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Trois images de même nom de base, dont une qui porte déjà le nom de
+    /// repli d'une autre : trois sorties distinctes.
+    #[test]
+    fn free_names_never_collide() {
+        let mut used = HashSet::new();
+        let mut out = vec![];
+        for stem in ["a-2", "a", "a", "a", "a-2"] {
+            let name = free_name(stem, "-mesures.png", |n| !used.contains(n));
+            assert!(used.insert(name.clone()), "{name} attribué deux fois");
+            out.push(name);
+        }
+        assert_eq!(out, ["a-2-mesures.png", "a-mesures.png", "a-3-mesures.png", "a-4-mesures.png", "a-2-2-mesures.png"]);
+    }
+
+    /// Une capture en première position ne prend pas le nom d'une photo
+    /// d'origine placée plus loin dans la série.
+    #[test]
+    fn free_name_skips_reserved_sources() {
+        let reserved: HashSet<PathBuf> = [PathBuf::from("/d/lot-01.png")].into();
+        let name = free_name("lot-01", ".png", |n| !reserved.contains(&Path::new("/d").join(n)));
+        assert_eq!(name, "lot-01-2.png");
+    }
 }
