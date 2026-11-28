@@ -41,9 +41,13 @@ pub struct MeterOscopeApp {
     contrast: f32,
     canvas: Canvas,
     calibration: CalibrationDialog,
+    /// Préréglages d'échelle et option « garder l'échelle pour l'image suivante ».
+    scale_presets: meteroscope_core::ScalePresets,
     mode: Mode,
     camera: CameraView,
     toast: Option<(String, bool, Instant)>,
+    /// Réglages retenus d'un lancement à l'autre (récents, unité, décimales).
+    settings: crate::settings::Settings,
 }
 
 struct Straight {
@@ -59,6 +63,10 @@ const CTRL_SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND };
 impl MeterOscopeApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         let mut app = Self::blank();
+        meteroscope_core::measure::set_decimals(app.settings.decimals);
+        if let Some(u) = &app.settings.calibration_unit {
+            app.calibration.set_unit(u);
+        }
         if let Some(p) = initial {
             app.open_path(&cc.egui_ctx, &p);
         }
@@ -82,9 +90,11 @@ impl MeterOscopeApp {
             contrast: 0.0,
             canvas: Canvas::default(),
             calibration: CalibrationDialog::default(),
+            scale_presets: crate::prefs::load_scale_presets(),
             mode: Mode::Image,
             camera: CameraView::default(),
             toast: None,
+            settings: crate::settings::Settings::load(),
         }
     }
 
@@ -186,7 +196,8 @@ impl MeterOscopeApp {
         }
     }
 
-    /// Installe une nouvelle image avec un document vierge.
+    /// Installe une nouvelle image avec un document vierge (qui garde
+    /// l'échelle en cours si l'option est cochée).
     fn set_image(&mut self, ctx: &egui::Context, img: RgbaImage, path: Option<PathBuf>) {
         // D'abord rendre à l'image son document, pour ne pas écraser celui du flux.
         self.mode_image();
@@ -195,7 +206,9 @@ impl MeterOscopeApp {
         self.image_path = path;
         self.image_modified = false;
         self.project_path = None;
+        let calibration = self.scale_presets.next_calibration(&self.doc.calibration);
         self.doc = Document::new();
+        self.doc.calibration = calibration;
         self.saved_revision = 0;
         self.brightness = 0.0;
         self.contrast = 0.0;
@@ -234,15 +247,21 @@ impl MeterOscopeApp {
             self.doc = project.document;
             self.saved_revision = self.doc.revision();
             self.project_path = Some(path.to_owned());
+            self.settings.add_recent(path);
         } else if let Some(img) = self.report(io::load_image(path), "") {
             self.set_image(ctx, img, Some(path.to_owned()));
+            self.settings.add_recent(path);
         }
     }
 
     fn open_dialog(&mut self, ctx: &egui::Context) {
         let mut all: Vec<&str> = io::IMAGE_EXTENSIONS.to_vec();
         all.push(io::PROJECT_EXTENSION);
-        let picked = rfd::FileDialog::new()
+        let mut dialog = rfd::FileDialog::new();
+        if let Some(dir) = self.settings.dialog_dir() {
+            dialog = dialog.set_directory(dir);
+        }
+        let picked = dialog
             .set_title(tr!("dialog.open_title"))
             .add_filter(tr!("dialog.filter_images"), &all)
             .add_filter(tr!("dialog.filter_all"), &["*"])
@@ -259,15 +278,20 @@ impl MeterOscopeApp {
             .map_or_else(|| "capture".to_owned(), |s| s.to_string_lossy().into_owned())
     }
 
-    fn save_dialog(&self, title: &str, suffix: &str, ext: &str) -> Option<PathBuf> {
+    /// Demande où enregistrer, dans le dernier dossier utilisé (sinon celui de l'image).
+    fn save_dialog(&mut self, title: &str, suffix: &str, ext: &str) -> Option<PathBuf> {
         let mut d = rfd::FileDialog::new()
             .set_title(title)
             .set_file_name(format!("{}{suffix}.{ext}", self.default_stem()))
             .add_filter(ext.to_uppercase(), &[ext]);
-        if let Some(dir) = self.image_path.as_ref().and_then(|p| p.parent()) {
+        if let Some(dir) = self.settings.dialog_dir().or(self.image_path.as_ref().and_then(|p| p.parent())) {
             d = d.set_directory(dir);
         }
-        d.save_file()
+        let picked = d.save_file();
+        if let Some(p) = &picked {
+            self.settings.set_last_dir_of(p);
+        }
+        picked
     }
 
     /// Enregistre le projet (mesures). Une capture caméra sans fichier est
@@ -300,6 +324,7 @@ impl MeterOscopeApp {
         let project = io::Project { image_path: self.image_path.clone(), document: self.doc.clone() };
         if self.report(io::save_project(&project, &path), tr!("msg.project_saved")).is_some() {
             self.saved_revision = self.doc.revision();
+            self.settings.add_recent(&path);
             self.project_path = Some(path);
         }
     }
@@ -312,8 +337,11 @@ impl MeterOscopeApp {
     }
 
     fn export_image(&mut self) {
-        let Some(img) = &self.image else { return };
+        if self.image.is_none() {
+            return;
+        }
         if let Some(p) = self.save_dialog(tr!("dialog.export_image"), tr!("file.measurements_suffix"), "png") {
+            let Some(img) = &self.image else { return };
             let base = io::adjust(img, self.brightness, self.contrast);
             let r = io::save_image(&io::render_annotated(&base, &self.doc), &p);
             self.report(r, tr!("msg.image_exported"));
@@ -402,6 +430,9 @@ impl MeterOscopeApp {
             ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
             if ui.button(format!("📂  {}", tr!("toolbar.open"))).on_hover_text(tr!("toolbar.open_tip")).clicked() {
                 self.open_dialog(&ctx);
+            }
+            if let Some(p) = crate::settings::recent_menu(ui, &mut self.settings) {
+                self.open_path(&ctx, &p);
             }
             if ui.selectable_label(self.mode == Mode::Camera, format!("📷  {}", tr!("toolbar.camera"))).on_hover_text(tr!("toolbar.camera_tip")).clicked() {
                 self.toggle_camera(&ctx);
@@ -514,6 +545,7 @@ impl MeterOscopeApp {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 crate::language::selector(ui);
+                crate::settings::decimals_selector(ui, &mut self.settings);
                 ui.separator();
                 if let Some(img) = self.image.as_ref().filter(|_| self.mode == Mode::Image) {
                     ui.label(format!("{} × {} px", img.width(), img.height()));
@@ -552,6 +584,9 @@ impl MeterOscopeApp {
             }
             ui.add_space(16.0);
             ui.weak(tr!("welcome.drop"));
+            if let Some(p) = crate::settings::welcome_recent(ui, &self.settings) {
+                self.open_path(&ctx, &p);
+            }
         });
     }
 }
@@ -568,6 +603,11 @@ fn filter_texts(f: io::RotationFilter) -> (&'static str, &'static str) {
 }
 
 impl eframe::App for MeterOscopeApp {
+    /// Seule la fenêtre est retenue par eframe, pas l'état des widgets.
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
@@ -599,7 +639,10 @@ impl eframe::App for MeterOscopeApp {
                 }
             });
             egui::Panel::right("measurements").default_size(300.0).show(ui, |ui| {
-                let out = meteroscope_panels::measurements_panel(ui, &mut self.doc);
+                let out = meteroscope_panels::measurements_panel_with_presets(ui, &mut self.doc, &mut self.scale_presets);
+                if out.presets_changed {
+                    crate::prefs::save_scale_presets(&self.scale_presets);
+                }
                 if out.start_calibration {
                     self.canvas.set_tool(Tool::Calibrate);
                 }
@@ -636,6 +679,7 @@ impl eframe::App for MeterOscopeApp {
 
         if self.calibration.show(&ctx, &mut self.doc) {
             self.canvas.set_tool(Tool::Select);
+            self.settings.set_calibration_unit(self.calibration.unit());
         }
 
         // Titre de fenêtre.

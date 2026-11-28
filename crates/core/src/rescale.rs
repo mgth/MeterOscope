@@ -55,13 +55,31 @@ pub fn rescale(doc: &mut Document, from: (u32, u32), to: (u32, u32)) -> Rescale 
 /// Taille d'image à laquelle se rapportent les coordonnées d'un document
 /// dont la source change de résolution (flux caméra). Après une
 /// incompatibilité de rapport d'aspect, la taille de référence est gardée
-/// tant que le document n'est pas modifié : revenir à une résolution
-/// compatible avec elle remet mesures et échelle en place.
+/// tant que la géométrie du document (points, échelle) ne change pas — un
+/// nom, une couleur ou une visibilité n'y comptent pas : revenir à une
+/// résolution compatible avec elle remet mesures et échelle en place.
 #[derive(Clone, Debug, Default)]
 pub struct Reference {
     size: Option<(u32, u32)>,
-    /// Taille incompatible affichée, et révision du document à ce moment.
-    mismatch: Option<((u32, u32), u64)>,
+    /// Taille incompatible affichée, et géométrie du document à ce moment.
+    mismatch: Option<((u32, u32), Geometry)>,
+}
+
+/// Ce qui dépend de la résolution dans un document : points de chaque
+/// mesure et échelle (un angle de rectangle n'en dépend pas).
+#[derive(Clone, Debug, PartialEq)]
+struct Geometry {
+    points: Vec<(u64, Vec<crate::Pt>)>,
+    units_per_px: Option<f64>,
+}
+
+impl Geometry {
+    fn of(doc: &Document) -> Self {
+        Self {
+            points: doc.measurements.iter().map(|m| (m.id, m.shape.points())).collect(),
+            units_per_px: doc.calibration.scale.as_ref().map(|s| s.units_per_px),
+        }
+    }
 }
 
 impl Reference {
@@ -72,10 +90,11 @@ impl Reference {
 
     /// L'image vaut désormais `size` : adapte le document (voir [`rescale`]).
     pub fn follow(&mut self, doc: &mut Document, size: (u32, u32)) -> Rescale {
-        // Document modifié pendant l'incompatibilité : il se rapporte
-        // désormais à la taille qui était affichée.
-        if let Some((shown, rev)) = self.mismatch.take()
-            && doc.revision() != rev
+        // Géométrie modifiée pendant l'incompatibilité (mesure posée ou
+        // déplacée, échelle redéfinie) : elle se rapporte désormais à la
+        // taille qui était affichée.
+        if let Some((shown, geo)) = self.mismatch.take()
+            && Geometry::of(doc) != geo
         {
             self.size = Some(shown);
         }
@@ -86,7 +105,7 @@ impl Reference {
         let r = rescale(doc, from, size);
         let empty = doc.measurements.is_empty() && !doc.calibration.is_calibrated();
         if r == Rescale::Mismatch && !empty {
-            self.mismatch = Some((size, doc.revision()));
+            self.mismatch = Some((size, Geometry::of(doc)));
         } else {
             self.size = Some(size);
         }
@@ -169,6 +188,24 @@ mod tests {
         assert_eq!(r.follow(&mut d, (640, 360)), Rescale::Scaled(0.5));
         assert!(matches!(d.get(id).unwrap().shape, Shape::Marker { p } if p == Pt::new(320.0, 180.0)));
         assert_eq!(r.size(), Some((640, 360)));
+    }
+
+    #[test]
+    fn renommer_ne_change_pas_la_reference() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = Document::new();
+        let id = d.add(Shape::Marker { p: Pt::new(640.0, 360.0) });
+        let mut r = Reference::default();
+        r.follow(&mut d, (1280, 720));
+        assert_eq!(r.follow(&mut d, (640, 480)), Rescale::Mismatch);
+        // Nom, couleur, visibilité : révision changée, géométrie identique.
+        d.checkpoint();
+        let m = d.get_mut(id).unwrap();
+        m.name = "Repère".into();
+        m.color = [1, 2, 3];
+        m.visible = false;
+        assert_eq!(r.follow(&mut d, (640, 360)), Rescale::Scaled(0.5));
+        assert!(matches!(d.get(id).unwrap().shape, Shape::Marker { p } if p == Pt::new(320.0, 180.0)));
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod calibration;
 pub mod document;
 pub mod geometry;
 pub mod measure;
+pub mod presets;
 pub mod rescale;
 pub mod stats;
 
@@ -14,4 +15,5 @@ pub use calibration::{Calibration, Scale};
 pub use document::Document;
 pub use geometry::Pt;
 pub use measure::{Measurement, Quantity, Shape, ShapeKind, Tool, Value, PALETTE};
+pub use presets::{ScalePreset, ScalePresets};
 pub use stats::Stats;
