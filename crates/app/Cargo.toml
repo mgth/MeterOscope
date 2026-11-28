@@ -13,12 +13,14 @@ meteroscope-io.workspace = true
 meteroscope-canvas.workspace = true
 meteroscope-panels.workspace = true
 egui.workspace = true
-eframe.workspace = true
+# « persistence » : taille et position de la fenêtre retenues.
+eframe = { workspace = true, features = ["persistence"] }
 image.workspace = true
 rfd.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 dirs = "6"
+serde.workspace = true
 # Lecture du presse-papiers (image, liste de fichiers) ; déjà tiré par egui-winit.
 arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
 
