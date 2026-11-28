@@ -119,6 +119,9 @@ pub struct Canvas {
     rotation: f64,
     /// La texture fournie est déjà pivotée : taille de sa boîte (pixels image).
     baked: Option<Vec2>,
+    /// Calque posé sur l'image (aperçu de détection) : texture et rectangle
+    /// couvert, en pixels image `[x0, y0, x1, y1]`.
+    overlay: Option<(egui::TextureId, [f64; 4])>,
     draft: Draft,
     /// Dernier segment d'étalonnage tracé (affiché tant que l'outil Échelle est actif).
     calib_seg: Option<(Pt, Pt)>,
@@ -143,6 +146,7 @@ impl Default for Canvas {
             img_size: Vec2::ZERO,
             rotation: 0.0,
             baked: None,
+            overlay: None,
             draft: Draft::new(ShapeKind::Length),
             calib_seg: None,
             gesture: None,
@@ -195,6 +199,12 @@ impl Canvas {
     /// de l'image d'origine. `None` : texture droite, pivotée à l'affichage.
     pub fn set_baked(&mut self, size: Option<Vec2>) {
         self.baked = size;
+    }
+
+    /// Calque semi-transparent affiché sur l'image, sous les mesures
+    /// (`rect` en pixels image `[x0, y0, x1, y1]`) ; `None` l'enlève.
+    pub fn set_overlay(&mut self, overlay: Option<(egui::TextureId, [f64; 4])>) {
+        self.overlay = overlay;
     }
 
     /// Ajuste l'image à la vue à la prochaine frame.
@@ -439,6 +449,9 @@ impl Canvas {
         let outline = render::image_outline(xf, [w, h]);
         painter.add(egui::Shape::convex_polygon(outline, Color32::from_gray(10), Stroke::new(1.0, Color32::from_gray(10))));
         render::paint_image(&painter, tex.id(), [w, h], xf, self.baked);
+        if let Some((id, r)) = self.overlay {
+            render::paint_overlay(&painter, id, r, xf);
+        }
         self.paint_measurements(&painter, xf, doc);
 
         // Aperçu du tracé (le point sous le curseur suit la contrainte Maj).

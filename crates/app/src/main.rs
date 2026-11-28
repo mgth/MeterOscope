@@ -3,6 +3,7 @@
 
 mod app;
 mod camera_view;
+mod detect_view;
 mod language;
 mod prefs;
 

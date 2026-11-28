@@ -2,6 +2,7 @@
 
 use meteroscope_i18n::tr;
 use crate::camera_view::CameraView;
+use crate::detect_view::DetectView;
 use egui::{Align, Color32, ColorImage, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextureHandle, TextureOptions, Ui};
 use image::RgbaImage;
 use meteroscope_canvas::Canvas;
@@ -41,6 +42,7 @@ pub struct MeterOscopeApp {
     calibration: CalibrationDialog,
     mode: Mode,
     camera: CameraView,
+    detect: DetectView,
     toast: Option<(String, bool, Instant)>,
 }
 
@@ -73,6 +75,7 @@ impl MeterOscopeApp {
             calibration: CalibrationDialog::default(),
             mode: Mode::Image,
             camera: CameraView::default(),
+            detect: DetectView::default(),
             toast: None,
         };
         if let Some(p) = initial {
@@ -183,6 +186,7 @@ impl MeterOscopeApp {
     fn set_image(&mut self, ctx: &egui::Context, img: RgbaImage, path: Option<PathBuf>) {
         self.image = Some(img);
         self.straight = None;
+        self.detect.invalidate();
         self.image_path = path;
         self.image_modified = false;
         self.project_path = None;
@@ -313,6 +317,7 @@ impl MeterOscopeApp {
         if let Some(img) = &self.image {
             self.image = Some(io::apply_transform(img, &mut self.doc, t));
             self.straight = None;
+            self.detect.invalidate();
             self.image_modified = true;
             self.canvas.fit();
             self.refresh_texture(ctx);
@@ -466,6 +471,10 @@ impl MeterOscopeApp {
                         self.refresh_texture(&ctx);
                     }
                 });
+                let detect = ui.selectable_label(self.detect.is_open(), format!("🔍  {}", tr!("toolbar.detect")));
+                if detect.on_hover_text(tr!("toolbar.detect_tip")).clicked() {
+                    self.detect.toggle();
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("1:1").on_hover_text(tr!("zoom.actual_tip")).clicked() {
                         self.canvas.zoom_actual();
@@ -596,6 +605,11 @@ impl eframe::App for MeterOscopeApp {
                     self.export_csv();
                 }
             });
+        }
+
+        let image = self.image.as_ref().filter(|_| self.mode == Mode::Image);
+        if let Some((msg, err)) = self.detect.frame(&ctx, image, &mut self.doc, &mut self.canvas) {
+            if err { self.error(msg) } else { self.info(msg) }
         }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match self.mode {

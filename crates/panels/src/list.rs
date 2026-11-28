@@ -168,8 +168,15 @@ fn measurement_row(
     selection_changed: bool,
     actions: &mut Vec<(u64, RowAction)>,
 ) {
-    let Some(m) = doc.get(id) else { return };
     let selected = doc.selected == Some(id);
+    // Ligne hors de la zone visible (longues listes, p. ex. après une
+    // détection) : on réserve sa place sans la dessiner.
+    let row_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), ROW_H));
+    if !selected && !ui.is_rect_visible(row_rect) {
+        ui.allocate_space(row_rect.size());
+        return;
+    }
+    let Some(m) = doc.get(id) else { return };
     let visuals = ui.visuals().clone();
     let (rect, row) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
     row.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &m.name));
