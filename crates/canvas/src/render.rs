@@ -24,25 +24,34 @@ pub fn color32(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
 
+/// Épaisseur du halo sombre sous un trait de largeur `width` : 2,5 px de plus
+/// jusqu'aux traits de 3 px (la mesure sélectionnée à l'épaisseur par défaut),
+/// puis proportionnelle à la largeur.
+fn halo(width: f32) -> f32 {
+    width + 2.5 * (width / 3.0).max(1.0)
+}
+
 /// Ligne (ouverte ou fermée) avec halo sombre.
 pub fn outlined(p: &Painter, pts: Vec<Pos2>, closed: bool, color: Color32, width: f32) {
     if pts.len() < 2 {
         return;
     }
     let mk = |s: Stroke| if closed { EShape::closed_line(pts.clone(), s) } else { EShape::line(pts.clone(), s) };
-    p.add(mk(Stroke::new(width + 2.5, HALO)));
+    p.add(mk(Stroke::new(halo(width), HALO)));
     p.add(mk(Stroke::new(width, color)));
 }
 
 fn circle_outlined(p: &Painter, c: Pos2, r: f32, color: Color32, width: f32) {
-    p.circle_stroke(c, r, Stroke::new(width + 2.5, HALO));
+    p.circle_stroke(c, r, Stroke::new(halo(width), HALO));
     p.circle_stroke(c, r, Stroke::new(width, color));
 }
 
-/// Petit point (sommet posé).
-pub fn dot(p: &Painter, c: Pos2, color: Color32) {
-    p.circle_filled(c, 3.5, HALO);
-    p.circle_filled(c, 2.2, color);
+/// Petit point (sommet posé) sur un trait de largeur `width` : grossit avec
+/// les traits épais pour rester visible, comme le halo.
+pub fn dot(p: &Painter, c: Pos2, color: Color32, width: f32) {
+    let k = (width / 3.0).max(1.0);
+    p.circle_filled(c, 3.5 * k, HALO);
+    p.circle_filled(c, 2.2 * k, color);
 }
 
 /// Petite croix (centre de cercle).
@@ -313,8 +322,8 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
                 }
             }
             outlined(p, vec![sa, sb], false, color, width * 0.75);
-            dot(p, sa, color);
-            dot(p, sb, color);
+            dot(p, sa, color, width);
+            dot(p, sb, color, width);
             // Un trait en travers sur chaque bord détecté.
             let t = profile_tick(shape, xf);
             for e in shape.profile_edges().into_iter().flatten() {
@@ -344,14 +353,14 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
         Shape::Path { pts } => {
             outlined(p, pts.iter().map(|q| s(*q)).collect(), false, color, width);
             for q in pts {
-                dot(p, s(*q), color);
+                dot(p, s(*q), color, width);
             }
         }
         Shape::Area { pts } => {
             let v: Vec<Pos2> = pts.iter().map(|q| s(*q)).collect();
             outlined(p, v.clone(), true, color, width);
             for q in v {
-                dot(p, q, color);
+                dot(p, q, color, width);
             }
         }
         Shape::Angle { a, vertex, b } => {
@@ -377,7 +386,7 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
                     p.extend(EShape::dashed_line(&[opp, e], Stroke::new(1.0, color), 5.0, 4.0));
                 } else {
                     for q in shape.points() {
-                        dot(p, s(q), color);
+                        dot(p, s(q), color, width);
                     }
                 }
             }
@@ -400,7 +409,7 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
         // Le texte est dessiné comme une étiquette ; sans texte, un simple point.
         Shape::Text { p: q, text } => {
             if text.is_empty() {
-                dot(p, s(*q), color);
+                dot(p, s(*q), color, width);
             }
         }
         Shape::Arrow { a, b, .. } => arrow(p, s(*a), s(*b), color, width),
@@ -412,7 +421,7 @@ pub fn arrow(p: &Painter, a: Pos2, b: Pos2, color: Color32, width: f32) {
     let d = b - a;
     let len = d.length();
     if len == 0.0 {
-        dot(p, a, color);
+        dot(p, a, color, width);
         return;
     }
     let (u, n) = (d / len, vec2(-d.y, d.x) / len);
@@ -421,7 +430,7 @@ pub fn arrow(p: &Painter, a: Pos2, b: Pos2, color: Color32, width: f32) {
     let tip = vec![b, base + n * head * 0.45, base - n * head * 0.45];
     // Le trait s'arrête dans la pointe pour ne pas dépasser de son sommet.
     outlined(p, vec![a, b - u * head * 0.5], false, color, width);
-    p.add(EShape::convex_polygon(tip.clone(), HALO, Stroke::new(2.5, HALO)));
+    p.add(EShape::convex_polygon(tip.clone(), HALO, Stroke::new(halo(width) - width, HALO)));
     p.add(EShape::convex_polygon(tip, color, Stroke::NONE));
 }
 
@@ -454,7 +463,7 @@ fn paint_point_line(p: &Painter, xf: Xf, pa: Pt, pb: Pt, pp: Pt, color: Color32,
     right_angle(p, f, toward_segment, q, color);
     segment(p, f, q, color, width * 0.75);
     for e in [a, b, q] {
-        dot(p, e, color);
+        dot(p, e, color, width);
     }
 }
 
@@ -466,7 +475,7 @@ fn paint_parallel(p: &Painter, xf: Xf, pa: Pt, pb: Pt, pp: Pt, color: Color32, w
     outlined(p, vec![s(start), s(end)], false, color, width);
     segment(p, s(c0), s(c1), color, width * 0.75);
     for e in [pa, pb, pp] {
-        dot(p, s(e), color);
+        dot(p, s(e), color, width);
     }
 }
 
@@ -496,7 +505,7 @@ fn paint_arc(p: &Painter, xf: Xf, a: Pt, m: Pt, b: Pt, color: Color32, width: f3
         None => outlined(p, vec![s(a), s(m), s(b)], false, color, width),
     }
     for e in [a, m, b] {
-        dot(p, s(e), color);
+        dot(p, s(e), color, width);
     }
 }
 

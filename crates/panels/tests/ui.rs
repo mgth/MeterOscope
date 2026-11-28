@@ -4,39 +4,48 @@ use egui::Key;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use meteroscope_core::{Document, Pt, Scale, ScalePresets, Shape, ShapeKind, Tool};
-use meteroscope_panels::{CalibrationDialog, PanelOutput, measurements_panel, measurements_panel_with_presets, tool_palette};
+use meteroscope_panels::{CalibrationDialog, PanelOutput, measurements_panel, measurements_panel_with_presets, tool_palette, GroupTools};
 
 fn length(x: f64) -> Shape {
     Shape::Length { a: Pt::new(0.0, 0.0), b: Pt::new(x, 0.0) }
 }
 
+fn palette_harness(memory: GroupTools) -> Harness<'static, (Tool, GroupTools)> {
+    Harness::new_ui_state(
+        |ui, (tool, memory): &mut (Tool, GroupTools)| {
+            tool_palette(ui, tool, memory);
+        },
+        (Tool::Select, memory),
+    )
+}
+
 #[test]
 fn palette_change_l_outil() {
     meteroscope_i18n::set_language("fr");
-    let mut harness = Harness::new_ui_state(|ui, tool: &mut Tool| tool_palette(ui, tool), Tool::Select);
+    let mut harness = palette_harness(GroupTools::default());
     harness.run();
     harness.get_by_label("Longueur").click();
     harness.run();
-    assert_eq!(*harness.state(), Tool::Draw(ShapeKind::Length));
+    assert_eq!(harness.state().0, Tool::Draw(ShapeKind::Length));
     harness.get_by_label("Échelle").click();
     harness.run();
-    assert_eq!(*harness.state(), Tool::Calibrate);
+    assert_eq!(harness.state().0, Tool::Calibrate);
 }
 
 #[test]
 fn palette_groupe_les_outils_semblables() {
     meteroscope_i18n::set_language("fr");
-    let mut harness = Harness::new_ui_state(|ui, tool: &mut Tool| tool_palette(ui, tool), Tool::Select);
+    let mut harness = palette_harness(GroupTools::default());
     harness.run();
     // Seul le premier outil du groupe « Cercles » est visible.
     assert!(harness.query_by_label("Cercle 3 points").is_none());
     // Le clic droit ouvre le volet du groupe sans changer d'outil.
     harness.get_by_label("Cercle").click_secondary();
     harness.run();
-    assert_eq!(*harness.state(), Tool::Select);
+    assert_eq!(harness.state().0, Tool::Select);
     harness.get_by_label("Cercle 3 points").click();
     harness.run();
-    assert_eq!(*harness.state(), Tool::Draw(ShapeKind::Circle3));
+    assert_eq!(harness.state().0, Tool::Draw(ShapeKind::Circle3));
     // Le volet se referme et le bouton du groupe montre désormais l'outil choisi.
     harness.run();
     assert!(harness.query_by_label("Cercle").is_none());
@@ -44,7 +53,23 @@ fn palette_groupe_les_outils_semblables() {
     harness.run();
     harness.get_by_label("Cercle 3 points").click();
     harness.run();
-    assert_eq!(*harness.state(), Tool::Draw(ShapeKind::Circle3));
+    assert_eq!(harness.state().0, Tool::Draw(ShapeKind::Circle3));
+}
+
+#[test]
+fn palette_montre_l_outil_retenu_au_lancement() {
+    meteroscope_i18n::set_language("fr");
+    let mut memory = GroupTools::default();
+    memory.remember(Tool::Draw(ShapeKind::Circle3));
+    let mut harness = palette_harness(memory.clone());
+    harness.run();
+    // Le bouton du groupe montre l'outil retenu, pas le premier du groupe.
+    assert!(harness.query_by_label("Cercle").is_none());
+    harness.get_by_label("Cercle 3 points").click();
+    harness.run();
+    assert_eq!(harness.state().0, Tool::Draw(ShapeKind::Circle3));
+    let circles = meteroscope_panels::tool_group(Tool::Draw(ShapeKind::Circle));
+    assert_eq!(harness.state().1.shown(circles), memory.shown(circles));
 }
 
 struct PanelState {

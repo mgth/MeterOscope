@@ -42,6 +42,12 @@ use view::{View, Xf};
 
 pub use view::{MAX_ZOOM, MIN_ZOOM};
 
+/// Épaisseur de base des traits des mesures et annotations (pixels écran) :
+/// valeur par défaut et bornes du réglage.
+pub const DEFAULT_LINE_WIDTH: f32 = 2.0;
+pub const MIN_LINE_WIDTH: f32 = 1.0;
+pub const MAX_LINE_WIDTH: f32 = 6.0;
+
 /// Seuil (pixels écran) au-delà duquel un appui devient un glisser.
 const DRAG_THRESHOLD: f32 = 4.0;
 /// Tolérance de clic sur un trait (pixels écran).
@@ -157,6 +163,8 @@ pub struct Canvas {
     handle_snaps: bool,
     /// Saisie du texte d'une annotation.
     annot: annotate::Annotations,
+    /// Épaisseur de base des traits (pixels écran), voir [`Canvas::set_line_width`].
+    line_width: f32,
     out: CanvasOutput,
 }
 
@@ -185,6 +193,7 @@ impl Default for Canvas {
             snap: None,
             handle_snaps: false,
             annot: annotate::Annotations::default(),
+            line_width: DEFAULT_LINE_WIDTH,
             out: CanvasOutput::default(),
         }
     }
@@ -251,6 +260,13 @@ impl Canvas {
     /// de l'image d'origine. `None` : texture droite, pivotée à l'affichage.
     pub fn set_baked(&mut self, size: Option<Vec2>) {
         self.baked = size;
+    }
+
+    /// Épaisseur de base des traits dessinés sur l'image (pixels écran,
+    /// ramenée entre [`MIN_LINE_WIDTH`] et [`MAX_LINE_WIDTH`]). La mesure
+    /// sélectionnée et les traits secondaires en sont des multiples.
+    pub fn set_line_width(&mut self, width: f32) {
+        self.line_width = if width.is_finite() { width.clamp(MIN_LINE_WIDTH, MAX_LINE_WIDTH) } else { DEFAULT_LINE_WIDTH };
     }
 
     /// Calque semi-transparent affiché sur l'image, sous les mesures
@@ -626,8 +642,9 @@ impl Canvas {
             {
                 let hp = edit::handles(&m.shape, xf.img_len(ROTATE_GAP))[*i];
                 let color = render::color32(m.color);
+                let lw = self.line_width * 0.75;
                 render::paint_loupe(&painter, tex.id(), [w, h], self.baked, xf, hp, cur, rect, mag, |lp, lxf| {
-                    render::paint_shape(lp, lxf, &m.shape, color, 1.5, 0);
+                    render::paint_shape(lp, lxf, &m.shape, color, lw, 0);
                     if let Some(s) = snap_mark {
                         render::paint_snap(lp, lxf.to_screen(s.pt), s.kind);
                     }
@@ -913,7 +930,7 @@ impl Canvas {
             }
             let color = render::color32(m.color);
             let strong = doc.selected == Some(m.id) || hovered == Some(m.id);
-            render::paint_shape(p, xf, &m.shape, color, if strong { 3.0 } else { 2.0 }, marker_no);
+            render::paint_shape(p, xf, &m.shape, color, if strong { 1.5 } else { 1.0 } * self.line_width, marker_no);
             labels.push((m, color, strong, marker_no));
         }
         // Étiquettes au-dessus de tous les traits.
@@ -967,16 +984,16 @@ impl Canvas {
         };
         if self.tool == Tool::Perspective {
             // Quadrilatère en cours : contour refermé dès le troisième coin.
-            render::outlined(p, pts.iter().map(|q| xf.to_screen(*q)).collect(), pts.len() >= 3, color, 2.0);
+            render::outlined(p, pts.iter().map(|q| xf.to_screen(*q)).collect(), pts.len() >= 3, color, self.line_width);
             if pts.len() == 4 && !self.draft.is_active() {
                 for q in pts {
-                    render::dot(p, xf.to_screen(*q), color);
+                    render::dot(p, xf.to_screen(*q), color, self.line_width);
                 }
             }
         } else if let (Tool::Straighten, [a, b]) = (self.tool, pts) {
             // Segment de redressement : on affiche son écart à l'horizontale ou
             // à la verticale de l'écran, c.-à-d. la rotation qui sera appliquée.
-            render::segment(p, xf.to_screen(*a), xf.to_screen(*b), color, 2.0);
+            render::segment(p, xf.to_screen(*a), xf.to_screen(*b), color, self.line_width);
             if cal.is_some()
                 && let Some(r) = straighten_rotation(*a, *b, self.rotation)
             {
@@ -987,12 +1004,12 @@ impl Canvas {
             }
         } else if let (ShapeKind::LineAngle, [a, b, c]) = (kind, pts) {
             // Premier segment posé, début du second.
-            render::segment(p, xf.to_screen(*a), xf.to_screen(*b), color, 2.0);
-            render::dot(p, xf.to_screen(*c), color);
+            render::segment(p, xf.to_screen(*a), xf.to_screen(*b), color, self.line_width);
+            render::dot(p, xf.to_screen(*c), color, self.line_width);
         } else {
             match self.shape_from_draft(kind, pts) {
                 Some(shape) => {
-                    render::paint_shape(p, xf, &shape, color, 2.0, 0);
+                    render::paint_shape(p, xf, &shape, color, self.line_width, 0);
                     if let Some(cal) = cal {
                         // Le segment d'étalonnage s'exprime toujours en pixels.
                         let px = Calibration::default();
@@ -1003,11 +1020,11 @@ impl Canvas {
                         }
                     }
                 }
-                None => render::outlined(p, pts.iter().map(|q| xf.to_screen(*q)).collect(), false, color, 2.0),
+                None => render::outlined(p, pts.iter().map(|q| xf.to_screen(*q)).collect(), false, color, self.line_width),
             }
         }
         for q in &self.draft.pts {
-            render::dot(p, xf.to_screen(*q), color);
+            render::dot(p, xf.to_screen(*q), color, self.line_width);
         }
     }
 }
