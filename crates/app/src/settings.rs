@@ -255,11 +255,11 @@ pub fn line_width_selector(ui: &mut Ui, settings: &mut Settings) -> f32 {
         .response
         .on_hover_text(tr!("line_width.tip"));
     let wanted = Some(width).filter(|&w| w != DEFAULT_LINE_WIDTH);
-    if wanted != settings.line_width {
-        settings.line_width = wanted;
-        if commit {
-            settings.save();
-        }
+    // Aperçu immédiat pendant le glissement ; l'écriture se fait au
+    // relâchement, même si la valeur finale a déjà été copiée.
+    settings.line_width = wanted;
+    if commit {
+        settings.save();
     }
     width
 }
