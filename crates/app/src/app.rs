@@ -21,6 +21,8 @@ mod series;
 pub(crate) use series::SeriesState;
 #[cfg(test)]
 mod undo_tests;
+#[cfg(test)]
+mod open_tests;
 
 #[derive(PartialEq)]
 enum Mode {
@@ -76,10 +78,11 @@ pub struct MeterOscopeApp {
     /// Profils d'intensité : résultats calculés sur l'image, panneau de la courbe.
     profiles: crate::profile_view::ProfileView,
     toast: Option<(String, bool, Instant)>,
-    /// Images remplacées, rétablies par Ctrl+Z.
+    /// Travaux remplacés (projet ouvert, nouveau travail), rétablis par Ctrl+Z.
     history: ImageHistory<Workspace, String>,
-    /// Collage (Ctrl+V) en attente de confirmation.
-    pending_paste: Option<Pasted>,
+    /// Échelle du travail précédent : celle de la première image du suivant
+    /// si « garder l'échelle pour l'image suivante » est cochée.
+    kept_scale: meteroscope_core::Calibration,
     /// Réglages retenus d'un lancement à l'autre (récents, unité, décimales).
     settings: crate::settings::Settings,
 }
@@ -110,6 +113,12 @@ struct Flat {
     image: Option<Arc<RgbaImage>>,
 }
 
+/// Image de travail : la photo, ou sa version corrigée de la perspective.
+/// Fonction libre pour n'emprunter que ces deux champs.
+fn work<'a>(flat: &'a Option<Flat>, image: &'a Option<Arc<RgbaImage>>) -> Option<&'a Arc<RgbaImage>> {
+    flat.as_ref().and_then(|f| f.image.as_ref()).or(image.as_ref())
+}
+
 const CTRL: Modifiers = Modifiers::COMMAND;
 const CTRL_SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND };
 
@@ -121,7 +130,7 @@ impl MeterOscopeApp {
             app.calibration.set_unit(u);
         }
         if let Some(p) = initial {
-            app.open_path(&cc.egui_ctx, &p);
+            app.open_paths(&cc.egui_ctx, vec![p]);
         }
         app
     }
@@ -150,14 +159,15 @@ impl MeterOscopeApp {
             canvas: Canvas::default(),
             calibration: CalibrationDialog::default(),
             perspective: PerspectiveDialog::default(),
-            scale_presets: crate::prefs::load_scale_presets(),
+            // Les tests ne dépendent pas des préréglages de l'utilisateur.
+            scale_presets: if cfg!(test) { Default::default() } else { crate::prefs::load_scale_presets() },
             mode: Mode::Image,
             camera: CameraView::default(),
             detect: DetectView::default(),
             profiles: Default::default(),
             toast: None,
             history: ImageHistory::default(),
-            pending_paste: None,
+            kept_scale: Default::default(),
             settings: crate::settings::Settings::load(),
         }
     }
@@ -190,7 +200,7 @@ impl MeterOscopeApp {
     /// Image de travail : la photo, ou sa version corrigée de la perspective.
     /// C'est elle que l'on affiche, mesure et exporte.
     fn work_image(&self) -> Option<&RgbaImage> {
-        self.flat.as_ref().and_then(|f| f.image.as_deref()).or(self.image.as_deref())
+        work(&self.flat, &self.image).map(|img| &**img)
     }
 
     /// Met l'image corrigée en accord avec `Document::perspective` (outil,
@@ -283,8 +293,7 @@ impl MeterOscopeApp {
     fn start_job(&mut self, ctx: &egui::Context) {
         let key = self.wanted_key();
         // On redresse l'image de travail : la photo, ou sa version corrigée de la perspective.
-        let work = self.flat.as_ref().and_then(|f| f.image.as_ref()).or(self.image.as_ref());
-        let (Some(img), (deg, Some(filter))) = (work, key) else { return };
+        let (Some(img), (deg, Some(filter))) = (work(&self.flat, &self.image), key) else { return };
         let max = ctx.input(|i| i.max_texture_side).max(1024) as u32;
         let (tx, rx) = mpsc::channel();
         let (img, ctx) = (Arc::clone(img), ctx.clone());
@@ -329,7 +338,7 @@ impl MeterOscopeApp {
     /// disponible et des réglages.
     fn refresh_texture(&mut self, ctx: &egui::Context) {
         self.texture_state = self.target_state();
-        let Some(img) = self.flat.as_ref().and_then(|f| f.image.as_deref()).or(self.image.as_deref()) else {
+        let Some(img) = work(&self.flat, &self.image) else {
             self.texture = None;
             self.straight = None;
             self.canvas.set_baked(None);
@@ -375,40 +384,71 @@ impl MeterOscopeApp {
         }
     }
 
-    /// Installe une nouvelle image avec un document vierge (qui garde
-    /// l'échelle en cours si l'option est cochée). L'image précédente reste
-    /// récupérable par Ctrl+Z.
-    fn set_image(&mut self, ctx: &egui::Context, img: RgbaImage, path: Option<PathBuf>) {
-        // D'abord rendre à l'image son document, pour ne pas écraser celui du
-        // flux ; l'échelle à garder se lit avant que ce document parte dans
-        // l'historique des images.
+    /// Ouvre une image déjà en mémoire (collage, tests) : comme tout ce qui
+    /// s'ouvre, elle s'ajoute à ce qui est ouvert et forme une série à partir
+    /// de la deuxième. Ctrl+Z la retire.
+    fn add_image(&mut self, ctx: &egui::Context, img: RgbaImage, path: Option<PathBuf>) {
+        self.series_add(ctx, vec![series::Incoming { path, size: img.dimensions(), pixels: Some(img), doc: None }]);
+    }
+
+    /// Met de côté tout ce qui est ouvert, récupérable par Ctrl+Z, et laisse
+    /// l'application vide : seul endroit où un travail en remplace un autre
+    /// (projet ouvert, nouveau travail).
+    fn clear_workspace(&mut self, ctx: &egui::Context) {
+        // D'abord rendre à l'image son document : en mode caméra, `doc` est celui du flux.
         self.mode_image();
-        let calibration = self.scale_presets.next_calibration(&self.doc.calibration);
-        if let Some(old) = self.take_workspace() {
+        if self.image.is_some() {
+            self.series_sync();
+            self.kept_scale = self.series.model.carried(&self.doc);
+            let old = self.take_workspace();
             self.history.replaced(old);
         }
-        self.image = Some(Arc::new(img));
+        self.image = None;
         self.pixels_changed();
-        self.image_path = path;
+        self.image_path = None;
         self.project_path = None;
         self.doc = Document::new();
         self.applied = Orientation::IDENTITY;
         self.file_orientation = Orientation::IDENTITY;
-        self.series_restart(ctx);
-        // Après : la série repart d'un document neuf.
-        self.doc.calibration = calibration;
+        self.series_reset();
         self.brightness = 0.0;
         self.contrast = 0.0;
+        self.close_dialogs();
+        self.canvas.cancel();
         self.canvas.set_tool(Tool::Select);
         self.canvas.fit();
-        // La texture se construit à la prochaine frame de la vue image.
-        ctx.request_repaint();
+        self.refresh_texture(ctx);
     }
 
-    /// Retire l'espace de travail courant (l'image reste vide jusqu'à `put_workspace`).
-    fn take_workspace(&mut self) -> Option<Workspace> {
-        Some(Workspace {
-            image: self.image.take()?,
+    /// Nouveau travail : retire toutes les images ouvertes. Pas de
+    /// confirmation : Ctrl+Z les rétablit avec leurs mesures.
+    fn new_work(&mut self, ctx: &egui::Context) {
+        self.mode_image();
+        if self.image.is_some() {
+            self.clear_workspace(ctx);
+            self.info(tr!("msg.new_work"));
+        }
+    }
+
+    /// Un dialogue (échelle, perspective) attend une réponse : il se rapporte
+    /// à l'image affichée, que les raccourcis ne doivent pas changer dessous.
+    fn dialog_open(&self) -> bool {
+        self.calibration.is_open() || self.perspective.is_open()
+    }
+
+    /// Ferme les dialogues sans rien appliquer : l'image à laquelle ils se
+    /// rapportaient n'est plus celle affichée.
+    fn close_dialogs(&mut self) {
+        self.calibration.cancel();
+        self.perspective.cancel();
+        self.canvas.clear_perspective_quad();
+    }
+
+    /// Retire l'espace de travail courant (l'application reste sans image
+    /// jusqu'à `put_workspace`).
+    fn take_workspace(&mut self) -> Workspace {
+        Workspace {
+            image: self.image.take(),
             image_path: self.image_path.take(),
             applied: self.applied,
             file_orientation: self.file_orientation,
@@ -417,11 +457,11 @@ impl MeterOscopeApp {
             series: self.series_take(),
             brightness: self.brightness,
             contrast: self.contrast,
-        })
+        }
     }
 
     fn put_workspace(&mut self, ctx: &egui::Context, w: Workspace) {
-        self.image = Some(w.image);
+        self.image = w.image;
         self.pixels_changed();
         self.image_path = w.image_path;
         self.applied = w.applied;
@@ -432,6 +472,7 @@ impl MeterOscopeApp {
         self.brightness = w.brightness;
         self.contrast = w.contrast;
         self.mode_image();
+        self.close_dialogs();
         // L'image corrigée de la perspective suit l'image rétablie.
         self.sync_flat();
         self.flat_changed = false;
@@ -440,10 +481,11 @@ impl MeterOscopeApp {
         self.refresh_texture(ctx);
     }
 
-    /// L'historique des images ne sert qu'en mode image : en mode caméra,
+    /// L'historique des travaux ne sert qu'en mode image (même sans image :
+    /// après « Nouveau travail », Ctrl+Z rend le précédent) ; en mode caméra,
     /// `doc` est celui du flux.
     fn images_undoable(&self) -> bool {
-        self.image.is_some() && self.mode == Mode::Image
+        self.mode == Mode::Image
     }
 
     fn can_undo(&self) -> bool {
@@ -455,12 +497,12 @@ impl MeterOscopeApp {
     }
 
     /// Annule dans le document ou la série, puis, leur historique épuisé, le
-    /// remplacement d'image.
+    /// remplacement du travail (projet ouvert, nouveau travail).
     fn undo(&mut self, ctx: &egui::Context) {
         if self.series_undo(ctx) || !self.images_undoable() || !self.history.can_undo() {
             return;
         }
-        let Some(current) = self.take_workspace() else { return };
+        let current = self.take_workspace();
         match self.history.undo(current, |w| Self::series_key(&w.series, &w.doc)) {
             Ok(previous) => {
                 self.put_workspace(ctx, previous);
@@ -479,7 +521,7 @@ impl MeterOscopeApp {
         if !self.history.can_redo(&key) {
             return;
         }
-        let Some(current) = self.take_workspace() else { return };
+        let current = self.take_workspace();
         match self.history.redo(current, &key) {
             Ok(next) | Err(next) => self.put_workspace(ctx, next),
         }
@@ -499,30 +541,33 @@ impl MeterOscopeApp {
 
     // ---------- fichiers ----------
 
-    fn open_path(&mut self, ctx: &egui::Context, path: &Path) {
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        if ext == io::PROJECT_EXTENSION {
-            self.series_open_project(ctx, path);
-        } else if let Some(img) = self.report(io::load_image(path), "") {
-            self.set_image(ctx, img, Some(path.to_owned()));
-            self.settings.add_recent(path);
+    /// Dossier proposé par tous les dialogues de fichiers : le dernier
+    /// utilisé, sinon celui du projet ou de l'image affichée.
+    fn dialog_dir(&self) -> Option<&Path> {
+        self.settings.dialog_dir().or_else(|| self.project_path.as_ref().or(self.image_path.as_ref()).and_then(|p| p.parent()))
+    }
+
+    /// Dialogue de fichiers placé dans ce dossier.
+    fn file_dialog(&self, title: &str) -> rfd::FileDialog {
+        let d = rfd::FileDialog::new().set_title(title);
+        match self.dialog_dir() {
+            Some(dir) => d.set_directory(dir),
+            None => d,
         }
     }
 
+    /// Ouvrir : une ou plusieurs images s'ajoutent à ce qui est ouvert, un
+    /// projet le remplace (voir [`Self::open_paths`]).
     fn open_dialog(&mut self, ctx: &egui::Context) {
         let mut all: Vec<&str> = io::IMAGE_EXTENSIONS.to_vec();
         all.push(io::PROJECT_EXTENSION);
-        let mut dialog = rfd::FileDialog::new();
-        if let Some(dir) = self.settings.dialog_dir() {
-            dialog = dialog.set_directory(dir);
-        }
-        let picked = dialog
-            .set_title(tr!("dialog.open_title"))
+        let picked = self
+            .file_dialog(tr!("dialog.open_title"))
             .add_filter(tr!("dialog.filter_images"), &all)
             .add_filter(tr!("dialog.filter_all"), &["*"])
             .pick_files();
         if let Some(paths) = picked {
-            self.series_open_paths(ctx, paths);
+            self.open_paths(ctx, paths);
         }
     }
 
@@ -535,14 +580,14 @@ impl MeterOscopeApp {
 
     /// Demande où enregistrer, dans le dernier dossier utilisé (sinon celui de l'image).
     fn save_dialog(&mut self, title: &str, suffix: &str, ext: &str) -> Option<PathBuf> {
-        let mut d = rfd::FileDialog::new()
-            .set_title(title)
-            .set_file_name(format!("{}{suffix}.{ext}", self.default_stem()))
-            .add_filter(ext.to_uppercase(), &[ext]);
-        if let Some(dir) = self.settings.dialog_dir().or(self.image_path.as_ref().and_then(|p| p.parent())) {
-            d = d.set_directory(dir);
-        }
-        let picked = d.save_file();
+        let name = format!("{}{suffix}.{ext}", self.default_stem());
+        self.save_dialog_named(title, &name, ext)
+    }
+
+    /// Comme `save_dialog`, avec le nom de fichier proposé ; le dossier choisi
+    /// est retenu pour les dialogues suivants.
+    fn save_dialog_named(&mut self, title: &str, name: &str, ext: &str) -> Option<PathBuf> {
+        let picked = self.file_dialog(title).set_file_name(name).add_filter(ext.to_uppercase(), &[ext]).save_file();
         if let Some(p) = &picked {
             self.settings.set_last_dir_of(p);
         }
@@ -606,24 +651,20 @@ impl MeterOscopeApp {
     }
 
     /// Colle l'image du presse-papiers, traitée comme une capture caméra
-    /// (sans fichier d'origine), ou ouvre le fichier image copié. Avec
-    /// `confirm` (Ctrl+V), des mesures non enregistrées font d'abord demander.
-    fn paste(&mut self, ctx: &egui::Context, fallback: crate::clipboard::Fallback, confirm: bool) {
+    /// (sans fichier d'origine), ou ouvre le fichier copié. Comme toute
+    /// ouverture, sans confirmation : Ctrl+Z retire l'image collée.
+    fn paste(&mut self, ctx: &egui::Context, fallback: crate::clipboard::Fallback) {
         let pasted = crate::clipboard::read(fallback);
-        if confirm && !matches!(pasted, Pasted::Nothing) && self.image.is_some() && self.is_dirty() {
-            self.pending_paste = Some(pasted);
-        } else {
-            self.apply_paste(ctx, pasted);
-        }
+        self.apply_paste(ctx, pasted);
     }
 
     fn apply_paste(&mut self, ctx: &egui::Context, pasted: Pasted) {
         match pasted {
             Pasted::Image(img) => {
-                self.set_image(ctx, img, None);
+                self.add_image(ctx, img, None);
                 self.info(tr!("msg.image_pasted"));
             }
-            Pasted::File(p) => self.open_path(ctx, &p),
+            Pasted::File(p) => self.open_paths(ctx, vec![p]),
             Pasted::Nothing => self.info(tr!("msg.paste_nothing")),
         }
     }
@@ -665,9 +706,17 @@ impl MeterOscopeApp {
     // ---------- raccourcis ----------
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        // Un dialogue ouvert garde le clavier : aucun raccourci ne change
+        // l'image ou le document dessous (ni Ctrl+Z, qui sert à ses champs).
+        if self.dialog_open() {
+            return;
+        }
         let hit = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)));
         if hit(CTRL, Key::O) {
             self.open_dialog(ctx);
+        }
+        if hit(CTRL, Key::N) {
+            self.new_work(ctx);
         }
         if hit(CTRL_SHIFT, Key::S) {
             self.save_project(true);
@@ -691,7 +740,7 @@ impl MeterOscopeApp {
         }
 
         // Touches simples : seulement si aucun champ de texte n'a le focus.
-        if ctx.egui_wants_keyboard_input() || self.calibration.is_open() || self.perspective.is_open() {
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
@@ -737,7 +786,7 @@ impl MeterOscopeApp {
                         self.open_dialog(&ctx);
                     }
                     if ui.button(format!("📋  {}", tr!("open.paste"))).clicked() {
-                        self.paste(&ctx, crate::clipboard::Fallback::default(), false);
+                        self.paste(&ctx, crate::clipboard::Fallback::default());
                     }
                     if ui.button(format!("📷  {}", tr!("toolbar.camera"))).clicked() {
                         if self.mode != Mode::Camera {
@@ -745,10 +794,17 @@ impl MeterOscopeApp {
                         }
                         ui.close();
                     }
+                    // Repartir de zéro : tout ce qui s'ouvre s'ajoute, ceci retire tout.
+                    ui.separator();
+                    let new = ui.add_enabled(self.image.is_some(), egui::Button::new(format!("🗋  {}", tr!("open.new"))));
+                    if new.on_hover_text(tr!("open.new_tip")).clicked() {
+                        self.new_work(&ctx);
+                        ui.close();
+                    }
                     // Fichiers récents.
                     ui.separator();
                     if let Some(p) = crate::settings::recent_items(ui, &mut self.settings) {
-                        self.open_path(&ctx, &p);
+                        self.open_paths(&ctx, vec![p]);
                     }
                 })
                 .response
@@ -760,7 +816,8 @@ impl MeterOscopeApp {
             ui.separator();
             // En mode caméra : annuler et zoom servent sur le flux ; enregistrer,
             // exporter et le menu Image ne concernent que l'image fixe.
-            ui.add_enabled_ui(has_image || self.mode == Mode::Camera, |ui| {
+            // Sans image, annuler reste offert : il rend le travail retiré par « Nouveau travail ».
+            ui.add_enabled_ui(has_image || self.mode == Mode::Camera || self.can_undo() || self.can_redo(), |ui| {
                 ui.add_enabled_ui(has_image, |ui| {
                     let dirty = if self.is_dirty() { " •" } else { "" };
                     if ui.button(format!("💾  {}{dirty}", tr!("toolbar.save"))).on_hover_text(tr!("toolbar.save_tip")).clicked() {
@@ -848,10 +905,13 @@ impl MeterOscopeApp {
                     });
                 });
                 self.series_menu(ui);
-                let detect = ui.selectable_label(self.detect.is_open(), format!("🔍  {}", tr!("toolbar.detect")));
-                if detect.on_hover_text(tr!("toolbar.detect_tip")).clicked() {
-                    self.detect.toggle();
-                }
+                // La détection lit les pixels d'une image fixe : pas sur le flux.
+                ui.add_enabled_ui(has_image, |ui| {
+                    let detect = ui.selectable_label(self.detect.is_open(), format!("🔍  {}", tr!("toolbar.detect")));
+                    if detect.on_hover_text(tr!("toolbar.detect_tip")).on_disabled_hover_text(tr!("msg.detect_live")).clicked() {
+                        self.detect.toggle();
+                    }
+                });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("1:1").on_hover_text(tr!("zoom.actual_tip")).clicked() {
                         self.canvas.zoom_actual();
@@ -931,12 +991,12 @@ impl MeterOscopeApp {
             }
             ui.add_space(8.0);
             if ui.add(big(&format!("📋  {}", tr!("welcome.paste")))).on_hover_text(tr!("welcome.paste_tip")).clicked() {
-                self.paste(&ctx, crate::clipboard::Fallback::default(), false);
+                self.paste(&ctx, crate::clipboard::Fallback::default());
             }
             ui.add_space(16.0);
             ui.weak(tr!("welcome.drop"));
             if let Some(p) = crate::settings::welcome_recent(ui, &self.settings) {
-                self.open_path(&ctx, &p);
+                self.open_paths(&ctx, vec![p]);
             }
         });
     }
@@ -966,9 +1026,8 @@ impl eframe::App for MeterOscopeApp {
         self.series_dropped(&ctx);
         self.shortcuts(&ctx);
         self.series_frame(&ctx);
-        let free = !self.calibration.is_open() && self.pending_paste.is_none();
-        if let Some(fallback) = crate::clipboard::paste_requested(&ctx, free) {
-            self.paste(&ctx, fallback, true);
+        if let Some(fallback) = crate::clipboard::paste_requested(&ctx, !self.dialog_open()) {
+            self.paste(&ctx, fallback);
         }
 
         egui::Panel::top("toolbar").show(ui, |ui| {
@@ -994,8 +1053,7 @@ impl eframe::App for MeterOscopeApp {
             if self.mode == Mode::Image {
                 self.sync_flat();
             }
-            let work = self.flat.as_ref().and_then(|f| f.image.as_deref()).or(self.image.as_deref());
-            if let Some(img) = work.filter(|_| self.mode == Mode::Image) {
+            if let Some(img) = work(&self.flat, &self.image).filter(|_| self.mode == Mode::Image) {
                 self.profiles.sync(&mut self.doc, img);
             }
             egui::Panel::left("tools").resizable(false).show(ui, |ui| {
@@ -1038,8 +1096,7 @@ impl eframe::App for MeterOscopeApp {
             self.sync_orientation();
             self.sync_flat();
         }
-        let work = self.flat.as_ref().and_then(|f| f.image.as_deref()).or(self.image.as_deref());
-        let image = work.filter(|_| self.mode == Mode::Image);
+        let image = work(&self.flat, &self.image).map(|img| &**img).filter(|_| self.mode == Mode::Image);
         if let Some((msg, err)) = self.detect.frame(&ctx, image, &mut self.doc, &mut self.canvas) {
             if err { self.error(msg) } else { self.info(msg) }
         }
@@ -1079,14 +1136,6 @@ impl eframe::App for MeterOscopeApp {
             }
         });
         ctx.data_mut(|d| d.insert_temp(cursor_id, cursor));
-
-        if self.pending_paste.is_some()
-            && let Some(ok) = crate::clipboard::confirm_replace(&ctx)
-            && let Some(pasted) = self.pending_paste.take()
-            && ok
-        {
-            self.apply_paste(&ctx, pasted);
-        }
 
         if self.calibration.show(&ctx, &mut self.doc) {
             self.canvas.set_tool(Tool::Select);

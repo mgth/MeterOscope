@@ -1,5 +1,11 @@
-//! Série d'images dans la coquille : passage d'une image à l'autre, ajout,
-//! retrait, bande de vignettes, enregistrement et sorties de toute la série.
+//! Série d'images dans la coquille : ouverture, passage d'une image à
+//! l'autre, retrait, bande de vignettes, enregistrement et sorties de toute
+//! la série.
+//!
+//! Tout ce qui s'ouvre passe par ici ([`MeterOscopeApp::open_paths`],
+//! [`MeterOscopeApp::series_add`]) : une image s'ajoute à ce qui est ouvert
+//! (une série à partir de la deuxième), un projet remplace le travail en
+//! cours. Les deux s'annulent par Ctrl+Z.
 //!
 //! Le reste de l'application continue de travailler sur « l'image
 //! courante » : `app.image`, `app.image_path`, son orientation
@@ -11,7 +17,7 @@
 
 use super::{MeterOscopeApp, Mode};
 use crate::thumbs::{Thumbs, load_transformed};
-use egui::{Align, Align2, Color32, CornerRadius, FontId, Key, KeyboardShortcut, Modifiers, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui};
+use egui::{Align, Align2, Color32, CornerRadius, FontId, Key, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui};
 use image::RgbaImage;
 use meteroscope_core::series::Entry;
 use meteroscope_core::{Document, Orientation, Series, Tool, Undone, series_summary};
@@ -54,7 +60,7 @@ struct ExportJob {
 }
 
 pub(crate) struct SeriesState {
-    model: Series,
+    pub(super) model: Series,
     extras: HashMap<u64, Extra>,
     thumbs: Thumbs,
     /// Entrée dont l'image est actuellement dans `app.image`.
@@ -90,12 +96,19 @@ enum Act {
     Go(usize),
     Remove(usize),
     Move(usize, usize),
-    Add,
     Shared(bool),
     Linked(usize, bool),
 }
 
-const CTRL_SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND };
+/// Image à ouvrir : son fichier, ou ses pixels quand aucun fichier ne les
+/// contient (collage, capture), et le document qu'elle apporte (capture du
+/// flux caméra, avec ses mesures).
+pub(super) struct Incoming {
+    pub path: Option<PathBuf>,
+    pub size: (u32, u32),
+    pub pixels: Option<RgbaImage>,
+    pub doc: Option<Document>,
+}
 
 fn is_project(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(io::PROJECT_EXTENSION))
@@ -111,6 +124,22 @@ fn free_name(base: &str, tail: &str, free: impl Fn(&str) -> bool) -> String {
     (2u32..).map(|k| format!("{base}-{k}{tail}")).find(|name| free(name)).unwrap_or(first)
 }
 
+/// Nom affiché de chaque image (colonne « Image » du tableau, bande).
+fn names(model: &Series) -> Vec<String> {
+    let mut captures = 0;
+    model
+        .entries()
+        .iter()
+        .map(|e| match e.path.as_ref().and_then(|p| p.file_name()) {
+            Some(n) => n.to_string_lossy().into_owned(),
+            None => {
+                captures += 1;
+                tr!("series.capture_name", n = captures)
+            }
+        })
+        .collect()
+}
+
 fn placeholder(size: Option<(u32, u32)>) -> RgbaImage {
     let (w, h) = size.unwrap_or(PLACEHOLDER);
     RgbaImage::from_pixel(w.max(1), h.max(1), image::Rgba([72, 72, 78, 255]))
@@ -118,20 +147,6 @@ fn placeholder(size: Option<(u32, u32)>) -> RgbaImage {
 
 impl MeterOscopeApp {
     // ---------- état ----------
-
-    /// Nouvelle série d'une seule image : appelé par `set_image`.
-    pub(super) fn series_restart(&mut self, ctx: &egui::Context) {
-        let size = self.image.as_ref().map(|i| i.dimensions());
-        let s = &mut self.series;
-        s.model = Series::new();
-        s.extras.clear();
-        s.thumbs.clear();
-        s.shown = s.model.add(vec![(self.image_path.clone(), size)], &mut self.doc).first().copied();
-        if let (Some(id), Some(img)) = (s.shown, &self.image) {
-            s.thumbs.set(ctx, id, img);
-        }
-        s.saved = s.model.revision(&self.doc);
-    }
 
     /// Modifications non enregistrées, sur n'importe quelle image de la série.
     pub(super) fn series_dirty(&self) -> bool {
@@ -146,7 +161,7 @@ impl MeterOscopeApp {
 
     /// Reporte dans la série l'état de l'image affichée (chemin, dimensions)
     /// et lui fait suivre le document actif (historique, échelle commune).
-    fn series_sync(&mut self) {
+    pub(super) fn series_sync(&mut self) {
         // En mode caméra `self.doc` est le document du flux : on rend
         // d'abord à l'image le sien, seul connu de la série.
         self.mode_image();
@@ -189,6 +204,8 @@ impl MeterOscopeApp {
         if target == self.series.shown {
             return;
         }
+        // Un dialogue ouvert se rapportait à l'image qui s'en va.
+        self.close_dialogs();
         let old_size = self.image.as_ref().map(|i| i.dimensions());
         if let Some(old) = self.series.shown.take() {
             let x = self.series.extras.entry(old).or_default();
@@ -278,130 +295,121 @@ impl MeterOscopeApp {
         self.series_request_thumbs(ctx);
     }
 
-    /// Installe une série toute faite (projet relu, plusieurs images ouvertes).
-    fn series_install(&mut self, ctx: &egui::Context, entries: Vec<Entry>, missing: Vec<bool>, active: usize, shared_scale: bool, project: Option<PathBuf>) {
-        self.mode_image();
-        // Ce qui était ouvert reste récupérable par Ctrl+Z, comme pour `set_image`.
-        if let Some(old) = self.take_workspace() {
-            self.history.replaced(old);
+    // ---------- ouverture ----------
+
+    /// Ouvre ce qui a été choisi, déposé, collé ou repris des récents. Un
+    /// projet remplace le travail en cours ; des images s'y ajoutent (la
+    /// première ajoutée est affichée). Les fichiers ouverts comptent parmi
+    /// les récents et fixent le dossier des dialogues.
+    pub(super) fn open_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
+        if let Some(p) = paths.iter().find(|p| is_project(p)) {
+            self.series_open_project(ctx, p);
+            return;
         }
-        self.image = None;
-        self.flat = None;
-        let s = &mut self.series;
-        s.extras.clear();
-        s.thumbs.clear();
-        s.shown = None;
-        s.model = Series::from_entries(entries, active, shared_scale, &mut self.doc);
-        for (e, m) in s.model.entries().iter().zip(missing) {
-            s.extras.entry(e.id()).or_default().missing = m;
+        let total = paths.len();
+        let mut unreadable = None;
+        let mut found = vec![];
+        for p in paths {
+            match io::image_dimensions(&p) {
+                Some(size) => found.push(Incoming { path: Some(p), size, pixels: None, doc: None }),
+                None => unreadable = Some(p),
+            }
         }
-        s.saved = s.model.revision(&self.doc);
-        self.project_path = project;
-        self.brightness = 0.0;
-        self.contrast = 0.0;
-        self.canvas.set_tool(Tool::Select);
-        self.series_after_op(ctx);
-        self.canvas.fit();
+        let bad = total - found.len();
+        // En tête des récents : l'image qui sera affichée.
+        for p in found.iter().rev().filter_map(|i| i.path.as_deref()) {
+            self.settings.add_recent(p);
+        }
+        self.series_add(ctx, found);
+        match unreadable {
+            // Un seul fichier : l'erreur précise plutôt qu'un décompte.
+            Some(p) if total == 1 => match io::load_image(&p) {
+                Err(e) => self.error(format!("{e:#}")),
+                Ok(_) => self.error(tr!("msg.images_unreadable", n = 1)),
+            },
+            Some(_) => self.error(tr!("msg.images_unreadable", n = bad)),
+            None => {}
+        }
     }
 
-    // ---------- ouverture, ajout ----------
-
-    /// Ouvre un projet (version 1 ou 2). Les images introuvables sont
-    /// signalées sans bloquer : leurs mesures sont conservées.
+    /// Ouvre un projet (version 1 ou 2) à la place du travail en cours, qui
+    /// reste récupérable par Ctrl+Z. Les images introuvables sont signalées
+    /// sans bloquer : leurs mesures sont conservées.
     pub(super) fn series_open_project(&mut self, ctx: &egui::Context, path: &Path) {
         let Some(p) = self.report(io::load_series(path), "") else { return };
         let missing: Vec<bool> = p.images.iter().map(|i| i.missing).collect();
         let n = missing.iter().filter(|m| **m).count();
         let several = missing.len() > 1;
         let entries = p.images.into_iter().map(|i| Entry::new(i.image_path, i.size, !i.own_scale, i.document)).collect();
-        self.series_install(ctx, entries, missing, p.active, p.shared_scale, Some(path.to_owned()));
+        self.clear_workspace(ctx);
+        let s = &mut self.series;
+        s.model = Series::from_entries(entries, p.active, p.shared_scale, &mut self.doc);
+        for (e, m) in s.model.entries().iter().zip(missing) {
+            s.extras.entry(e.id()).or_default().missing = m;
+        }
+        s.saved = s.model.revision(&self.doc);
+        self.project_path = Some(path.to_owned());
+        self.series_after_op(ctx);
+        self.canvas.fit();
         self.settings.add_recent(path);
         if n > 0 && several {
             self.error(tr!("msg.images_missing", n = n));
         }
     }
 
-    /// Ouvre ce qui a été choisi : un projet, une image, ou plusieurs images
-    /// qui forment une nouvelle série.
-    pub(super) fn series_open_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
-        if let Some(p) = paths.iter().find(|p| is_project(p)) {
-            self.open_path(ctx, p);
+    /// Ajoute des images à ce qui est ouvert et affiche la première : c'est
+    /// le seul chemin d'ouverture d'une image (fichier, collage, capture).
+    /// La première image d'un travail n'est pas une étape à annuler ; les
+    /// suivantes se retirent par Ctrl+Z.
+    ///
+    /// Échelle : une image qui suit l'échelle commune de la série la reçoit ;
+    /// les autres, et la première d'un nouveau travail, reçoivent l'échelle
+    /// en cours si « garder l'échelle pour l'image suivante » est cochée.
+    pub(super) fn series_add(&mut self, ctx: &egui::Context, images: Vec<Incoming>) {
+        if images.is_empty() {
             return;
         }
-        if let [only] = paths.as_slice() {
-            self.open_path(ctx, only);
-            return;
-        }
-        let total = paths.len();
-        let found: Vec<(PathBuf, (u32, u32))> = paths.into_iter().filter_map(|p| io::image_dimensions(&p).map(|d| (p, d))).collect();
-        let bad = total - found.len();
-        match found.as_slice() {
-            [] => {}
-            [(only, _)] => self.open_path(ctx, only),
-            [(_, first), ..] => {
-                let first = *first;
-                let entries = found.into_iter().map(|(p, d)| Entry::new(Some(p), Some(d), d == first, Document::new())).collect();
-                self.series_install(ctx, entries, vec![], 0, true, None);
+        // En mode caméra, l'image retrouve d'abord son document.
+        self.series_sync();
+        let was_empty = self.series.model.is_empty();
+        let keep = self.scale_presets.keep_scale;
+        let kept = keep.then(|| if was_empty { self.kept_scale.clone() } else { self.series.model.carried(&self.doc) });
+        let n = images.len();
+        let brought = images.iter().any(|i| i.doc.is_some());
+        let (entries, pixels): (Vec<_>, Vec<_>) = images.into_iter().map(|i| ((i.path, Some(i.size), i.doc), i.pixels)).unzip();
+        let ids = self.series.model.add_with(entries, kept, &mut self.doc);
+        for (id, px) in ids.into_iter().zip(pixels) {
+            if let Some(px) = px {
+                self.series.thumbs.set(ctx, id, &px);
+                self.series.extras.entry(id).or_default().pixels = Some(Arc::new(px));
             }
         }
-        if bad > 0 {
-            self.error(tr!("msg.images_unreadable", n = bad));
-        }
-    }
-
-    /// Ajoute des images à la série en cours (ou ouvre, s'il n'y a rien).
-    fn series_add_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
-        if self.image.is_none() || paths.iter().any(|p| is_project(p)) {
-            self.series_open_paths(ctx, paths);
-            return;
-        }
-        let total = paths.len();
-        let list: Vec<_> = paths.into_iter().filter_map(|p| io::image_dimensions(&p).map(|d| (Some(p), Some(d)))).collect();
-        let (n, bad) = (list.len(), total - list.len());
-        if n > 0 {
-            self.series_sync();
-            self.series.model.add(list, &mut self.doc);
-            self.series_after_op(ctx);
+        if was_empty {
+            // Ouvrir n'est pas modifier ; des mesures apportées (capture) le sont.
+            if !brought {
+                self.series.saved = self.series.model.revision(&self.doc);
+            }
+            self.canvas.set_tool(Tool::Select);
+        } else {
             self.info(tr!("msg.images_added", n = n));
         }
-        if bad > 0 {
-            self.error(tr!("msg.images_unreadable", n = bad));
-        }
+        self.series_after_op(ctx);
+        // La texture se construit à la prochaine frame de la vue image.
+        ctx.request_repaint();
     }
 
-    fn series_add_dialog(&mut self, ctx: &egui::Context) {
-        let mut d = rfd::FileDialog::new().set_title(tr!("dialog.add_images")).add_filter(tr!("dialog.filter_only_images"), io::IMAGE_EXTENSIONS);
-        if let Some(dir) = self.image_path.as_ref().and_then(|p| p.parent()) {
-            d = d.set_directory(dir);
-        }
-        if let Some(paths) = d.pick_files() {
-            self.series_add_paths(ctx, paths);
-        }
+    /// Série vide, comme au lancement (l'export en cours reste suivi).
+    pub(super) fn series_reset(&mut self) {
+        drop(self.series_take());
     }
 
     /// Fichiers glissés-déposés : un projet s'ouvre, des images s'ajoutent à
-    /// la série en cours (ou en commencent une).
+    /// ce qui est ouvert.
     pub(super) fn series_dropped(&mut self, ctx: &egui::Context) {
         let paths: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_owned()).collect());
         if !paths.is_empty() {
-            self.series_add_paths(ctx, paths);
+            self.open_paths(ctx, paths);
         }
-    }
-
-    /// Capture caméra (ou toute image sans fichier) : nouvelle image de la
-    /// série en cours, ou première image s'il n'y a rien d'ouvert.
-    pub(super) fn series_capture(&mut self, ctx: &egui::Context, img: RgbaImage) {
-        if self.image.is_none() {
-            self.set_image(ctx, img, None);
-            return;
-        }
-        self.series_sync();
-        let ids = self.series.model.add(vec![(None, Some(img.dimensions()))], &mut self.doc);
-        if let Some(id) = ids.first() {
-            self.series.thumbs.set(ctx, *id, &img);
-            self.series.extras.entry(*id).or_default().pixels = Some(Arc::new(img));
-        }
-        self.series_after_op(ctx);
     }
 
     /// Les pixels de l'image affichée ont changé (rotation, miroir, ou leur
@@ -413,10 +421,6 @@ impl MeterOscopeApp {
     // ---------- navigation et opérations ----------
 
     fn series_do(&mut self, ctx: &egui::Context, act: Act) {
-        if let Act::Add = act {
-            self.series_add_dialog(ctx);
-            return;
-        }
         self.series_sync();
         let (m, doc) = (&mut self.series.model, &mut self.doc);
         match act {
@@ -425,7 +429,6 @@ impl MeterOscopeApp {
             Act::Move(from, to) => m.move_entry(from, to, doc),
             Act::Shared(on) => m.set_shared_scale(on, doc),
             Act::Linked(i, on) => m.set_linked(i, on, doc),
-            Act::Add => false,
         };
         self.series_after_op(ctx);
     }
@@ -499,13 +502,10 @@ impl MeterOscopeApp {
         self.series.model.revision(self.image_doc())
     }
 
-    /// Raccourcis de la série : Ctrl+Maj+O ajoute des images, Page
-    /// précédente / suivante change d'image.
+    /// Raccourcis de la série : Page précédente / suivante change d'image
+    /// (jamais sous un dialogue ouvert, qui se rapporte à l'image affichée).
     pub(super) fn series_shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(CTRL_SHIFT, Key::O))) {
-            self.series_add_dialog(ctx);
-        }
-        if ctx.egui_wants_keyboard_input() || self.calibration.is_open() || self.mode != Mode::Image || self.series.model.len() < 2 {
+        if ctx.egui_wants_keyboard_input() || self.dialog_open() || self.mode != Mode::Image || self.series.model.len() < 2 {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::PageUp)) {
@@ -616,26 +616,9 @@ impl MeterOscopeApp {
 
     // ---------- sorties de toute la série ----------
 
-    /// Nom affiché de chaque image (colonne « Image » du tableau).
-    fn series_names(&self) -> Vec<String> {
-        let mut captures = 0;
-        self.series
-            .model
-            .entries()
-            .iter()
-            .map(|e| match e.path.as_ref().and_then(|p| p.file_name()) {
-                Some(n) => n.to_string_lossy().into_owned(),
-                None => {
-                    captures += 1;
-                    tr!("series.capture_name", n = captures)
-                }
-            })
-            .collect()
-    }
-
     /// (nom, document) de chaque image, dans l'ordre de la série.
     fn series_tables(&self) -> Vec<(String, &Document)> {
-        self.series_names().into_iter().zip(self.series.model.docs(self.image_doc()).map(|(_, d)| d)).collect()
+        names(&self.series.model).into_iter().zip(self.series.model.docs(self.image_doc()).map(|(_, d)| d)).collect()
     }
 
     /// Nom de fichier proposé pour une sortie de toute la série.
@@ -643,20 +626,10 @@ impl MeterOscopeApp {
         self.project_path.as_ref().and_then(|p| p.file_stem()).map_or_else(|| tr!("file.series_stem").to_owned(), |s| s.to_string_lossy().into_owned())
     }
 
-    fn series_dir(&self) -> Option<&Path> {
-        self.project_path.as_ref().or(self.image_path.as_ref()).and_then(|p| p.parent())
-    }
-
     fn series_export_csv(&mut self) {
         self.series_sync();
-        let mut d = rfd::FileDialog::new()
-            .set_title(tr!("dialog.export_series_csv"))
-            .set_file_name(format!("{}{}.csv", self.series_stem(), tr!("file.measurements_suffix")))
-            .add_filter("CSV", &["csv"]);
-        if let Some(dir) = self.series_dir() {
-            d = d.set_directory(dir);
-        }
-        if let Some(p) = d.save_file() {
+        let name = format!("{}{}.csv", self.series_stem(), tr!("file.measurements_suffix"));
+        if let Some(p) = self.save_dialog_named(tr!("dialog.export_series_csv"), &name, "csv") {
             let r = io::export_series_csv(&self.series_tables(), &p);
             self.report(r, tr!("msg.csv_exported"));
         }
@@ -668,11 +641,9 @@ impl MeterOscopeApp {
         if self.series.export.is_some() {
             return;
         }
-        let mut d = rfd::FileDialog::new().set_title(tr!("dialog.export_series_images"));
-        if let Some(dir) = self.series_dir() {
-            d = d.set_directory(dir);
-        }
-        let Some(dir) = d.pick_folder() else { return };
+        let Some(dir) = self.file_dialog(tr!("dialog.export_series_images")).pick_folder() else { return };
+        // Le dossier choisi est retenu, comme celui d'un fichier enregistré.
+        self.settings.set_last_dir_of(&dir.join("x"));
         self.sync_orientation();
         self.series_sync();
         enum Source {
@@ -798,9 +769,7 @@ impl MeterOscopeApp {
         ui.menu_button(format!("🗀  {}", tr!("series.menu")), |ui| {
             let m = &self.series.model;
             let (n, active) = (m.len(), m.active());
-            if ui.button(format!("➕  {}", tr!("series.add"))).on_hover_text(tr!("series.add_tip")).clicked() {
-                act = Some(Act::Add);
-            }
+            let scale = ScaleOptions::of(m, self.image_doc());
             ui.add_enabled_ui(n > 1, |ui| {
                 if ui.add_enabled(active > 0, egui::Button::new(format!("⏴  {}", tr!("series.previous")))).on_hover_text(tr!("series.previous_tip")).clicked() {
                     act = Some(Act::Go(active - 1));
@@ -812,7 +781,7 @@ impl MeterOscopeApp {
                     act = Some(Act::Remove(active));
                 }
                 ui.separator();
-                act = scale_options(ui, m, active).or(act.take());
+                act = scale.show(ui).or(act.take());
                 ui.separator();
                 ui.checkbox(&mut self.series.strip_open, tr!("series.show_strip"));
             });
@@ -859,19 +828,14 @@ impl MeterOscopeApp {
             if ui.add_enabled(active + 1 < n, egui::Button::new("⏵").small()).on_hover_text(tr!("series.next_tip")).clicked() {
                 act = Some(Act::Go(active + 1));
             }
-            if let Some(name) = self.series_names().into_iter().nth(active) {
+            if let Some(name) = names(m).into_iter().nth(active) {
                 ui.label(name);
             }
             if self.series.shown.is_some_and(|id| self.series.extras.get(&id).is_some_and(|x| x.missing)) {
                 ui.label(RichText::new(format!("⚠ {}", tr!("series.missing"))).color(Color32::from_rgb(255, 170, 60)));
             }
             ui.separator();
-            act = scale_options(ui, m, active).or(act.take());
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui.small_button(format!("➕ {}", tr!("series.add"))).on_hover_text(tr!("series.add_tip")).clicked() {
-                    act = Some(Act::Add);
-                }
-            });
+            act = ScaleOptions::of(m, &self.doc).show(ui).or(act.take());
         });
         act
     }
@@ -880,20 +844,7 @@ impl MeterOscopeApp {
         let mut act = None;
         let s = &mut self.series;
         let (n, active, shared) = (s.model.len(), s.model.active(), s.model.shared_scale());
-        let names = {
-            let mut captures = 0;
-            s.model
-                .entries()
-                .iter()
-                .map(|e| match e.path.as_ref().and_then(|p| p.file_name()) {
-                    Some(n) => n.to_string_lossy().into_owned(),
-                    None => {
-                        captures += 1;
-                        tr!("series.capture_name", n = captures)
-                    }
-                })
-                .collect::<Vec<_>>()
-        };
+        let names = names(&s.model);
         egui::ScrollArea::horizontal().id_salt("meteroscope_serie").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -931,7 +882,10 @@ impl MeterOscopeApp {
                     if !doc.measurements.is_empty() {
                         badge(inner.right_bottom() - egui::vec2(2.0, 2.0), Align2::RIGHT_BOTTOM, doc.measurements.len().to_string());
                     }
-                    if shared && !e.linked {
+                    // Échelle propre : détachée, ou à perspective corrigée.
+                    let corrected = doc.perspective.is_some();
+                    let own = !e.linked || corrected;
+                    if shared && own {
                         badge(inner.left_bottom() + egui::vec2(2.0, -2.0), Align2::LEFT_BOTTOM, "📏".to_owned());
                     }
                     if missing && tex.is_some() {
@@ -967,8 +921,8 @@ impl MeterOscopeApp {
                             act = Some(Act::Move(i, i + 1));
                             ui.close();
                         }
-                        let mut own = !e.linked;
-                        if ui.add_enabled(shared, egui::Checkbox::new(&mut own, tr!("series.own_scale"))).on_hover_text(tr!("series.own_scale_tip")).clicked() {
+                        let mut own = own;
+                        if ui.add_enabled(shared && !corrected, egui::Checkbox::new(&mut own, tr!("series.own_scale"))).on_hover_text(tr!("series.own_scale_tip")).clicked() {
                             act = Some(Act::Linked(i, !own));
                             ui.close();
                         }
@@ -984,7 +938,7 @@ impl MeterOscopeApp {
                             ui.label(format!("{w} × {h} px"));
                         }
                         ui.label(tr!("series.measure_count", n = doc.measurements.len()));
-                        if shared && !e.linked {
+                        if shared && own {
                             ui.label(tr!("series.own_scale"));
                         }
                         if missing {
@@ -1054,18 +1008,34 @@ impl MeterOscopeApp {
     }
 }
 
-/// Cases « même échelle pour toute la série » et « échelle propre à cette image ».
-fn scale_options(ui: &mut Ui, m: &Series, active: usize) -> Option<Act> {
-    let mut act = None;
-    let mut shared = m.shared_scale();
-    if ui.checkbox(&mut shared, tr!("series.shared_scale")).on_hover_text(tr!("series.shared_scale_tip")).changed() {
-        act = Some(Act::Shared(shared));
+/// Cases « même échelle pour toute la série » et « échelle propre à cette
+/// image » (toujours propre, et non modifiable, si sa perspective est corrigée).
+struct ScaleOptions {
+    active: usize,
+    shared: bool,
+    own: bool,
+    corrected: bool,
+}
+
+impl ScaleOptions {
+    /// `doc` : document de l'image affichée.
+    fn of(m: &Series, doc: &Document) -> Self {
+        Self { active: m.active(), shared: m.shared_scale(), own: m.own_scale(m.active(), doc), corrected: doc.perspective.is_some() }
     }
-    let mut own = m.active_entry().is_some_and(|e| !e.linked);
-    if ui.add_enabled(m.shared_scale(), egui::Checkbox::new(&mut own, tr!("series.own_scale"))).on_hover_text(tr!("series.own_scale_tip")).changed() {
-        act = Some(Act::Linked(active, !own));
+
+    fn show(&self, ui: &mut Ui) -> Option<Act> {
+        let mut act = None;
+        let mut shared = self.shared;
+        if ui.checkbox(&mut shared, tr!("series.shared_scale")).on_hover_text(tr!("series.shared_scale_tip")).changed() {
+            act = Some(Act::Shared(shared));
+        }
+        let mut own = self.own;
+        let free = self.shared && !self.corrected;
+        if ui.add_enabled(free, egui::Checkbox::new(&mut own, tr!("series.own_scale"))).on_hover_text(tr!("series.own_scale_tip")).changed() {
+            act = Some(Act::Linked(self.active, !own));
+        }
+        act
     }
-    act
 }
 
 #[cfg(test)]
@@ -1117,7 +1087,7 @@ mod tests {
         meteroscope_i18n::set_language("fr");
         let ctx = egui::Context::default();
         let mut app = MeterOscopeApp::blank();
-        app.set_image(&ctx, RgbaImage::new(40, 30), None);
+        app.add_image(&ctx, RgbaImage::new(40, 30), None);
         assert!(app.doc.calibration.set_from_reference(100.0, 1.0, "mm"));
         app.doc.add(Shape::Marker { p: Pt::new(1.0, 1.0) });
         app.series_frame(&ctx);
@@ -1145,25 +1115,24 @@ mod tests {
         assert!(app.doc.get(app.doc.measurements[0].id).is_some() && app.doc.calibration.is_calibrated());
     }
 
-    /// Remplacer une série par une autre image est annulable : Ctrl+Z rend
-    /// toute la série, Ctrl+Y revient à l'image remplaçante.
+    /// « Nouveau travail » retire toute la série sans demander : Ctrl+Z la
+    /// rend entière, Ctrl+Y revient à l'application vide.
     #[test]
-    fn replaced_series_comes_back_whole() {
+    fn new_work_comes_back_whole() {
         use meteroscope_core::{Pt, Shape};
         meteroscope_i18n::set_language("fr");
         let ctx = egui::Context::default();
         let mut app = MeterOscopeApp::blank();
-        app.set_image(&ctx, RgbaImage::new(40, 30), None);
+        app.add_image(&ctx, RgbaImage::new(40, 30), None);
         app.doc.add(Shape::Marker { p: Pt::new(1.0, 1.0) });
-        app.series_capture(&ctx, RgbaImage::new(40, 30));
+        app.add_image(&ctx, RgbaImage::new(40, 30), None);
         app.series_frame(&ctx);
         assert_eq!((app.series.model.len(), app.series.model.active()), (2, 1));
 
-        // Collage ou ouverture d'une autre image : la série est remplacée.
-        app.set_image(&ctx, RgbaImage::new(20, 20), None);
+        app.new_work(&ctx);
         app.series_frame(&ctx);
-        assert_eq!(app.series.model.len(), 1);
-        assert!(app.can_undo());
+        assert!(app.image.is_none() && app.series.model.is_empty() && app.doc.measurements.is_empty());
+        assert!(!app.is_dirty() && app.can_undo());
         app.undo(&ctx);
         assert_eq!((app.series.model.len(), app.series.model.active()), (2, 1));
         assert_eq!(app.image.as_ref().map(|i| i.width()), Some(40));
@@ -1172,8 +1141,11 @@ mod tests {
         app.series_do(&ctx, Act::Go(1));
         assert!(app.can_redo());
         app.redo(&ctx);
+        assert!(app.image.is_none() && app.series.model.is_empty());
+        // Vide de nouveau : la première image ouverte repart d'un travail neuf.
+        app.add_image(&ctx, RgbaImage::new(20, 20), None);
         assert_eq!(app.series.model.len(), 1);
-        assert_eq!(app.image.as_ref().map(|i| i.width()), Some(20));
+        assert!(!app.is_dirty());
     }
 
     /// Une capture en première position ne prend pas le nom d'une photo

@@ -1,203 +1,13 @@
-//! Série d'images : projet version 2 (plusieurs images, chacune avec son
-//! document), tableau consolidé de toute la série, vignettes.
-//!
-//! Le format version 1 (une image, voir `project.rs`) reste lu, et reste
-//! écrit tant que le projet ne contient qu'une image : une ancienne version
-//! de l'application peut donc toujours l'ouvrir.
+//! Série d'images : dimensions et vignettes, tableau consolidé de toute la
+//! série. Le fichier projet (une image ou plusieurs) est dans `project.rs`.
 
 use crate::image_io::{describe_io, file_name};
-use crate::project::{FORMAT_ID, absolute_clean, relative_to, resolve_image, write_atomic};
 use crate::table::{csv_field, csv_separator, format_precise, measurement_rows, quantity_columns, tsv_field};
-use crate::Project;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use image::RgbaImage;
 use meteroscope_core::{Document, series_summary};
 use meteroscope_i18n::tr;
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-
-/// Version du format à plusieurs images.
-pub const SERIES_FORMAT_VERSION: u32 = 2;
-
-/// Une image d'un projet et son document.
-#[derive(Clone, Debug)]
-pub struct SeriesImage {
-    /// Chemin de l'image (résolu en absolu à la lecture).
-    pub image_path: Option<PathBuf>,
-    /// Dimensions de l'image à l'enregistrement, si connues.
-    pub size: Option<(u32, u32)>,
-    /// L'image a sa propre échelle (elle ne suit pas celle de la série).
-    pub own_scale: bool,
-    /// À la lecture : le fichier image est introuvable. Les mesures sont là quand même.
-    pub missing: bool,
-    pub document: Document,
-}
-
-/// Projet complet : la série d'images.
-#[derive(Clone, Debug)]
-pub struct SeriesProject {
-    pub images: Vec<SeriesImage>,
-    /// Image affichée à l'enregistrement.
-    pub active: usize,
-    /// « Même échelle pour toute la série ».
-    pub shared_scale: bool,
-}
-
-fn yes() -> bool {
-    true
-}
-fn is_false(v: &bool) -> bool {
-    !*v
-}
-
-/// Une image sur disque (version 2) : mêmes champs que le projet version 1.
-#[derive(Serialize, Deserialize)]
-struct ImageFile {
-    /// Chemin relatif au projet (séparateurs `/`) si possible, sinon absolu.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    image: Option<String>,
-    /// Chemin absolu à l'enregistrement (secours si le projet a été déplacé).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    image_absolute: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    width: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    height: Option<u32>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    own_scale: bool,
-    document: Document,
-}
-
-/// Représentation sur disque (version 2).
-#[derive(Serialize, Deserialize)]
-struct SeriesFile {
-    format: String,
-    version: u32,
-    #[serde(default = "yes")]
-    shared_scale: bool,
-    #[serde(default)]
-    active: usize,
-    images: Vec<ImageFile>,
-}
-
-/// Enregistre la série. Un projet d'une seule image s'écrit en version 1.
-pub fn save_series(project: &SeriesProject, path: &Path) -> Result<()> {
-    if let [only] = project.images.as_slice() {
-        return crate::save_project(&Project { image_path: only.image_path.clone(), document: only.document.clone() }, path);
-    }
-    let ctx = || tr!("project.save_failed", file = file_name(path));
-    let proj_abs = absolute_clean(path);
-    let dir = proj_abs.parent().unwrap_or(Path::new("/"));
-    let images = project
-        .images
-        .iter()
-        .map(|i| {
-            let abs = i.image_path.as_deref().map(absolute_clean);
-            let abs_str = abs.as_ref().map(|a| a.to_string_lossy().into_owned());
-            ImageFile {
-                image: abs.as_ref().and_then(|a| relative_to(a, dir)).or_else(|| abs_str.clone()),
-                image_absolute: abs_str,
-                width: i.size.map(|s| s.0),
-                height: i.size.map(|s| s.1),
-                own_scale: i.own_scale,
-                document: i.document.clone(),
-            }
-        })
-        .collect();
-    let file = SeriesFile {
-        format: FORMAT_ID.to_owned(),
-        version: SERIES_FORMAT_VERSION,
-        shared_scale: project.shared_scale,
-        active: project.active,
-        images,
-    };
-    let mut json = serde_json::to_string_pretty(&file).context(tr!("project.serialize")).with_context(ctx)?;
-    json.push('\n');
-    write_atomic(path, json.as_bytes()).map_err(|e| anyhow!(describe_io(&e))).with_context(ctx)?;
-    Ok(())
-}
-
-/// Vrai si le fichier projet a la forme d'une série (liste `images`), faux
-/// pour un projet d'une image (clé `document`), quelle que soit sa version.
-fn is_series(value: &serde_json::Value) -> bool {
-    value.get("images").is_some()
-}
-
-/// Premier champ d'un document du fichier que cette version ne connaît pas
-/// et qui porte une valeur (par exemple une correction de perspective écrite
-/// par une version plus récente). L'ignorer afficherait des mesures fausses
-/// et le ferait disparaître à l'enregistrement : mieux vaut refuser.
-fn unknown_document_field(value: &serde_json::Value) -> Option<String> {
-    use serde_json::Value as V;
-    let empty = |v: &V| match v {
-        V::Null => true,
-        V::Bool(b) => !b,
-        V::Number(n) => n.as_f64() == Some(0.0),
-        V::String(s) => s.is_empty(),
-        V::Array(a) => a.is_empty(),
-        V::Object(o) => o.is_empty(),
-    };
-    for image in value.get("images")?.as_array()? {
-        let Some(written) = image.get("document").and_then(V::as_object) else { continue };
-        // Un document illisible est signalé plus loin, avec son erreur.
-        let Ok(doc) = serde_json::from_value::<Document>(V::Object(written.clone())) else { continue };
-        let Ok(V::Object(known)) = serde_json::to_value(&doc) else { continue };
-        if let Some((key, _)) = written.iter().find(|(k, v)| !known.contains_key(*k) && !empty(v)) {
-            return Some(key.clone());
-        }
-    }
-    None
-}
-
-/// Charge un projet version 1 (lu comme une série d'une image) ou 2.
-/// Une image introuvable ne fait pas échouer la lecture : elle est signalée
-/// par [`SeriesImage::missing`].
-pub fn load_series(path: &Path) -> Result<SeriesProject> {
-    let ctx = || tr!("project.open_failed", file = file_name(path));
-    let text = std::fs::read(path).map_err(|e| anyhow!(describe_io(&e))).with_context(ctx)?;
-    let text = String::from_utf8(text).map_err(|_| anyhow!(tr!("project.not_utf8"))).with_context(ctx)?;
-    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    let value: serde_json::Value = serde_json::from_str(text)
-        .map_err(|e| anyhow!(tr!("project.bad_json", line = e.line(), column = e.column())))
-        .with_context(ctx)?;
-    let missing = |p: &Option<PathBuf>| p.as_ref().is_some_and(|p| !p.exists());
-    // La forme du fichier décide du lecteur, pas son numéro de version : un
-    // projet d'une image (clé `document`) peut lui aussi évoluer au-delà de
-    // la version 1 et reste l'affaire de `load_project`, qui le valide.
-    if !is_series(&value) {
-        let p = crate::load_project(path)?;
-        let image = SeriesImage { missing: missing(&p.image_path), image_path: p.image_path, size: None, own_scale: false, document: p.document };
-        return Ok(SeriesProject { images: vec![image], active: 0, shared_scale: true });
-    }
-    let check = || -> Result<()> {
-        if value.get("format").and_then(|f| f.as_str()) != Some(FORMAT_ID) {
-            bail!(tr!("project.not_project"));
-        }
-        match value.get("version").and_then(|v| v.as_u64()) {
-            None => bail!(tr!("project.bad_version")),
-            Some(v) if v < SERIES_FORMAT_VERSION as u64 => bail!(tr!("project.bad_version")),
-            Some(v) if v > SERIES_FORMAT_VERSION as u64 => bail!(tr!("project.unknown_version", version = v, max = SERIES_FORMAT_VERSION)),
-            Some(_) => Ok(()),
-        }
-    };
-    check().with_context(ctx)?;
-    if let Some(field) = unknown_document_field(&value) {
-        return Err(anyhow!(tr!("project.newer_data", field = field))).with_context(ctx);
-    }
-    let file: SeriesFile =
-        serde_json::from_value(value).map_err(|e| anyhow!(tr!("project.bad_content", error = e))).with_context(ctx)?;
-    let proj_abs = absolute_clean(path);
-    let dir = proj_abs.parent().unwrap_or(Path::new("/"));
-    let images: Vec<SeriesImage> = file
-        .images
-        .into_iter()
-        .map(|i| {
-            let image_path = i.image.as_deref().map(|s| resolve_image(s, i.image_absolute.as_deref(), dir));
-            SeriesImage { missing: missing(&image_path), image_path, size: i.width.zip(i.height), own_scale: i.own_scale, document: i.document }
-        })
-        .collect();
-    Ok(SeriesProject { active: file.active.min(images.len().saturating_sub(1)), shared_scale: file.shared_scale, images })
-}
+use std::path::Path;
 
 /// Dimensions d'une image lues dans son en-tête (orientation EXIF comprise),
 /// sans la décoder. `None` si le fichier est illisible.
@@ -338,7 +148,10 @@ pub fn export_series_csv(images: &[(String, &Document)], path: &Path) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::absolute_clean;
+    use crate::{SeriesImage, SeriesProject, load_series, save_series};
     use meteroscope_core::{Pt, Shape};
+    use std::path::PathBuf;
 
     /// Dossier de test propre à chaque essai, dans le dossier de construction.
     fn scratch(name: &str) -> PathBuf {
@@ -433,8 +246,6 @@ mod tests {
         // Un projet d'une image en version 2 (clé `document`, sans `images`)
         // n'est pas pris pour une série : il va au lecteur de projet simple.
         let single_v2 = serde_json::json!({ "format": "meteroscope", "version": 2, "image": "a.png", "document": Document::new() });
-        assert!(!is_series(&single_v2));
-        assert!(is_series(&serde_json::from_str(&text).unwrap()));
         let single = dir.join("seule-v2.meteroscope");
         std::fs::write(&single, single_v2.to_string()).unwrap();
         assert_eq!(load_series(&single).unwrap().images.len(), 1);
@@ -456,6 +267,61 @@ mod tests {
         // Version inconnue.
         std::fs::write(&path, text.replace("\"version\": 2", "\"version\": 3")).unwrap();
         assert!(load_series(&path).is_err());
+    }
+
+    /// Un projet d'une image ne reste en version 1 que si la version 1.1.0,
+    /// qui ignore les champs qu'elle ne connaît pas, le relirait sans rien
+    /// perdre ni fausser.
+    #[test]
+    fn version_2_des_que_la_1_1_0_lirait_de_travers() {
+        meteroscope_i18n::set_language("fr");
+        let dir = scratch("compat");
+        write_png(&dir.join("a.png"));
+        let path = dir.join("p.meteroscope");
+        let version = |d: Document| {
+            save_series(&SeriesProject { images: vec![image(&dir.join("a.png"), d.clone())], active: 0, shared_scale: true }, &path).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            // Relu à l'identique quelle que soit la version.
+            let back = load_series(&path).unwrap();
+            assert_eq!(serde_json::to_value(&back.images[0].document).unwrap(), serde_json::to_value(&d).unwrap());
+            json["version"].as_u64().unwrap()
+        };
+        let plain = || {
+            let mut d = doc(&[30.0], Some((10.0, "mm")));
+            d.add(Shape::Rect { a: Pt::new(1., 1.), b: Pt::new(5., 4.), angle: 0.0 });
+            d.add(Shape::Marker { p: Pt::new(3.0, 4.0) });
+            d
+        };
+        assert_eq!(version(plain()), 1, "rien que la 1.1.0 ne connaisse");
+        let mut d = plain();
+        d.add(Shape::Rect { a: Pt::new(1., 1.), b: Pt::new(5., 4.), angle: 30.0 });
+        assert_eq!(version(d), 2, "rectangle incliné");
+        let mut d = plain();
+        d.set_rotation(12.0);
+        assert_eq!(version(d), 2, "redressement");
+        let mut d = plain();
+        d.set_scale_bar(meteroscope_core::ScaleBarSettings { visible: false, ..Default::default() });
+        assert_eq!(version(d), 2, "barre d'échelle");
+        let mut d = plain();
+        d.measurements[0].group = "lot A".to_owned();
+        assert_eq!(version(d), 2, "groupe");
+        let mut d = plain();
+        d.add(Shape::Text { p: Pt::new(1., 1.), text: "note".to_owned() });
+        assert_eq!(version(d), 2, "type de mesure inconnu de la 1.1.0");
+    }
+
+    /// Le garde-fou des champs inconnus vaut aussi pour un projet d'une image.
+    #[test]
+    fn champ_inconnu_refuse_dans_un_projet_d_une_image() {
+        meteroscope_i18n::set_language("fr");
+        let dir = scratch("inconnu");
+        let path = dir.join("p.meteroscope");
+        let file = |extra: &str| format!(r#"{{ "format": "meteroscope", "version": 1, "document": {{ {extra} "measurements": [], "calibration": {{ "scale": null }}, "next_id": 0, "counters": {{}} }} }}"#);
+        std::fs::write(&path, file("")).unwrap();
+        assert_eq!(load_series(&path).unwrap().images.len(), 1);
+        std::fs::write(&path, file(r#""champ_futur": { "a": 1 },"#)).unwrap();
+        let err = format!("{:#}", load_series(&path).unwrap_err());
+        assert!(err.contains("champ_futur"), "{err}");
     }
 
     #[test]

@@ -14,6 +14,10 @@ fn is_zero(v: &f64) -> bool {
     *v == 0.0
 }
 
+fn is_default_bar(v: &ScaleBarSettings) -> bool {
+    *v == ScaleBarSettings::default()
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct Snapshot {
     measurements: Vec<Measurement>,
@@ -46,7 +50,9 @@ pub struct Document {
     #[serde(skip)]
     pub orientation: Orientation,
     /// Barre d'échelle (affichage et coin) ; dessinée seulement si l'échelle est définie.
-    #[serde(default)]
+    /// Les réglages par défaut ne sont pas écrits : un document sans rien de
+    /// nouveau garde la forme que lit la version 1.1.0.
+    #[serde(default, skip_serializing_if = "is_default_bar")]
     pub scale_bar: ScaleBarSettings,
     /// Correction de perspective. Quand elle est présente, l'image de travail
     /// est la photo reprojetée (reconstruite à partir du fichier d'origine,
@@ -129,6 +135,36 @@ impl Document {
         self.undo.push(self.snapshot());
         self.restore(s);
         true
+    }
+
+    /// Copie du document sans son historique, comme s'il venait d'être
+    /// ouvert : une capture reprend les mesures du flux caméra, pas les
+    /// étapes qui y ont mené (Ctrl+Z doit défaire la capture, pas le flux).
+    pub fn detached(&self) -> Self {
+        Self { undo: vec![], redo: vec![], revision: 0, ..self.clone() }
+    }
+
+    /// L'image du document vient de changer de résolution d'un facteur `s`
+    /// (même rapport d'aspect) et ses mesures ont suivi (voir
+    /// [`crate::rescale`]) : l'historique suit aussi, pour qu'aucune
+    /// annulation ne ramène des coordonnées de l'ancienne résolution.
+    /// `absorb` : le changement a posé une étape annulable, qui est retirée
+    /// (ce n'est pas une modification de l'utilisateur).
+    pub fn rescale_history(&mut self, s: f64, absorb: bool) {
+        if absorb {
+            self.undo.pop();
+        }
+        if !(s.is_finite() && s > 0.0) {
+            return;
+        }
+        for snapshot in self.undo.iter_mut().chain(&mut self.redo) {
+            for m in &mut snapshot.measurements {
+                m.shape.map_points(|p| Pt::new(p.x * s, p.y * s));
+            }
+            if let Some(scale) = &mut snapshot.calibration.scale {
+                scale.units_per_px /= s;
+            }
+        }
     }
 
     /// Change la rotation d'affichage (annulable). Renvoie `false` si rien ne change.
