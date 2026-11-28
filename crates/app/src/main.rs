@@ -7,6 +7,7 @@ mod clipboard;
 mod history;
 mod language;
 mod prefs;
+mod profile_view;
 mod settings;
 
 /// Icône de la fenêtre et de la barre des tâches.
