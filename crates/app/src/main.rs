@@ -5,6 +5,7 @@ mod app;
 mod camera_view;
 mod language;
 mod prefs;
+mod settings;
 
 /// Icône de la fenêtre et de la barre des tâches.
 fn window_icon() -> egui::IconData {
@@ -22,6 +23,8 @@ fn main() -> eframe::Result {
             .with_min_inner_size([720.0, 480.0])
             .with_drag_and_drop(true)
             .with_icon(window_icon()),
+        // Taille et position de la fenêtre, restaurées au lancement suivant.
+        persistence_path: settings::window_file(),
         ..Default::default()
     };
     let initial = std::env::args_os().nth(1).map(std::path::PathBuf::from);
