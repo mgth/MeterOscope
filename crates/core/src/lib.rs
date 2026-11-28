@@ -7,6 +7,7 @@ pub mod calibration;
 pub mod document;
 pub mod geometry;
 pub mod measure;
+pub mod rescale;
 pub mod stats;
 
 pub use calibration::{Calibration, Scale};

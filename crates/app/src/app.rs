@@ -11,6 +11,8 @@ use meteroscope_panels::CalibrationDialog;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod live;
+
 #[derive(PartialEq)]
 enum Mode {
     Image,
@@ -198,8 +200,7 @@ impl MeterOscopeApp {
 
     fn mode_image(&mut self) {
         if self.mode == Mode::Camera {
-            self.camera.stop();
-            self.mode = Mode::Image;
+            self.leave_camera();
         }
     }
 
@@ -262,7 +263,7 @@ impl MeterOscopeApp {
     /// Enregistre le projet (mesures). Une capture caméra sans fichier est
     /// d'abord enregistrée en PNG à côté du projet.
     fn save_project(&mut self, save_as: bool) {
-        if self.image.is_none() {
+        if self.image.is_none() || self.mode == Mode::Camera {
             return;
         }
         let path = match (&self.project_path, save_as) {
@@ -323,8 +324,7 @@ impl MeterOscopeApp {
         if self.mode == Mode::Camera {
             self.mode_image();
         } else {
-            self.mode = Mode::Camera;
-            self.camera.start(ctx);
+            self.enter_camera(ctx);
         }
     }
 
@@ -356,10 +356,7 @@ impl MeterOscopeApp {
         }
 
         // Touches simples : seulement si aucun champ de texte n'a le focus.
-        if ctx.egui_wants_keyboard_input() || self.calibration.is_open() || self.mode == Mode::Camera {
-            if self.mode == Mode::Camera && ctx.input(|i| i.key_pressed(Key::Escape)) {
-                self.mode_image();
-            }
+        if ctx.egui_wants_keyboard_input() || self.calibration.is_open() {
             return;
         }
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
@@ -367,8 +364,10 @@ impl MeterOscopeApp {
                 self.canvas.cancel();
             } else if self.canvas.tool() != Tool::Select {
                 self.canvas.set_tool(Tool::Select);
-            } else {
+            } else if self.doc.selected.is_some() || self.mode == Mode::Image {
                 self.doc.selected = None;
+            } else {
+                self.mode_image();
             }
         }
         if ctx.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) && !self.canvas.is_drawing()
@@ -500,7 +499,7 @@ impl MeterOscopeApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 crate::language::selector(ui);
                 ui.separator();
-                if let Some(img) = &self.image {
+                if let Some(img) = self.image.as_ref().filter(|_| self.mode == Mode::Image) {
                     ui.label(format!("{} × {} px", img.width(), img.height()));
                     ui.separator();
                 }
@@ -568,7 +567,7 @@ impl eframe::App for MeterOscopeApp {
             ui.add_space(4.0);
         });
 
-        let show_tools = self.image.is_some() && self.mode == Mode::Image;
+        let show_tools = self.image.is_some() || self.mode == Mode::Camera;
         let mut cursor = None;
         // La barre d'état est déclarée avant le centre mais affiche le curseur de la frame précédente.
         let cursor_id = egui::Id::unique("meteroscope_cursor");
@@ -599,12 +598,7 @@ impl eframe::App for MeterOscopeApp {
         }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match self.mode {
-            Mode::Camera => {
-                if let Some(img) = self.camera.show(ui) {
-                    self.set_image(&ctx, img, None);
-                    self.info(tr!("msg.image_captured"));
-                }
-            }
+            Mode::Camera => cursor = self.live_view(ui),
             Mode::Image if self.image.is_none() => self.welcome(ui),
             Mode::Image => {
                 // Redressement ou filtre changé (outil, annulation, projet ouvert…).
