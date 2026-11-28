@@ -6,29 +6,50 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag existant à reconstruire et à ajouter à sa release (ex. v1.2.0) ; vide : branche choisie, sans publication"
+        required: false
 
 permissions:
   contents: write
+
+env:
+  # Sources compilées : le tag demandé à la main, sinon la référence courante.
+  SRC_REF: ${{ inputs.tag || github.ref }}
 
 jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Sources à compiler
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SRC_REF }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo build --release -p meteroscope
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Compilation
+        run: cargo build --release -p meteroscope
       - name: Version
         id: version
         shell: pwsh
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           $v = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages | Where-Object name -eq 'meteroscope' | Select-Object -ExpandProperty version
-          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$v") { throw "Le tag $env:GITHUB_REF_NAME ne correspond pas à la version $v de Cargo.toml" }
+          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { $env:GITHUB_REF_NAME }
+          # Lancement manuel sans tag (même sur une référence de tag) : compilation seule.
+          $release = [bool]$env:INPUT_TAG -or ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -like 'refs/tags/v*')
+          if ($release -and $tag -ne "v$v") { throw "Le tag $tag ne correspond pas à la version $v de Cargo.toml" }
           "version=$v" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "release=$($release.ToString().ToLower())" >> $env:GITHUB_OUTPUT
       - name: Paquet portable
         shell: pwsh
         run: |
@@ -52,10 +73,11 @@ jobs:
           path: |
             dist/*.zip
             dist/*.exe
-      - name: Publication (tag v*)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publication (tag v* ou tag demandé)
+        if: steps.version.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           name: MeterOscope ${{ steps.version.outputs.version }}
           files: |
             dist/*.zip

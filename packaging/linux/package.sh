@@ -58,9 +58,17 @@ Section: graphics
 Priority: optional
 Homepage: https://github.com/mgth/MeterOscope
 Description: Measure lengths, angles and areas on images
- MeterOscope opens a photo or captures from a camera or USB microscope,
- calibrates the scale on a segment of known length, then measures lengths,
- paths, angles, areas, rectangles and circles, and counts markers.
+ MeterOscope opens a photo, a pasted image or a series of images, or measures
+ directly on the live feed of a camera or USB microscope. It calibrates the
+ scale on a segment of known length (with named presets), straightens tilted
+ photos and corrects perspective, then measures lengths, paths, point-to-line
+ and parallel distances, angles, inclinations, areas, rectangles, ellipses,
+ circles and arcs, counts markers, and finds edge-to-edge widths on intensity
+ profiles. Objects can be detected automatically by thresholding.
+ .
+ Measurements snap to remarkable points, can be grouped and annotated with
+ text and arrows, with statistics per type and per group. Results export to
+ CSV, annotated PNG, SVG and PDF reports, with an optional scale bar.
  Interface in 10 languages.
 EOF
 ( cd "$d" && find usr -type f -print0 | sort -z | xargs -0 md5sum ) > "$c/md5sums"

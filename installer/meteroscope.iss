@@ -1,9 +1,9 @@
 ﻿; Installeur Windows de MeterOscope (Inno Setup 6).
-; Compilation : iscc /DAppVersion=1.0.0 /DSourceDir=<dossier contenant meteroscope.exe> installer\meteroscope.iss
+; Compilation : iscc /DAppVersion=1.2.0 /DSourceDir=<dossier contenant meteroscope.exe> installer\meteroscope.iss
 ; Le fichier produit est installer\Output\MeterOscope-<version>-setup-x64.exe.
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.2.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\target\release"

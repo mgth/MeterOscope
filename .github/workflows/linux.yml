@@ -33,11 +33,16 @@ jobs:
           ref: ${{ env.SRC_REF }}
           path: src
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src
       - name: Dépendances de compilation
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libclang-dev desktop-file-utils
+      - name: Clippy
+        working-directory: src
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         working-directory: src
         run: cargo test --workspace
