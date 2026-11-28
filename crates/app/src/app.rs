@@ -204,8 +204,11 @@ impl MeterOscopeApp {
         }
     }
 
+    /// L'image fixe a des modifications non enregistrées (en mode caméra, son
+    /// document est mis de côté : les mesures du flux ne comptent pas).
     fn is_dirty(&self) -> bool {
-        self.doc.revision() != self.saved_revision
+        let doc = if self.mode == Mode::Camera { &self.camera.other_doc } else { &self.doc };
+        doc.revision() != self.saved_revision
     }
 
     // ---------- fichiers ----------
