@@ -6,20 +6,24 @@ use egui::{Align2, FontId, Key, Rect, RichText, ScrollArea, Sense, Ui, WidgetInf
 use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
-pub const TOOLS: [Tool; 14] = [
+pub const TOOLS: [Tool; 18] = [
     Tool::Select,
     Tool::Calibrate,
     Tool::Straighten,
     Tool::Draw(ShapeKind::Length),
     Tool::Draw(ShapeKind::Path),
+    Tool::Draw(ShapeKind::PointLine),
+    Tool::Draw(ShapeKind::Parallel),
+    Tool::Draw(ShapeKind::Profile),
     Tool::Draw(ShapeKind::Angle),
     Tool::Draw(ShapeKind::LineAngle),
-    Tool::Draw(ShapeKind::Profile),
     Tool::Draw(ShapeKind::Area),
     Tool::Draw(ShapeKind::Rect),
     Tool::Draw(ShapeKind::Rect3),
+    Tool::Draw(ShapeKind::Ellipse),
     Tool::Draw(ShapeKind::Circle),
     Tool::Draw(ShapeKind::Circle3),
+    Tool::Draw(ShapeKind::Arc),
     Tool::Draw(ShapeKind::Marker),
 ];
 
@@ -43,6 +47,8 @@ fn short_name(tool: Tool) -> &'static str {
     match tool {
         Tool::Draw(ShapeKind::Circle3) => tr!("tool.circle3_short"),
         Tool::Draw(ShapeKind::Rect3) => tr!("tool.rect3_short"),
+        Tool::Draw(ShapeKind::PointLine) => tr!("tool.point_line_short"),
+        Tool::Draw(ShapeKind::Parallel) => tr!("tool.parallel_short"),
         t => tool_name(t),
     }
 }
@@ -64,6 +70,10 @@ pub fn tool_description(tool: Tool) -> &'static str {
             ShapeKind::Marker => tr!("tool_help.marker"),
             ShapeKind::LineAngle => tr!("tool_help.line_angle"),
             ShapeKind::Rect3 => tr!("tool_help.rect3"),
+            ShapeKind::PointLine => tr!("tool_help.point_line"),
+            ShapeKind::Parallel => tr!("tool_help.parallel"),
+            ShapeKind::Ellipse => tr!("tool_help.ellipse"),
+            ShapeKind::Arc => tr!("tool_help.arc"),
             ShapeKind::Profile => tr!("tool_help.profile"),
         },
     }
@@ -74,6 +84,7 @@ pub fn tool_description(tool: Tool) -> &'static str {
 /// S Sélection · E Échelle · H Horizon (redresser) · L Longueur · B ligne
 /// Brisée (chemin) · A Angle · I Inclinaison · P Polygone (surface) ·
 /// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur ·
+/// D Distance point-droite · G écart (« Gap ») entre parallèles · V ellipse (oVale) · U arc (en U).
 /// W profil d'intensité (« Width », largeur d'un trait).
 pub fn tool_shortcut(tool: Tool) -> Option<Key> {
     Some(match tool {
@@ -91,6 +102,10 @@ pub fn tool_shortcut(tool: Tool) -> Option<Key> {
             ShapeKind::Marker => Key::M,
             ShapeKind::LineAngle => Key::I,
             ShapeKind::Rect3 => Key::O,
+            ShapeKind::PointLine => Key::D,
+            ShapeKind::Parallel => Key::G,
+            ShapeKind::Ellipse => Key::V,
+            ShapeKind::Arc => Key::U,
             ShapeKind::Profile => Key::W,
         },
     })
@@ -105,28 +120,75 @@ pub fn tool_tooltip(tool: Tool) -> String {
 }
 
 /// Palette d'outils verticale (gros boutons avec icône dessinée + nom,
-/// raccourci en infobulle). Modifie `tool` au clic.
+/// raccourci en infobulle). Modifie `tool` au clic. Les outils sont groupés
+/// par famille, séparées d'un trait ; si la hauteur ne suffit pas pour une
+/// seule colonne, chaque famille se range deux par deux (aucun outil caché).
 pub fn tool_palette(ui: &mut Ui, tool: &mut Tool) {
-    ui.set_width(BUTTON_W);
+    let columns = palette_columns(ui.available_height());
+    let gap = ui.spacing().item_spacing.x;
+    ui.set_width(BUTTON_W * columns as f32 + gap * (columns - 1) as f32);
     ScrollArea::vertical()
         .id_salt("meteroscope_palette_outils")
         .auto_shrink([true, true])
         .content_margin(0.0)
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.spacing_mut().item_spacing.y = ROW_GAP;
             ui.add_space(4.0);
-            for t in TOOLS {
-                if t == Tool::Draw(ShapeKind::Length) {
+            for (i, group) in families().iter().enumerate() {
+                if i > 0 {
                     ui.add_space(2.0);
                     ui.separator();
                     ui.add_space(2.0);
                 }
-                if tool_button(ui, t, *tool == t).clicked() {
-                    *tool = t;
+                for row in group.chunks(columns) {
+                    ui.horizontal(|ui| {
+                        for t in row {
+                            if tool_button(ui, *t, *tool == *t).clicked() {
+                                *tool = *t;
+                            }
+                        }
+                    });
                 }
             }
             ui.add_space(4.0);
         });
+}
+
+/// Espace vertical entre deux boutons.
+const ROW_GAP: f32 = 3.0;
+/// Hauteur prise par un séparateur de familles (marges comprises).
+const SEPARATOR_H: f32 = 12.0;
+
+/// Famille d'un outil : réglages de l'image, longueurs et distances, angles,
+/// surfaces, cercles et arcs, comptage.
+fn family(tool: Tool) -> u8 {
+    match tool {
+        Tool::Select | Tool::Calibrate | Tool::Straighten => 0,
+        Tool::Draw(k) => match k {
+            ShapeKind::Length | ShapeKind::Path | ShapeKind::PointLine | ShapeKind::Parallel | ShapeKind::Profile => 1,
+            ShapeKind::Angle | ShapeKind::LineAngle => 2,
+            ShapeKind::Area | ShapeKind::Rect | ShapeKind::Rect3 | ShapeKind::Ellipse => 3,
+            ShapeKind::Circle | ShapeKind::Circle3 | ShapeKind::Arc => 4,
+            ShapeKind::Marker => 5,
+        },
+    }
+}
+
+/// Outils groupés par famille, dans l'ordre de la palette.
+fn families() -> Vec<Vec<Tool>> {
+    TOOLS.chunk_by(|a, b| family(*a) == family(*b)).map(<[Tool]>::to_vec).collect()
+}
+
+/// Hauteur de la palette sur `columns` colonnes.
+fn palette_height(columns: usize) -> f32 {
+    let groups = families();
+    let rows: usize = groups.iter().map(|g| g.len().div_ceil(columns)).sum();
+    8.0 + rows as f32 * (BUTTON_H + ROW_GAP) + (groups.len() - 1) as f32 * SEPARATOR_H
+}
+
+/// Une colonne si tout tient dans la hauteur `available`, sinon deux.
+fn palette_columns(available: f32) -> usize {
+    if palette_height(1) <= available { 1 } else { 2 }
 }
 
 /// Un bouton de la palette : icône au-dessus, nom dessous, lettre du
@@ -192,7 +254,7 @@ mod tests {
             assert_eq!(k.name().len(), 1, "{k:?} n'est pas une lettre");
             assert!(k.name().chars().all(|c| c.is_ascii_uppercase()));
         }
-        assert_eq!(seen.len(), 14);
+        assert_eq!(seen.len(), 18);
     }
 
     #[test]
@@ -202,5 +264,22 @@ mod tests {
             assert!(TOOLS.contains(&Tool::Draw(k)));
         }
         assert!(tool_tooltip(Tool::Draw(ShapeKind::Length)).ends_with("Raccourci : L"));
+    }
+
+    #[test]
+    fn familles_sans_outil_cache() {
+        meteroscope_i18n::set_language("fr");
+        // Chaque outil apparaît une fois, les familles sont contiguës dans TOOLS.
+        let flat: Vec<Tool> = families().concat();
+        assert_eq!(flat, TOOLS.to_vec());
+        let ids: Vec<u8> = families().iter().map(|g| family(g[0])).collect();
+        assert_eq!(ids, [0, 1, 2, 3, 4, 5]);
+        assert!(families()[1].contains(&Tool::Draw(ShapeKind::PointLine)));
+        assert!(families()[4].contains(&Tool::Draw(ShapeKind::Arc)));
+        // Deux colonnes quand la hauteur manque : bien moins haut, mêmes outils.
+        assert_eq!(palette_columns(2000.0), 1);
+        assert_eq!(palette_columns(700.0), 2);
+        assert!(palette_height(2) < 0.65 * palette_height(1));
+        assert!(palette_height(2) < 700.0);
     }
 }
