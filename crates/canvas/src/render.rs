@@ -279,6 +279,18 @@ pub fn paint_image(p: &Painter, tex: TextureId, img: [usize; 2], xf: Xf, baked: 
     p.add(EShape::mesh(mesh));
 }
 
+/// Calque `tex` couvrant le rectangle image `[x0, y0, x1, y1]` (rotation comprise).
+pub fn paint_overlay(p: &Painter, tex: TextureId, r: [f64; 4], xf: Xf) {
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+        let pos = xf.to_screen(Pt::new(r[0] + x * (r[2] - r[0]), r[1] + y * (r[3] - r[1])));
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv: pos2(x as f32, y as f32), color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    p.add(EShape::mesh(mesh));
+}
+
 /// Contour écran de l'image (quadrilatère, rotation comprise).
 pub fn image_outline(xf: Xf, img: [usize; 2]) -> Vec<Pos2> {
     let (w, h) = (img[0] as f64, img[1] as f64);

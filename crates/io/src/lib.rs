@@ -5,6 +5,7 @@
 //! existantes ; on peut en ajouter.
 
 mod fonts;
+pub mod detect;
 mod image_io;
 mod perspective;
 mod presets;
