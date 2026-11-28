@@ -53,8 +53,9 @@ impl Settings {
         s
     }
 
-    pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_default()
+    /// Échoue si un chemin n'est pas représentable en JSON (non UTF-8).
+    pub fn to_json(&self) -> serde_json::Result<String> {
+        serde_json::to_string_pretty(self)
     }
 
     pub fn load_from(file: &Path) -> Self {
@@ -62,12 +63,14 @@ impl Settings {
     }
 
     /// Écrit dans un fichier voisin puis le renomme : une coupure ne laisse pas un fichier tronqué.
+    /// Si les réglages ne peuvent pas être mis en JSON, le fichier existant reste intact.
     pub fn save_to(&self, file: &Path) -> std::io::Result<()> {
+        let json = self.to_json()?;
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = file.with_extension("json.tmp");
-        std::fs::write(&tmp, self.to_json())?;
+        std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, file)
     }
 
@@ -87,18 +90,32 @@ impl Settings {
     /// Retient un fichier ouvert ou enregistré (récents et dernier dossier), puis enregistre.
     pub fn add_recent(&mut self, path: &Path) {
         let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-        self.last_dir = path.parent().map(Path::to_owned);
-        push_recent(&mut self.recent, path);
+        self.remember(path);
         self.save();
+    }
+
+    /// Met `path` en tête des récents et retient son dossier.
+    fn remember(&mut self, path: PathBuf) {
+        self.remember_dir_of(&path);
+        push_recent(&mut self.recent, path);
     }
 
     /// Retient le dossier d'un fichier enregistré (export), puis enregistre.
     pub fn set_last_dir_of(&mut self, path: &Path) {
-        let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).map(Path::to_owned);
-        if dir.is_some() && dir != self.last_dir {
-            self.last_dir = dir;
+        if self.remember_dir_of(path) {
             self.save();
         }
+    }
+
+    /// Retient le dossier de `path` ; renvoie `true` s'il a changé. Un dossier
+    /// vide ou non UTF-8 (non enregistrable en JSON) est ignoré.
+    fn remember_dir_of(&mut self, path: &Path) -> bool {
+        let dir = path.parent().filter(|d| d.to_str().is_some_and(|s| !s.is_empty())).map(Path::to_owned);
+        let changed = dir.is_some() && dir != self.last_dir;
+        if changed {
+            self.last_dir = dir;
+        }
+        changed
     }
 
     /// Dossier proposé par les dialogues, s'il existe encore.
@@ -276,6 +293,31 @@ mod tests {
         assert!(!file.with_extension("json.tmp").exists());
         std::fs::write(&file, "\0\0 abîmé").unwrap();
         assert_eq!(Settings::load_from(&file), Settings::default(), "fichier corrompu");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chemin_non_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let bad_dir = Path::new("/photos").join(OsStr::from_bytes(b"caf\xe9"));
+        let mut s = Settings::default();
+        s.remember(p("/photos/a.jpg"));
+        // Ni le fichier ni son dossier ne sont retenus ; les réglages restent enregistrables.
+        s.remember(bad_dir.join("b.jpg"));
+        assert!(!s.remember_dir_of(&bad_dir.join("c.png")));
+        assert_eq!((s.recent.clone(), s.last_dir.clone()), (vec![p("/photos/a.jpg")], Some(p("/photos"))));
+        assert!(s.to_json().is_ok());
+
+        // Des réglages non enregistrables ne remplacent pas le fichier existant.
+        let dir = std::env::temp_dir().join(format!("meteroscope-settings-utf8-{}", std::process::id()));
+        let file = dir.join("settings.json");
+        s.save_to(&file).unwrap();
+        let bad = Settings { last_dir: Some(bad_dir), ..s.clone() };
+        assert!(bad.save_to(&file).is_err());
+        assert_eq!(Settings::load_from(&file), s);
+        assert!(!file.with_extension("json.tmp").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
