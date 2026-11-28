@@ -2226,7 +2226,7 @@ dependencies = [
 
 [[package]]
 name = "meteroscope"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -2249,7 +2249,7 @@ dependencies = [
 
 [[package]]
 name = "meteroscope-camera"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "image",
  "meteroscope-i18n",
@@ -2261,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "meteroscope-canvas"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "egui",
  "egui_kittest",
@@ -2271,7 +2271,7 @@ dependencies = [
 
 [[package]]
 name = "meteroscope-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "meteroscope-i18n",
  "serde",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "meteroscope-i18n"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde_json",
  "sys-locale",
@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "meteroscope-io"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -2306,7 +2306,7 @@ dependencies = [
 
 [[package]]
 name = "meteroscope-panels"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "egui",
  "egui_kittest",
