@@ -458,7 +458,7 @@
   "tool.straighten": "Redresser",
   "tool_group.angles": "Angles",
   "tool_group.annotations": "Annotations",
-  "tool_group.circles": "Cercles et arcs",
+  "tool_group.circles": "Cercles, arcs et ellipses",
   "tool_group.hint": "Clic droit ou appui long : {tools}",
   "tool_group.lines": "Lignes et distances",
   "tool_group.reference": "Référence",

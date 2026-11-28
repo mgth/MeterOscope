@@ -458,7 +458,7 @@
   "tool.straighten": "校正",
   "tool_group.angles": "角度",
   "tool_group.annotations": "注释",
-  "tool_group.circles": "圆与圆弧",
+  "tool_group.circles": "圆、圆弧与椭圆",
   "tool_group.hint": "右键单击或长按：{tools}",
   "tool_group.lines": "线与距离",
   "tool_group.reference": "参考",

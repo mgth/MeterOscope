@@ -458,7 +458,7 @@
   "tool.straighten": "Ausrichten",
   "tool_group.angles": "Winkel",
   "tool_group.annotations": "Anmerkungen",
-  "tool_group.circles": "Kreise und Bögen",
+  "tool_group.circles": "Kreise, Bögen und Ellipsen",
   "tool_group.hint": "Rechtsklick oder lange drücken: {tools}",
   "tool_group.lines": "Linien und Abstände",
   "tool_group.reference": "Referenz",

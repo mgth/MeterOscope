@@ -21,13 +21,13 @@ pub const TOOLS: [Tool; 21] = [
     Tool::Draw(ShapeKind::Profile),
     Tool::Draw(ShapeKind::Angle),
     Tool::Draw(ShapeKind::LineAngle),
-    Tool::Draw(ShapeKind::Area),
     Tool::Draw(ShapeKind::Rect),
     Tool::Draw(ShapeKind::Rect3),
-    Tool::Draw(ShapeKind::Ellipse),
+    Tool::Draw(ShapeKind::Area),
     Tool::Draw(ShapeKind::Circle),
     Tool::Draw(ShapeKind::Circle3),
     Tool::Draw(ShapeKind::Arc),
+    Tool::Draw(ShapeKind::Ellipse),
     Tool::Draw(ShapeKind::Marker),
     Tool::Draw(ShapeKind::Text),
     Tool::Draw(ShapeKind::Arrow),
@@ -74,15 +74,19 @@ pub const GROUPS: [ToolGroup; 8] = [
     ToolGroup {
         label: Some(|| tr!("tool_group.surfaces")),
         tools: &[
-            Tool::Draw(ShapeKind::Area),
             Tool::Draw(ShapeKind::Rect),
             Tool::Draw(ShapeKind::Rect3),
-            Tool::Draw(ShapeKind::Ellipse),
+            Tool::Draw(ShapeKind::Area),
         ],
     },
     ToolGroup {
         label: Some(|| tr!("tool_group.circles")),
-        tools: &[Tool::Draw(ShapeKind::Circle), Tool::Draw(ShapeKind::Circle3), Tool::Draw(ShapeKind::Arc)],
+        tools: &[
+            Tool::Draw(ShapeKind::Circle),
+            Tool::Draw(ShapeKind::Circle3),
+            Tool::Draw(ShapeKind::Arc),
+            Tool::Draw(ShapeKind::Ellipse),
+        ],
     },
     ToolGroup { label: None, tools: &[Tool::Draw(ShapeKind::Marker)] },
     ToolGroup {
@@ -404,7 +408,11 @@ mod tests {
             assert_eq!(g.label.is_some(), g.tools.len() > 1, "{}", g.name());
         }
         assert_eq!(tool_group(Tool::Draw(ShapeKind::Rect3)).name(), "Surfaces");
-        assert_eq!(tool_group(Tool::Draw(ShapeKind::Arc)).name(), "Cercles et arcs");
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Arc)).name(), "Cercles, arcs et ellipses");
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Ellipse)).name(), "Cercles, arcs et ellipses");
+        // Outil montré par défaut sur le bouton de chaque groupe.
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Area)).tools[0], Tool::Draw(ShapeKind::Rect));
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Ellipse)).tools[0], Tool::Draw(ShapeKind::Circle));
         assert_eq!(tool_group(Tool::Draw(ShapeKind::Parallel)).name(), "Lignes et distances");
         // Deux colonnes quand la hauteur manque : bien moins haut, mêmes outils.
         assert_eq!(palette_columns(2000.0), 1);

@@ -458,7 +458,7 @@
   "tool.straighten": "水平補正",
   "tool_group.angles": "角度",
   "tool_group.annotations": "注釈",
-  "tool_group.circles": "円と円弧",
+  "tool_group.circles": "円・円弧・楕円",
   "tool_group.hint": "右クリックまたは長押し：{tools}",
   "tool_group.lines": "線と距離",
   "tool_group.reference": "基準",

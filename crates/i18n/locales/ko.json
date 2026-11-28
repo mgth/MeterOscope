@@ -458,7 +458,7 @@
   "tool.straighten": "수평 보정",
   "tool_group.angles": "각도",
   "tool_group.annotations": "주석",
-  "tool_group.circles": "원과 호",
+  "tool_group.circles": "원, 호, 타원",
   "tool_group.hint": "오른쪽 클릭 또는 길게 누르기: {tools}",
   "tool_group.lines": "선과 거리",
   "tool_group.reference": "기준",

@@ -458,7 +458,7 @@
   "tool.straighten": "Endireitar",
   "tool_group.angles": "Ângulos",
   "tool_group.annotations": "Anotações",
-  "tool_group.circles": "Círculos e arcos",
+  "tool_group.circles": "Círculos, arcos e elipses",
   "tool_group.hint": "Clique direito ou toque longo: {tools}",
   "tool_group.lines": "Linhas e distâncias",
   "tool_group.reference": "Referência",
