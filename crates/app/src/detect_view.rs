@@ -138,7 +138,7 @@ impl DetectView {
         }
 
         match (&self.texture, &self.prep) {
-            (Some(t), Some((_, p))) if self.open => {
+            (Some(t), Some((_, p))) if self.open && !p.is_empty() => {
                 let (x0, y0, k) = (p.origin.0 as f64, p.origin.1 as f64, p.scale as f64);
                 canvas.set_overlay(Some((t.id(), [x0, y0, x0 + p.width as f64 * k, y0 + p.height as f64 * k])));
             }
@@ -170,6 +170,12 @@ impl DetectView {
             return;
         }
         let prep = &self.prep.as_ref().unwrap().1;
+        // Zone vide (rectangle aplati, hors de l'image) : rien à montrer, et
+        // une texture de taille nulle ferait planter le rendu (wgpu).
+        if prep.is_empty() {
+            self.shown = Some((params, 0));
+            return;
+        }
         let (overlay, n) = detect::preview(prep, &params);
         let ci = ColorImage::from_rgba_unmultiplied([overlay.width() as usize, overlay.height() as usize], overlay.as_raw());
         match &mut self.texture {
@@ -287,6 +293,20 @@ mod tests {
         view.pending = pending();
         assert!(view.frame(&ctx, Some(&img), &mut photo_doc, &mut canvas).is_some());
         assert_eq!(photo_doc.measurements.len(), 1);
+    }
+
+    #[test]
+    fn zone_aplatie() {
+        // Rectangle de largeur nulle choisi comme zone : ni aperçu, ni
+        // texture vide (qui ferait planter le rendu).
+        meteroscope_i18n::set_language("fr");
+        let (ctx, img) = (egui::Context::default(), RgbaImage::new(64, 64));
+        let mut doc = Document::new();
+        doc.add(Shape::Rect { a: Pt::new(10., 10.), b: Pt::new(10., 40.), angle: 0.0 });
+        let mut view = DetectView { open: true, ..Default::default() };
+        view.update_preview(&ctx, &img, zone_of(&doc).map(|z| z.1));
+        assert!(view.texture.is_none());
+        assert_eq!(view.shown.map(|s| s.1), Some(0));
     }
 
     #[test]
