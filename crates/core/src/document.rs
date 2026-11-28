@@ -1,6 +1,7 @@
 use crate::calibration::{Calibration, Scale};
 use crate::geometry::Pt;
 use crate::measure::{Measurement, Quantity, Shape, ShapeKind, PALETTE};
+use crate::scale_bar::ScaleBarSettings;
 use crate::perspective::{Homography, Perspective, order_quad};
 use crate::stats::Stats;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ struct Snapshot {
     measurements: Vec<Measurement>,
     calibration: Calibration,
     rotation: f64,
+    scale_bar: ScaleBarSettings,
     perspective: Option<Perspective>,
 }
 
@@ -35,6 +37,9 @@ pub struct Document {
     /// changent pas : seule la vue pivote.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rotation: f64,
+    /// Barre d'échelle (affichage et coin) ; dessinée seulement si l'échelle est définie.
+    #[serde(default)]
+    pub scale_bar: ScaleBarSettings,
     /// Correction de perspective. Quand elle est présente, l'image de travail
     /// est la photo reprojetée (reconstruite à partir du fichier d'origine,
     /// qui n'est pas modifié) et les coordonnées des mesures sont en pixels
@@ -65,6 +70,7 @@ impl Document {
             measurements: self.measurements.clone(),
             calibration: self.calibration.clone(),
             rotation: self.rotation,
+            scale_bar: self.scale_bar,
             perspective: self.perspective.clone(),
         }
     }
@@ -93,6 +99,7 @@ impl Document {
         self.measurements = s.measurements;
         self.calibration = s.calibration;
         self.rotation = s.rotation;
+        self.scale_bar = s.scale_bar;
         self.perspective = s.perspective;
         if self.selected.is_some_and(|id| self.get(id).is_none()) {
             self.selected = None;
@@ -124,6 +131,16 @@ impl Document {
         }
         self.checkpoint();
         self.rotation = deg;
+        true
+    }
+
+    /// Change les réglages de la barre d'échelle (annulable). Renvoie `false` si rien ne change.
+    pub fn set_scale_bar(&mut self, settings: ScaleBarSettings) -> bool {
+        if settings == self.scale_bar {
+            return false;
+        }
+        self.checkpoint();
+        self.scale_bar = settings;
         true
     }
 
@@ -451,5 +468,33 @@ mod tests {
         assert!((w2 - 2.0 * w).abs() < 1e-9 && (h2 - 2.0 * h).abs() < 1e-9, "{w} × {h} → {w2} × {h2}");
         let Shape::Rect { angle, .. } = shape else { panic!() };
         assert!((angle - 110.0).abs() < 1e-9, "{angle}");
+    }
+
+    #[test]
+    fn scale_bar_settings_undo_and_old_files() {
+        use crate::scale_bar::Corner;
+        meteroscope_i18n::set_language("fr");
+        let mut d = Document::new();
+        assert_eq!(d.scale_bar, ScaleBarSettings { visible: true, corner: Corner::BottomRight });
+        let hidden = ScaleBarSettings { visible: false, ..d.scale_bar };
+        assert!(d.set_scale_bar(hidden) && !d.set_scale_bar(hidden));
+        assert!(d.set_scale_bar(ScaleBarSettings { corner: Corner::TopLeft, ..hidden }));
+        assert!(d.undo());
+        assert_eq!(d.scale_bar, hidden);
+        assert!(d.undo() && !d.can_undo());
+        assert!(d.scale_bar.visible);
+        assert!(d.redo() && d.redo());
+        assert_eq!(d.scale_bar.corner, Corner::TopLeft);
+        // Aller-retour JSON, et ancien document sans le champ : valeurs par défaut.
+        let back: Document = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(back.scale_bar, d.scale_bar);
+        let old: Document =
+            serde_json::from_str(r#"{"measurements":[],"calibration":{"scale":null},"next_id":0,"counters":{}}"#).unwrap();
+        assert_eq!(old.scale_bar, ScaleBarSettings::default());
+        let partial: Document = serde_json::from_str(
+            r#"{"measurements":[],"calibration":{"scale":null},"scale_bar":{"corner":"TopRight"},"next_id":0,"counters":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(partial.scale_bar, ScaleBarSettings { visible: true, corner: Corner::TopRight });
     }
 }
