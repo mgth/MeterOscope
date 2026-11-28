@@ -230,7 +230,7 @@ impl Document {
         let n = self.counters.entry(kind).or_insert(0);
         *n += 1;
         let color = PALETTE[ShapeKind::ALL.iter().position(|k| *k == kind).unwrap_or(0) % PALETTE.len()];
-        self.measurements.push(Measurement { id, name: format!("{} {}", kind.label(), n), shape, color, visible: true });
+        self.measurements.push(Measurement { id, name: format!("{} {}", kind.label(), n), shape, color, visible: true, group: String::new() });
         self.selected = Some(id);
         id
     }
@@ -252,7 +252,7 @@ impl Document {
             *n += 1;
             let color = PALETTE[ShapeKind::ALL.iter().position(|k| *k == kind).unwrap_or(0) % PALETTE.len()];
             let name = format!("{} {}", kind.label(), n);
-            self.measurements.push(Measurement { id: self.next_id, name, shape, color, visible: true });
+            self.measurements.push(Measurement { id: self.next_id, name, shape, color, visible: true, group: String::new() });
             ids.push(self.next_id);
         }
         ids

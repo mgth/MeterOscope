@@ -4,16 +4,20 @@
 //! CONTRAT PUBLIC (utilisé par `crates/app`) — ne pas changer les signatures
 //! existantes ; on peut en ajouter.
 
+mod fonts;
 pub mod detect;
 mod image_io;
 mod perspective;
 mod presets;
 mod profile;
+mod pdf;
 mod project;
 mod render;
 mod rotate;
+mod svg;
 mod table;
 mod transform;
+mod upright;
 
 use meteroscope_i18n::tr;
 use anyhow::{Context, Result, anyhow};
@@ -26,6 +30,8 @@ pub use image_io::can_save_extension;
 pub use perspective::warp_perspective;
 pub use presets::{scale_presets_from_json, scale_presets_to_json};
 pub use profile::{measure_profile, profile_csv_string};
+pub use pdf::{ReportInfo, today};
+pub use svg::SvgBackground;
 pub use project::PROJECT_FORMAT_VERSION;
 pub use rotate::{RotationFilter, rotate_image, rotated_dimensions};
 pub use table::format_precise;
@@ -92,6 +98,57 @@ pub fn export_profile_csv(name: &str, analysis: &meteroscope_core::profile::Anal
 /// valeur) sur une copie de l'image, à la résolution de l'image.
 pub fn render_annotated(image: &RgbaImage, doc: &Document) -> RgbaImage {
     render::render_annotated(image, doc)
+}
+
+/// Image annotée en SVG : l'image en fond (intégrée ou liée) et les mesures,
+/// étiquettes et annotations en vectoriel, vue redressée comprise.
+/// `image` : l'image telle qu'affichée (réglages compris), non pivotée.
+pub fn svg_string(image: &RgbaImage, doc: &Document, background: &SvgBackground) -> Result<String> {
+    svg::svg_string(image, doc, background)
+}
+
+pub fn export_svg(image: &RgbaImage, doc: &Document, background: &SvgBackground, path: &Path) -> Result<()> {
+    let ctx = || tr!("export.failed", file = image_io::file_name(path));
+    let s = svg_string(image, doc, background).with_context(ctx)?;
+    std::fs::write(path, s).map_err(|e| anyhow!(image_io::describe_io(&e))).with_context(ctx)
+}
+
+/// Lien vers `image` depuis un SVG enregistré en `svg` : chemin relatif avec
+/// des `/` si possible, sinon URL `file:`, caractères spéciaux encodés.
+pub fn link_href(image: &Path, svg: &Path) -> String {
+    let img = project::absolute_clean(image);
+    let dir = project::absolute_clean(svg.parent().unwrap_or(Path::new(".")));
+    let encode = |s: &str| {
+        let mut o = String::new();
+        for b in s.bytes() {
+            if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
+                o.push(b as char);
+            } else {
+                o.push_str(&format!("%{b:02X}"));
+            }
+        }
+        o
+    };
+    match project::relative_to(&img, &dir) {
+        Some(rel) => encode(&rel),
+        None => {
+            let s = img.to_string_lossy().replace('\\', "/");
+            let s = if s.starts_with('/') { s } else { format!("/{s}") };
+            format!("file://{}", encode(&s).replacen("%3A", ":", 1))
+        }
+    }
+}
+
+/// Rapport PDF (A4) : en-tête, image annotée redressée, échelle, tableaux
+/// des mesures et des statistiques. `filter` : filtre de redressement.
+pub fn pdf_report(image: &RgbaImage, doc: &Document, filter: RotationFilter, info: &ReportInfo) -> Result<Vec<u8>> {
+    pdf::pdf_report(image, doc, filter, info)
+}
+
+pub fn export_pdf(image: &RgbaImage, doc: &Document, filter: RotationFilter, info: &ReportInfo, path: &Path) -> Result<()> {
+    let ctx = || tr!("export.failed", file = image_io::file_name(path));
+    let bytes = pdf_report(image, doc, filter, info).with_context(ctx)?;
+    std::fs::write(path, bytes).map_err(|e| anyhow!(image_io::describe_io(&e))).with_context(ctx)
 }
 
 /// Transformations géométriques de l'image.

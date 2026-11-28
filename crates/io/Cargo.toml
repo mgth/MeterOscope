@@ -15,3 +15,12 @@ anyhow.workspace = true
 tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
 ab_glyph = "0.2"
 epaint_default_fonts = "0.37"
+# Polices du système pour les écritures absentes de la police embarquée (CJK…),
+# déjà utilisé par eframe pour l'interface.
+fontique = "0.11"
+# Rapport PDF (MIT/Apache-2.0, pur Rust) : sous-ensembles de polices, images compressées.
+krilla = "0.8.2"
+
+[dev-dependencies]
+# Vérifie que le SVG produit est du XML bien formé (déjà dans l'arbre via fontique).
+roxmltree = "0.21"

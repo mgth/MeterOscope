@@ -56,7 +56,7 @@ struct ImagesFile {
 }
 
 /// Rend un chemin absolu sans accéder au disque et résout `.` / `..` lexicalement.
-fn absolute_clean(p: &Path) -> PathBuf {
+pub(crate) fn absolute_clean(p: &Path) -> PathBuf {
     let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
     let mut out = PathBuf::new();
     for c in abs.components() {
@@ -77,7 +77,7 @@ fn absolute_clean(p: &Path) -> PathBuf {
 /// Chemin de `target` relatif au dossier `base` (tous deux absolus et nettoyés),
 /// avec des `/`. `None` si aucune racine commune (autre lecteur sous Windows)
 /// ou si un composant n'est pas de l'UTF-8.
-fn relative_to(target: &Path, base: &Path) -> Option<String> {
+pub(crate) fn relative_to(target: &Path, base: &Path) -> Option<String> {
     let t: Vec<Component> = target.components().collect();
     let b: Vec<Component> = base.components().collect();
     let common = t.iter().zip(&b).take_while(|(x, y)| x == y).count();
