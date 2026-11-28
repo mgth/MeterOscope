@@ -8,7 +8,7 @@
 use crate::image_io::{describe_io, file_name};
 use crate::project::{FORMAT_ID, absolute_clean, relative_to, resolve_image, write_atomic};
 use crate::table::{csv_field, csv_separator, format_precise, measurement_rows, tsv_field};
-use crate::{PROJECT_FORMAT_VERSION, Project};
+use crate::Project;
 use anyhow::{Context, Result, anyhow, bail};
 use image::RgbaImage;
 use meteroscope_core::{Document, series_summary};
@@ -117,6 +117,12 @@ pub fn save_series(project: &SeriesProject, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Vrai si le fichier projet a la forme d'une série (liste `images`), faux
+/// pour un projet d'une image (clé `document`), quelle que soit sa version.
+fn is_series(value: &serde_json::Value) -> bool {
+    value.get("images").is_some()
+}
+
 /// Charge un projet version 1 (lu comme une série d'une image) ou 2.
 /// Une image introuvable ne fait pas échouer la lecture : elle est signalée
 /// par [`SeriesImage::missing`].
@@ -128,23 +134,27 @@ pub fn load_series(path: &Path) -> Result<SeriesProject> {
     let value: serde_json::Value = serde_json::from_str(text)
         .map_err(|e| anyhow!(tr!("project.bad_json", line = e.line(), column = e.column())))
         .with_context(ctx)?;
-    let version = || -> Result<u64> {
+    let missing = |p: &Option<PathBuf>| p.as_ref().is_some_and(|p| !p.exists());
+    // La forme du fichier décide du lecteur, pas son numéro de version : un
+    // projet d'une image (clé `document`) peut lui aussi évoluer au-delà de
+    // la version 1 et reste l'affaire de `load_project`, qui le valide.
+    if !is_series(&value) {
+        let p = crate::load_project(path)?;
+        let image = SeriesImage { missing: missing(&p.image_path), image_path: p.image_path, size: None, own_scale: false, document: p.document };
+        return Ok(SeriesProject { images: vec![image], active: 0, shared_scale: true });
+    }
+    let check = || -> Result<()> {
         if value.get("format").and_then(|f| f.as_str()) != Some(FORMAT_ID) {
             bail!(tr!("project.not_project"));
         }
         match value.get("version").and_then(|v| v.as_u64()) {
             None => bail!(tr!("project.bad_version")),
-            Some(v) if v == 0 || v > SERIES_FORMAT_VERSION as u64 => bail!(tr!("project.unknown_version", version = v, max = SERIES_FORMAT_VERSION)),
-            Some(v) => Ok(v),
+            Some(v) if v < SERIES_FORMAT_VERSION as u64 => bail!(tr!("project.bad_version")),
+            Some(v) if v > SERIES_FORMAT_VERSION as u64 => bail!(tr!("project.unknown_version", version = v, max = SERIES_FORMAT_VERSION)),
+            Some(_) => Ok(()),
         }
     };
-    let version = version().with_context(ctx)?;
-    let missing = |p: &Option<PathBuf>| p.as_ref().is_some_and(|p| !p.exists());
-    if version <= PROJECT_FORMAT_VERSION as u64 {
-        let p = crate::load_project(path)?;
-        let image = SeriesImage { missing: missing(&p.image_path), image_path: p.image_path, size: None, own_scale: false, document: p.document };
-        return Ok(SeriesProject { images: vec![image], active: 0, shared_scale: true });
-    }
+    check().with_context(ctx)?;
     let file: SeriesFile =
         serde_json::from_value(value).map_err(|e| anyhow!(tr!("project.bad_content", error = e))).with_context(ctx)?;
     let proj_abs = absolute_clean(path);
@@ -389,6 +399,18 @@ mod tests {
         // c.png n'existe pas : signalée, mesures conservées, les autres intactes.
         assert_eq!(p.images.iter().map(|i| i.missing).collect::<Vec<_>>(), [false, false, true]);
         assert_eq!(p.images[2].image_path.as_deref(), Some(absolute_clean(&dir.join("photos/c.png")).as_path()));
+
+        // Un projet d'une image en version 2 (clé `document`, sans `images`)
+        // n'est pas pris pour une série : il va au lecteur de projet simple.
+        let single_v2: serde_json::Value =
+            serde_json::from_str(r#"{ "format": "meteroscope", "version": 2, "image": "a.png", "document": {} }"#).unwrap();
+        assert!(!is_series(&single_v2));
+        assert!(is_series(&serde_json::from_str(&text).unwrap()));
+        let single = dir.join("seule-v2.meteroscope");
+        std::fs::write(&single, single_v2.to_string()).unwrap();
+        let single_err = format!("{:#}", load_series(&single).unwrap_err());
+        let direct_err = format!("{:#}", crate::load_project(&single).unwrap_err());
+        assert_eq!(single_err, direct_err);
 
         // L'ancienne fonction refuse proprement la version 2.
         let err = format!("{:#}", crate::load_project(&path).unwrap_err());

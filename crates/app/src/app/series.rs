@@ -583,6 +583,10 @@ impl MeterOscopeApp {
         let suffix = tr!("file.measurements_suffix");
         let active = self.series.model.active();
         let mut used = HashSet::new();
+        // Photos d'origine de la série : l'export ne doit jamais en écraser
+        // une, même si le dossier choisi est le leur.
+        let mut sources: HashSet<PathBuf> = self.series.model.entries().iter().filter_map(|e| e.path.clone()).collect();
+        sources.extend(self.image_path.clone());
         let mut items = vec![];
         for (i, (e, doc)) in self.series.model.docs(&self.doc).enumerate() {
             let x = self.series.extras.get(&e.id());
@@ -599,7 +603,7 @@ impl MeterOscopeApp {
             };
             let Some(source) = source else { continue };
             let stem = e.path.as_ref().and_then(|p| p.file_stem()).map_or_else(|| format!("capture-{:02}", i + 1), |s| s.to_string_lossy().into_owned());
-            let name = free_name(&stem, &format!("{suffix}.png"), |name| !used.contains(name));
+            let name = free_name(&stem, &format!("{suffix}.png"), |name| !used.contains(name) && !sources.contains(&dir.join(name)));
             used.insert(name.clone());
             items.push((source, doc.clone(), dir.join(name)));
         }
@@ -971,6 +975,21 @@ mod tests {
             out.push(name);
         }
         assert_eq!(out, ["a-2-mesures.png", "a-mesures.png", "a-3-mesures.png", "a-4-mesures.png", "a-2-2-mesures.png"]);
+    }
+
+    /// Export dans le dossier des photos : `a.png` ne sort pas sous le nom
+    /// de la photo d'origine `a-mesures.png`.
+    #[test]
+    fn export_names_spare_sources() {
+        let dir = Path::new("/d");
+        let sources: HashSet<PathBuf> = [dir.join("a.png"), dir.join("a-mesures.png")].into();
+        let mut used = HashSet::new();
+        for stem in ["a", "a-mesures"] {
+            let name = free_name(stem, "-mesures.png", |n| !used.contains(n) && !sources.contains(&dir.join(n)));
+            assert!(!sources.contains(&dir.join(&name)), "{name} écrase une source");
+            assert!(used.insert(name));
+        }
+        assert!(used.contains("a-2-mesures.png") && used.contains("a-mesures-mesures.png"));
     }
 
     /// Une capture en première position ne prend pas le nom d'une photo
