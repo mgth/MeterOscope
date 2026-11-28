@@ -103,6 +103,12 @@ fn free_name(base: &str, tail: &str, free: impl Fn(&str) -> bool) -> String {
     (2u32..).map(|k| format!("{base}-{k}{tail}")).find(|name| free(name)).unwrap_or(first)
 }
 
+/// Chemin réel d'un fichier (liens symboliques résolus), ou le chemin tel
+/// quel s'il n'existe pas : deux chemins égaux désignent le même fichier.
+fn real_path(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned())
+}
+
 fn placeholder(size: Option<(u32, u32)>) -> RgbaImage {
     let (w, h) = size.unwrap_or(PLACEHOLDER);
     RgbaImage::from_pixel(w.max(1), h.max(1), image::Rgba([72, 72, 78, 255]))
@@ -587,8 +593,9 @@ impl MeterOscopeApp {
         let mut used = HashSet::new();
         // Photos d'origine de la série : l'export ne doit jamais en écraser
         // une, même si le dossier choisi est le leur.
-        let mut sources: HashSet<PathBuf> = self.series.model.entries().iter().filter_map(|e| e.path.clone()).collect();
-        sources.extend(self.image_path.clone());
+        // Comparées par chemin réel : le dossier peut y mener par un lien.
+        let sources: HashSet<PathBuf> =
+            self.series.model.entries().iter().filter_map(|e| e.path.clone()).chain(self.image_path.clone()).map(|p| real_path(&p)).collect();
         let mut items = vec![];
         for (i, (e, doc)) in self.series.model.docs(&self.doc).enumerate() {
             let x = self.series.extras.get(&e.id());
@@ -605,7 +612,7 @@ impl MeterOscopeApp {
             };
             let Some(source) = source else { continue };
             let stem = e.path.as_ref().and_then(|p| p.file_stem()).map_or_else(|| format!("capture-{:02}", i + 1), |s| s.to_string_lossy().into_owned());
-            let name = free_name(&stem, &format!("{suffix}.png"), |name| !used.contains(name) && !sources.contains(&dir.join(name)));
+            let name = free_name(&stem, &format!("{suffix}.png"), |name| !used.contains(name) && !sources.contains(&real_path(&dir.join(name))));
             used.insert(name.clone());
             items.push((source, doc.clone(), dir.join(name)));
         }
@@ -992,6 +999,26 @@ mod tests {
             assert!(used.insert(name));
         }
         assert!(used.contains("a-2-mesures.png") && used.contains("a-mesures-mesures.png"));
+    }
+
+    /// Même protection quand le dossier d'export mène aux photos par un
+    /// lien symbolique.
+    #[cfg(unix)]
+    #[test]
+    fn export_names_spare_sources_through_symlink() {
+        let root = std::env::temp_dir().join(format!("meteroscope-lien-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let photos = root.join("photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        for f in ["a.png", "a-mesures.png"] {
+            std::fs::write(photos.join(f), b"x").unwrap();
+        }
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&photos, &alias).unwrap();
+        let sources: HashSet<PathBuf> = ["a.png", "a-mesures.png"].iter().map(|f| real_path(&photos.join(f))).collect();
+        let name = free_name("a", "-mesures.png", |n| !sources.contains(&real_path(&alias.join(n))));
+        assert_eq!(name, "a-2-mesures.png");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Une capture en première position ne prend pas le nom d'une photo

@@ -123,6 +123,32 @@ fn is_series(value: &serde_json::Value) -> bool {
     value.get("images").is_some()
 }
 
+/// Premier champ d'un document du fichier que cette version ne connaît pas
+/// et qui porte une valeur (par exemple une correction de perspective écrite
+/// par une version plus récente). L'ignorer afficherait des mesures fausses
+/// et le ferait disparaître à l'enregistrement : mieux vaut refuser.
+fn unknown_document_field(value: &serde_json::Value) -> Option<String> {
+    use serde_json::Value as V;
+    let empty = |v: &V| match v {
+        V::Null => true,
+        V::Bool(b) => !b,
+        V::Number(n) => n.as_f64() == Some(0.0),
+        V::String(s) => s.is_empty(),
+        V::Array(a) => a.is_empty(),
+        V::Object(o) => o.is_empty(),
+    };
+    for image in value.get("images")?.as_array()? {
+        let Some(written) = image.get("document").and_then(V::as_object) else { continue };
+        // Un document illisible est signalé plus loin, avec son erreur.
+        let Ok(doc) = serde_json::from_value::<Document>(V::Object(written.clone())) else { continue };
+        let Ok(V::Object(known)) = serde_json::to_value(&doc) else { continue };
+        if let Some((key, _)) = written.iter().find(|(k, v)| !known.contains_key(*k) && !empty(v)) {
+            return Some(key.clone());
+        }
+    }
+    None
+}
+
 /// Charge un projet version 1 (lu comme une série d'une image) ou 2.
 /// Une image introuvable ne fait pas échouer la lecture : elle est signalée
 /// par [`SeriesImage::missing`].
@@ -155,6 +181,9 @@ pub fn load_series(path: &Path) -> Result<SeriesProject> {
         }
     };
     check().with_context(ctx)?;
+    if let Some(field) = unknown_document_field(&value) {
+        return Err(anyhow!(tr!("project.newer_data", field = field))).with_context(ctx);
+    }
     let file: SeriesFile =
         serde_json::from_value(value).map_err(|e| anyhow!(tr!("project.bad_content", error = e))).with_context(ctx)?;
     let proj_abs = absolute_clean(path);
@@ -412,6 +441,18 @@ mod tests {
         let direct_err = format!("{:#}", crate::load_project(&single).unwrap_err());
         assert_eq!(single_err, direct_err);
 
+        // Un champ de document inconnu et renseigné (écrit par une version
+        // plus récente) fait refuser le projet plutôt que de le perdre ; le
+        // même champ vide ne gêne pas.
+        let newer = dir.join("plus-recent.meteroscope");
+        let with = |extra: &str| text.replacen("\"document\": {", &format!("\"document\": {{ {extra},"), 1);
+        assert_ne!(with("\"x\": 1"), text);
+        std::fs::write(&newer, with("\"champ_futur\": { \"a\": 1 }")).unwrap();
+        let err = format!("{:#}", load_series(&newer).unwrap_err());
+        assert!(err.contains("champ_futur"), "{err}");
+        std::fs::write(&newer, with("\"champ_futur\": null")).unwrap();
+        assert_eq!(load_series(&newer).unwrap().images.len(), 3);
+
         // L'ancienne fonction refuse proprement la version 2.
         let err = format!("{:#}", crate::load_project(&path).unwrap_err());
         assert!(err.contains('2'), "{err}");
@@ -442,11 +483,11 @@ mod tests {
         let vide = doc(&[], Some((10.0, "mm")));
         let images = [("a.jpg".to_owned(), &a), ("vide.jpg".to_owned(), &vide), ("b; 2.jpg".to_owned(), &b)];
         let expected = "\u{feff}\
-Image;Nom;Type;Longueur (mm);Angle (°);Aire (mm²);Périmètre (mm);Largeur (mm);Hauteur (mm);Diamètre (mm);Rayon (mm);X (px);Y (px)\r\n\
-a.jpg;Longueur 1;Longueur;5;;;;;;;;;\r\n\
-a.jpg;Longueur 2;Longueur;10;;;;;;;;;\r\n\
-\"b; 2.jpg\";Longueur 1;Longueur;15;;;;;;;;;\r\n\
-\"b; 2.jpg\";Marqueur 1;Marqueur;;;;;;;;;3;4\r\n\
+Image;Nom;Type;Longueur (mm);Angle (°);Aire (mm²);Périmètre (mm);Largeur (mm);Hauteur (mm);Diamètre (mm);Rayon (mm);Distance (mm);Grand axe (mm);Petit axe (mm);Longueur d'arc (mm);Corde (mm);X (px);Y (px)\r\n\
+a.jpg;Longueur 1;Longueur;5;;;;;;;;;;;;;;\r\n\
+a.jpg;Longueur 2;Longueur;10;;;;;;;;;;;;;;\r\n\
+\"b; 2.jpg\";Longueur 1;Longueur;15;;;;;;;;;;;;;;\r\n\
+\"b; 2.jpg\";Marqueur 1;Marqueur;;;;;;;;;;;;;;3;4\r\n\
 \r\n\
 Statistiques;Grandeur;Unité;n;Moyenne;Écart-type;Min;Max\r\n\
 Longueur;Longueur;mm;3;10;5;5;15\r\n\
@@ -457,7 +498,7 @@ Nombre d'images;3\r\n\
         assert_eq!(series_csv_string(&images), expected);
         let t = series_clipboard_table(&images);
         assert_eq!(t.lines().count(), 5);
-        assert_eq!(t.lines().nth(1).unwrap(), "a.jpg\tLongueur 1\tLongueur\t5\t\t\t\t\t\t\t\t\t");
+        assert_eq!(t.lines().nth(1).unwrap(), "a.jpg\tLongueur 1\tLongueur\t5\t\t\t\t\t\t\t\t\t\t\t\t\t\t");
     }
 
     #[test]
@@ -468,9 +509,9 @@ Nombre d'images;3\r\n\
         let images = [("a.jpg".to_owned(), &a), ("b.jpg".to_owned(), &b)];
         let s = series_csv_string(&images);
         let lines: Vec<&str> = s.trim_start_matches('\u{feff}').split("\r\n").collect();
-        assert_eq!(lines[0], "Image;Unité;Nom;Type;Longueur;Angle (°);Aire;Périmètre;Largeur;Hauteur;Diamètre;Rayon;X (px);Y (px)");
-        assert_eq!(lines[1], "a.jpg;mm;Longueur 1;Longueur;5;;;;;;;;;");
-        assert_eq!(lines[2], "b.jpg;px;Longueur 1;Longueur;50;;;;;;;;;");
+        assert_eq!(lines[0], "Image;Unité;Nom;Type;Longueur;Angle (°);Aire;Périmètre;Largeur;Hauteur;Diamètre;Rayon;Distance;Grand axe;Petit axe;Longueur d'arc;Corde;X (px);Y (px)");
+        assert_eq!(lines[1], "a.jpg;mm;Longueur 1;Longueur;5;;;;;;;;;;;;;;");
+        assert_eq!(lines[2], "b.jpg;px;Longueur 1;Longueur;50;;;;;;;;;;;;;;");
         // Une ligne de statistiques par unité, une ligne d'échelle par image.
         assert!(s.contains("Longueur;Longueur;mm;1;5;0;5;5\r\nLongueur;Longueur;px;1;50;0;50;50\r\n"));
         assert!(s.ends_with("Échelle;a.jpg;0,1;mm/px\r\nÉchelle;b.jpg;non étalonnée (mesures en pixels)\r\n"));

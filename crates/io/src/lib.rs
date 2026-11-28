@@ -5,6 +5,7 @@
 //! existantes ; on peut en ajouter.
 
 mod image_io;
+mod presets;
 mod project;
 mod render;
 mod rotate;
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub use image_io::can_save_extension;
+pub use presets::{scale_presets_from_json, scale_presets_to_json};
 pub use project::PROJECT_FORMAT_VERSION;
 pub use series::{
     SERIES_FORMAT_VERSION, SeriesImage, SeriesProject, export_series_csv, image_dimensions, load_series, save_series, series_clipboard_table,

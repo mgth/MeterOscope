@@ -41,6 +41,8 @@ pub struct MeterOscopeApp {
     contrast: f32,
     canvas: Canvas,
     calibration: CalibrationDialog,
+    /// Préréglages d'échelle et option « garder l'échelle pour l'image suivante ».
+    scale_presets: meteroscope_core::ScalePresets,
     mode: Mode,
     camera: CameraView,
     toast: Option<(String, bool, Instant)>,
@@ -75,6 +77,7 @@ impl MeterOscopeApp {
             contrast: 0.0,
             canvas: Canvas::default(),
             calibration: CalibrationDialog::default(),
+            scale_presets: crate::prefs::load_scale_presets(),
             mode: Mode::Image,
             camera: CameraView::default(),
             toast: None,
@@ -188,15 +191,19 @@ impl MeterOscopeApp {
         }
     }
 
-    /// Installe une nouvelle image avec un document vierge.
+    /// Installe une nouvelle image avec un document vierge (qui garde
+    /// l'échelle en cours si l'option est cochée).
     fn set_image(&mut self, ctx: &egui::Context, img: RgbaImage, path: Option<PathBuf>) {
         self.image = Some(img);
         self.straight = None;
         self.image_path = path;
         self.image_modified = false;
         self.project_path = None;
+        let calibration = self.scale_presets.next_calibration(&self.doc.calibration);
         self.doc = Document::new();
         self.series_restart(ctx);
+        // Après : la série repart d'un document neuf.
+        self.doc.calibration = calibration;
         self.brightness = 0.0;
         self.contrast = 0.0;
         self.mode_image();
@@ -597,7 +604,10 @@ impl eframe::App for MeterOscopeApp {
             });
             egui::Panel::right("measurements").default_size(300.0).show(ui, |ui| {
                 self.series_stats(ui);
-                let out = meteroscope_panels::measurements_panel(ui, &mut self.doc);
+                let out = meteroscope_panels::measurements_panel_with_presets(ui, &mut self.doc, &mut self.scale_presets);
+                if out.presets_changed {
+                    crate::prefs::save_scale_presets(&self.scale_presets);
+                }
                 if out.start_calibration {
                     self.canvas.set_tool(Tool::Calibrate);
                 }
