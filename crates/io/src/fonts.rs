@@ -167,6 +167,37 @@ pub fn index_for(c: char) -> usize {
     i
 }
 
+/// Découpe `s` en morceaux d'une même police : (indice de police, texte).
+/// Espaces et ponctuation restent dans la police du morceau en cours s'il les a.
+pub fn runs(s: &str) -> Vec<(usize, String)> {
+    let mut out: Vec<(usize, String)> = Vec::new();
+    for c in s.chars() {
+        let i = match out.last() {
+            Some((cur, _)) if (c.is_whitespace() || c.is_ascii_punctuation()) && get(*cur).has(c) => *cur,
+            _ => index_for(c),
+        };
+        match out.last_mut() {
+            Some((cur, run)) if *cur == i => run.push(c),
+            _ => out.push((i, c.to_string())),
+        }
+    }
+    out
+}
+
+/// Polices citées dans un SVG, la principale d'abord.
+pub fn css_families(s: &str) -> String {
+    let mut fams: Vec<String> = vec![main().family.clone()];
+    for (i, _) in runs(s) {
+        let f = &get(i).family;
+        if !fams.contains(f) {
+            fams.push(f.clone());
+        }
+    }
+    let mut v: Vec<String> = fams.iter().map(|f| format!("'{}'", f.replace('\'', ""))).collect();
+    v.push("sans-serif".into());
+    v.join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +206,7 @@ mod tests {
     fn principale_et_repli() {
         meteroscope_i18n::set_language("fr");
         assert_eq!(index_for('é'), 0);
+        assert_eq!(runs("Fissure 12,5 mm"), vec![(0, "Fissure 12,5 mm".to_owned())]);
         // Repli système : dépend des polices installées (noto-fonts-cjk ici).
         let i = index_for('日');
         if i == 0 {
@@ -184,5 +216,9 @@ mod tests {
         assert!(get(i).has('日'));
         let k = index_for('한');
         assert!(k != 0 && get(k).has('한'));
+        let r = runs("Fissure 裂缝 한국");
+        assert_eq!(r[0], (0, "Fissure ".to_owned()));
+        assert!(r.iter().all(|(i, s)| s.chars().all(|c| get(*i).has(c))), "{r:?}");
+        assert!(css_families("裂缝").contains(&get(i).family));
     }
 }

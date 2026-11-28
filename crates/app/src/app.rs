@@ -11,6 +11,8 @@ use meteroscope_panels::CalibrationDialog;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod export;
+
 #[derive(PartialEq)]
 enum Mode {
     Image,
@@ -411,6 +413,7 @@ impl MeterOscopeApp {
                     if ui.button(tr!("toolbar.export_image")).clicked() {
                         self.export_image();
                     }
+                    self.export_menu_items(ui);
                     if ui.button(tr!("toolbar.copy_table")).clicked() {
                         ui.ctx().copy_text(io::clipboard_table(&self.doc));
                         self.info(tr!("msg.table_copied"));
