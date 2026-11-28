@@ -3,10 +3,11 @@
 use meteroscope_i18n::tr;
 use crate::icons::paint_tool_icon;
 use egui::{
-    Align2, FontId, Id, Key, Popup, PopupCloseBehavior, PopupKind, Rect, RectAlign, RichText, ScrollArea, Sense,
+    Align2, FontId, Key, Popup, PopupCloseBehavior, PopupKind, Rect, RectAlign, RichText, ScrollArea, Sense,
     SetOpenCommand, Shape, Stroke, Ui, WidgetInfo, pos2, vec2,
 };
 use meteroscope_core::{ShapeKind, Tool};
+use std::collections::BTreeMap;
 
 /// Tous les outils, dans l'ordre de la palette.
 pub const TOOLS: [Tool; 21] = [
@@ -21,13 +22,13 @@ pub const TOOLS: [Tool; 21] = [
     Tool::Draw(ShapeKind::Profile),
     Tool::Draw(ShapeKind::Angle),
     Tool::Draw(ShapeKind::LineAngle),
-    Tool::Draw(ShapeKind::Area),
     Tool::Draw(ShapeKind::Rect),
     Tool::Draw(ShapeKind::Rect3),
-    Tool::Draw(ShapeKind::Ellipse),
+    Tool::Draw(ShapeKind::Area),
     Tool::Draw(ShapeKind::Circle),
     Tool::Draw(ShapeKind::Circle3),
     Tool::Draw(ShapeKind::Arc),
+    Tool::Draw(ShapeKind::Ellipse),
     Tool::Draw(ShapeKind::Marker),
     Tool::Draw(ShapeKind::Text),
     Tool::Draw(ShapeKind::Arrow),
@@ -37,6 +38,9 @@ pub const TOOLS: [Tool; 21] = [
 /// le dernier outil utilisé du groupe ; les autres s'ouvrent à côté.
 #[derive(Clone, Copy, Debug)]
 pub struct ToolGroup {
+    /// Identifiant stable (préférences enregistrées) : ne dépend ni de la
+    /// position du groupe ni de ses outils, ne pas le renommer.
+    pub id: &'static str,
     /// Nom traduit du groupe (`None` pour un outil seul).
     label: Option<fn() -> &'static str>,
     pub tools: &'static [Tool],
@@ -55,9 +59,10 @@ impl ToolGroup {
 /// Groupes de la palette, dans l'ordre ; ensemble, ils reprennent
 /// exactement [`TOOLS`].
 pub const GROUPS: [ToolGroup; 8] = [
-    ToolGroup { label: None, tools: &[Tool::Select] },
-    ToolGroup { label: Some(|| tr!("tool_group.reference")), tools: &[Tool::Calibrate, Tool::Straighten, Tool::Perspective] },
+    ToolGroup { id: "select", label: None, tools: &[Tool::Select] },
+    ToolGroup { id: "reference", label: Some(|| tr!("tool_group.reference")), tools: &[Tool::Calibrate, Tool::Straighten, Tool::Perspective] },
     ToolGroup {
+        id: "lines",
         label: Some(|| tr!("tool_group.lines")),
         tools: &[
             Tool::Draw(ShapeKind::Length),
@@ -68,24 +73,32 @@ pub const GROUPS: [ToolGroup; 8] = [
         ],
     },
     ToolGroup {
+        id: "angles",
         label: Some(|| tr!("tool_group.angles")),
         tools: &[Tool::Draw(ShapeKind::Angle), Tool::Draw(ShapeKind::LineAngle)],
     },
     ToolGroup {
+        id: "surfaces",
         label: Some(|| tr!("tool_group.surfaces")),
         tools: &[
-            Tool::Draw(ShapeKind::Area),
             Tool::Draw(ShapeKind::Rect),
             Tool::Draw(ShapeKind::Rect3),
-            Tool::Draw(ShapeKind::Ellipse),
+            Tool::Draw(ShapeKind::Area),
         ],
     },
     ToolGroup {
+        id: "circles",
         label: Some(|| tr!("tool_group.circles")),
-        tools: &[Tool::Draw(ShapeKind::Circle), Tool::Draw(ShapeKind::Circle3), Tool::Draw(ShapeKind::Arc)],
+        tools: &[
+            Tool::Draw(ShapeKind::Circle),
+            Tool::Draw(ShapeKind::Circle3),
+            Tool::Draw(ShapeKind::Arc),
+            Tool::Draw(ShapeKind::Ellipse),
+        ],
     },
-    ToolGroup { label: None, tools: &[Tool::Draw(ShapeKind::Marker)] },
+    ToolGroup { id: "marker", label: None, tools: &[Tool::Draw(ShapeKind::Marker)] },
     ToolGroup {
+        id: "annotations",
         label: Some(|| tr!("tool_group.annotations")),
         tools: &[Tool::Draw(ShapeKind::Text), Tool::Draw(ShapeKind::Arrow)],
     },
@@ -94,6 +107,38 @@ pub const GROUPS: [ToolGroup; 8] = [
 /// Groupe qui contient `tool`.
 pub fn tool_group(tool: Tool) -> &'static ToolGroup {
     GROUPS.iter().find(|g| g.tools.contains(&tool)).expect("chaque outil a un groupe")
+}
+
+/// Dernier outil choisi dans chaque groupe, rangé par [`ToolGroup::id`] :
+/// c'est lui que montre le bouton du groupe. L'appli l'enregistre dans ses
+/// préférences pour le retrouver au lancement suivant.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupTools(BTreeMap<String, Tool>);
+
+impl GroupTools {
+    /// Outil montré par le bouton de `group` : le dernier choisi, ou le
+    /// premier du groupe si aucun n'est retenu ou si l'outil retenu n'en
+    /// fait plus partie (groupes réorganisés depuis).
+    pub fn shown(&self, group: &ToolGroup) -> Tool {
+        self.0.get(group.id).copied().filter(|t| group.tools.contains(t)).unwrap_or(group.tools[0])
+    }
+
+    /// Retient `tool` pour son groupe. Renvoie `true` si cela change quelque chose.
+    pub fn remember(&mut self, tool: Tool) -> bool {
+        let id = tool_group(tool).id;
+        self.0.insert(id.to_owned(), tool) != Some(tool)
+    }
+
+    /// Couples (identifiant de groupe, outil retenu), pour l'enregistrement.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, Tool)> {
+        self.0.iter().map(|(id, &t)| (id.as_str(), t))
+    }
+}
+
+impl FromIterator<(String, Tool)> for GroupTools {
+    fn from_iter<I: IntoIterator<Item = (String, Tool)>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
 }
 
 /// Largeur fixe des boutons (et donc du panneau).
@@ -206,7 +251,12 @@ pub fn tool_tooltip(tool: Tool) -> String {
 /// du groupe à côté. Les raccourcis clavier gardent un outil chacun. Si la
 /// hauteur ne suffit pas pour une seule colonne, les boutons se rangent deux
 /// par deux.
-pub fn tool_palette(ui: &mut Ui, tool: &mut Tool) {
+///
+/// `memory` retient l'outil montré par chaque groupe ; renvoie `true` quand
+/// elle a changé (à enregistrer).
+pub fn tool_palette(ui: &mut Ui, tool: &mut Tool, memory: &mut GroupTools) -> bool {
+    // L'outil actif (choisi aussi au clavier) devient celui de son groupe.
+    let mut changed = memory.remember(*tool);
     let columns = palette_columns(ui.available_height());
     let gap = ui.spacing().item_spacing.x;
     ui.set_width(BUTTON_W * columns as f32 + gap * (columns - 1) as f32);
@@ -225,26 +275,22 @@ pub fn tool_palette(ui: &mut Ui, tool: &mut Tool) {
                 }
                 for row in section.chunks(columns) {
                     ui.horizontal(|ui| {
-                        for (index, group) in row {
-                            group_button(ui, *index, group, tool);
+                        for (_, group) in row {
+                            group_button(ui, group, tool, memory);
                         }
                     });
                 }
             }
             ui.add_space(4.0);
         });
+    changed |= memory.remember(*tool);
+    changed
 }
 
 /// Bouton d'un groupe et son volet d'outils.
-fn group_button(ui: &mut Ui, index: usize, group: &ToolGroup, tool: &mut Tool) {
-    let memory_id = Id::unique(("meteroscope_groupe_outils", index));
+fn group_button(ui: &mut Ui, group: &ToolGroup, tool: &mut Tool, memory: &GroupTools) {
     let active = group.tools.contains(tool);
-    let shown = if active {
-        ui.data_mut(|d| d.insert_temp(memory_id, *tool));
-        *tool
-    } else {
-        ui.data(|d| d.get_temp::<Tool>(memory_id)).filter(|t| group.tools.contains(t)).unwrap_or(group.tools[0])
-    };
+    let shown = if active { *tool } else { memory.shown(group) };
     let multiple = group.tools.len() > 1;
 
     let response = tool_button(ui, shown, active, multiple.then_some(group));
@@ -404,11 +450,32 @@ mod tests {
             assert_eq!(g.label.is_some(), g.tools.len() > 1, "{}", g.name());
         }
         assert_eq!(tool_group(Tool::Draw(ShapeKind::Rect3)).name(), "Surfaces");
-        assert_eq!(tool_group(Tool::Draw(ShapeKind::Arc)).name(), "Cercles et arcs");
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Arc)).name(), "Cercles, arcs et ellipses");
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Ellipse)).name(), "Cercles, arcs et ellipses");
+        // Outil montré par défaut sur le bouton de chaque groupe.
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Area)).tools[0], Tool::Draw(ShapeKind::Rect));
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Ellipse)).tools[0], Tool::Draw(ShapeKind::Circle));
         assert_eq!(tool_group(Tool::Draw(ShapeKind::Parallel)).name(), "Lignes et distances");
         // Deux colonnes quand la hauteur manque : bien moins haut, mêmes outils.
         assert_eq!(palette_columns(2000.0), 1);
         assert_eq!(palette_columns(300.0), 2);
         assert!(palette_height(2) < 0.7 * palette_height(1));
+    }
+
+    #[test]
+    fn memoire_des_groupes() {
+        let ids: HashSet<_> = GROUPS.iter().map(|g| g.id).collect();
+        assert_eq!(ids.len(), GROUPS.len(), "identifiants de groupe en double");
+
+        let circles = tool_group(Tool::Draw(ShapeKind::Arc));
+        let mut memory = GroupTools::default();
+        assert_eq!(memory.shown(circles), circles.tools[0]);
+        assert!(memory.remember(Tool::Draw(ShapeKind::Arc)));
+        assert!(!memory.remember(Tool::Draw(ShapeKind::Arc)));
+        assert_eq!(memory.shown(circles), Tool::Draw(ShapeKind::Arc));
+        // Retenu par identifiant, pas par position : un outil qui n'est plus
+        // dans le groupe (palette réorganisée) laisse place au premier.
+        let stale: GroupTools = [(circles.id.to_owned(), Tool::Draw(ShapeKind::Length))].into_iter().collect();
+        assert_eq!(stale.shown(circles), circles.tools[0]);
     }
 }

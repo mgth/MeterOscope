@@ -240,6 +240,11 @@ pub fn otsu(hist: &[u64; 256]) -> u8 {
 }
 
 impl Prepared {
+    /// Aucun pixel (zone de largeur ou hauteur nulle, ou hors de l'image).
+    pub fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+
     /// Le pixel `i` est-il dans la zone de détection ?
     fn in_zone(&self, i: usize) -> bool {
         self.zone.as_ref().is_none_or(|z| z[i])
