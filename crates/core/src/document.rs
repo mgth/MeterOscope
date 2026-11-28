@@ -132,10 +132,18 @@ impl Document {
     /// l'ancienne image de travail vers la nouvelle (voir [`Shape::reproject`]).
     /// Le redressement, relatif à l'ancienne image, est remis à zéro, et
     /// l'échelle, qui valait pour les anciens pixels, est remplacée par `scale`.
+    /// Si la correction est la même et que seule l'échelle diffère (dimensions
+    /// réelles ressaisies sur les mêmes coins), seule l'échelle est remplacée.
     /// Renvoie `false` si rien ne change.
     pub fn set_perspective(&mut self, perspective: Option<Perspective>, scale: Option<Scale>) -> bool {
         if perspective == self.perspective {
-            return false;
+            // Sans correction ni avant ni après, l'étalonnage n'est pas concerné.
+            if perspective.is_none() || scale == self.calibration.scale {
+                return false;
+            }
+            self.checkpoint();
+            self.calibration.scale = scale;
+            return true;
         }
         let homography = |p: &Option<Perspective>| p.as_ref().map_or(Some(Homography::IDENTITY), Perspective::homography);
         let (Some(new), Some(back)) = (homography(&perspective), homography(&self.perspective).and_then(|h| h.inverse())) else {
@@ -280,6 +288,45 @@ mod tests {
         assert_eq!(d.rotation, -3.5);
         assert!(d.set_rotation(363.5));
         assert_eq!(d.rotation, 3.5);
+    }
+
+    #[test]
+    fn same_corners_new_dimensions_change_the_scale() {
+        meteroscope_i18n::set_language("fr");
+        // Rectangle vu de face, 200 × 100 px.
+        let quad = [Pt::new(100., 100.), Pt::new(300., 100.), Pt::new(300., 200.), Pt::new(100., 200.)];
+        let mut d = Document::new();
+        let side = d.add(Shape::Length { a: quad[0], b: quad[1] });
+        let value = |d: &Document| d.get(side).unwrap().shape.values(&d.calibration)[0].clone();
+        assert!(d.correct_perspective(quad, (400, 300), Some((20.0, 10.0, "mm"))));
+        assert!((value(&d).value - 20.0).abs() < 1e-9 && value(&d).unit == "mm");
+        let dst = d.perspective.clone().unwrap().dst;
+        d.set_rotation(3.0);
+
+        // Mêmes coins, autre unité : la géométrie ne bouge pas, l'échelle si.
+        let corrected = d.perspective.clone();
+        assert!(d.correct_perspective(dst, (400, 300), Some((2.0, 1.0, "cm"))));
+        assert_eq!(d.perspective, corrected);
+        assert!((value(&d).value - 2.0).abs() < 1e-9 && value(&d).unit == "cm");
+        assert_eq!(d.rotation, 3.0, "le redressement n'a pas de raison de changer");
+        // Dimension deux fois trop petite, même rapport : on peut la corriger.
+        assert!(d.correct_perspective(dst, (400, 300), Some((4.0, 2.0, "cm"))));
+        assert!((value(&d).value - 4.0).abs() < 1e-9);
+        // Rien de nouveau : rien à annuler.
+        assert!(!d.correct_perspective(dst, (400, 300), Some((4.0, 2.0, "cm"))));
+
+        // Chaque changement d'étalonnage s'annule seul.
+        assert!(d.undo());
+        assert!((value(&d).value - 2.0).abs() < 1e-9 && value(&d).unit == "cm");
+        assert!(d.undo());
+        assert!((value(&d).value - 20.0).abs() < 1e-9 && value(&d).unit == "mm");
+        assert_eq!(d.perspective, corrected);
+
+        // Retirer une correction absente ne touche pas à l'étalonnage.
+        let mut plain = Document::new();
+        plain.calibration.set_from_reference(10.0, 1.0, "mm");
+        assert!(!plain.set_perspective(None, None));
+        assert!(plain.calibration.is_calibrated());
     }
 
     #[test]

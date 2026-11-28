@@ -54,6 +54,8 @@ fn project_keeps_perspective_correction() {
     save_project(&Project { image_path: Some(img.clone()), document: plain.clone() }, &proj).unwrap();
     let old = std::fs::read_to_string(&proj).unwrap();
     assert!(!old.contains("\"perspective\""), "{old}");
+    // … et le projet reste en version 1, lisible par les versions antérieures.
+    assert!(old.contains("\"version\": 1"), "{old}");
 
     // Avec correction : elle est enregistrée et relue telle quelle, le
     // projet référence toujours la photo d'origine.
@@ -61,6 +63,10 @@ fn project_keeps_perspective_correction() {
     let quad = [Pt::new(150., 120.), Pt::new(620., 180.), Pt::new(560., 470.), Pt::new(90., 380.)];
     assert!(doc.correct_perspective(quad, (800, 600), Some((297.0, 210.0, "mm"))));
     save_project(&Project { image_path: Some(img.clone()), document: doc.clone() }, &proj).unwrap();
+    // Version 2 : un lecteur qui ne connaît pas la correction refuse le projet
+    // au lieu de poser les mesures de l'image corrigée sur la photo brute.
+    let text = std::fs::read_to_string(&proj).unwrap();
+    assert!(text.contains("\"version\": 2"), "{text}");
     let p = load_project(&proj).unwrap();
     assert_eq!(p.image_path.as_deref(), Some(img.as_path()));
     assert_eq!(p.document.perspective, doc.perspective);

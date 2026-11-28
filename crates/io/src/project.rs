@@ -10,10 +10,21 @@ use std::path::{Component, Path, PathBuf};
 
 /// Identifiant du format, pour reconnaître nos fichiers.
 const FORMAT_ID: &str = "meteroscope";
-/// Version courante du format sur disque.
-pub const PROJECT_FORMAT_VERSION: u32 = 1;
+/// Version la plus récente du format que l'on sait lire.
+pub const PROJECT_FORMAT_VERSION: u32 = 2;
+/// Version écrite pour un document sans correction de perspective : ces
+/// projets restent lisibles par les versions antérieures du logiciel.
+const PLAIN_FORMAT_VERSION: u32 = 1;
 
-/// Représentation sur disque (version 1).
+/// Version à écrire pour `doc`. Avec une correction de perspective, les
+/// mesures et l'échelle sont exprimées dans l'image corrigée : un lecteur qui
+/// ignorerait le champ les superposerait à la photo brute, et perdrait la
+/// correction en réenregistrant. La version 2 lui fait refuser le projet.
+fn format_version(doc: &Document) -> u32 {
+    if doc.perspective.is_some() { PROJECT_FORMAT_VERSION } else { PLAIN_FORMAT_VERSION }
+}
+
+/// Représentation sur disque (versions 1 et 2 : la 2 ajoute `document.perspective`).
 #[derive(Serialize, Deserialize)]
 struct ProjectFile {
     format: String,
@@ -96,7 +107,7 @@ pub fn save_project(project: &Project, path: &Path) -> Result<()> {
     };
     let file = ProjectFile {
         format: FORMAT_ID.to_owned(),
-        version: PROJECT_FORMAT_VERSION,
+        version: format_version(&project.document),
         image,
         image_absolute,
         document: project.document.clone(),
