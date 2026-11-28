@@ -314,3 +314,21 @@ fn export_scale_bar_corner_length_and_settings() {
     std::fs::write(&path, json.to_string()).unwrap();
     assert_eq!(load_project(&path).unwrap().document.scale_bar, ScaleBarSettings::default());
 }
+
+#[test]
+fn export_scale_bar_flat_image_stays_inside() {
+    use meteroscope_core::{Corner, ScaleBarSettings};
+    meteroscope_i18n::set_language("fr");
+    // Image très plate : le cartouche tient en hauteur, pas la marge.
+    let (w, h) = (1000u32, 45u32);
+    let img = RgbaImage::from_pixel(w, h, Rgba([120, 120, 120, 255]));
+    let mut d = Document::new();
+    d.calibration.set_from_reference(100.0, 1.0, "mm");
+    for corner in Corner::ALL {
+        d.set_scale_bar(ScaleBarSettings { visible: true, corner });
+        let out = render_annotated(&img, &d);
+        // Le trait de 2 mm (200 px) est entièrement visible.
+        let run = longest_white_run(&out, 0..w, 0..h);
+        assert!((198..=201).contains(&run), "{corner:?} : barre de {run} px");
+    }
+}

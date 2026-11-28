@@ -24,11 +24,13 @@ impl Corner {
     }
 
     /// Coin haut-gauche d'une boîte `bw` × `bh` placée dans ce coin d'une zone
-    /// `x0..x0 + w`, `y0..y0 + h`, à `margin` des bords (ramenée dans la zone).
+    /// `x0..x0 + w`, `y0..y0 + h`, à `margin` des bords. Si la marge ne tient
+    /// pas, elle se réduit pour que la boîte reste entière dans la zone ; une
+    /// boîte plus grande que la zone est collée en haut à gauche.
     pub fn place(self, (x0, y0, w, h): (f32, f32, f32, f32), (bw, bh): (f32, f32), margin: f32) -> (f32, f32) {
         let x = if self.is_left() { x0 + margin } else { x0 + w - bw - margin };
         let y = if self.is_top() { y0 + margin } else { y0 + h - bh - margin };
-        (x.max(x0), y.max(y0))
+        (x.min(x0 + w - bw).max(x0), y.min(y0 + h - bh).max(y0))
     }
 }
 
@@ -170,5 +172,16 @@ mod tests {
         assert_eq!(Corner::BottomLeft.place(zone, (50.0, 30.0), 5.0), (15.0, 85.0));
         // Boîte plus grande que la zone : collée en haut à gauche.
         assert_eq!(Corner::BottomRight.place(zone, (300.0, 300.0), 5.0), (10.0, 20.0));
+        // Zone très plate : la boîte tient, pas la marge → la marge se réduit,
+        // dans tous les coins (le bas de la boîte ne sort pas de la zone).
+        let flat = (0.0, 0.0, 1000.0, 45.0);
+        for c in Corner::ALL {
+            let (x, y) = c.place(flat, (200.0, 44.0), 17.0);
+            assert!(y >= 0.0 && y + 44.0 <= 45.0, "{c:?} : y = {y}");
+            assert!(x >= 0.0 && x + 200.0 <= 1000.0);
+        }
+        // Idem en largeur.
+        let (x, _) = Corner::TopLeft.place((0.0, 0.0, 210.0, 500.0), (200.0, 44.0), 17.0);
+        assert_eq!(x, 10.0);
     }
 }
