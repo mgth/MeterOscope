@@ -184,3 +184,27 @@ fn exports_apres_correction_de_perspective() {
     let pdf = pdf_report(&flat, &doc, RotationFilter::Bicubic, &info).unwrap();
     assert!(pdf.starts_with(b"%PDF-1."));
 }
+
+/// La barre d'échelle du SVG suit les réglages du document, comme l'image annotée.
+#[test]
+fn svg_barre_d_echelle_reglee() {
+    use meteroscope_core::{Corner, ScaleBarSettings};
+    meteroscope_i18n::set_language("fr");
+    let img = photo(640, 480);
+    let mut doc = sample();
+    let bar_rect = |doc: &Document| {
+        let svg = svg_string(&img, doc, &SvgBackground::None).unwrap();
+        let x = roxmltree::Document::parse(&svg).unwrap();
+        x.descendants().find(|n| n.attribute("id") == Some("echelle")).map(|g| {
+            let r = g.descendants().find(|n| n.has_tag_name("rect")).unwrap();
+            (r.attribute("x").unwrap().parse::<f32>().unwrap(), r.attribute("y").unwrap().parse::<f32>().unwrap())
+        })
+    };
+    let (x, y) = bar_rect(&doc).expect("barre par défaut");
+    assert!(x > 320.0 && y > 240.0, "en bas à droite : {x} {y}");
+    assert!(doc.set_scale_bar(ScaleBarSettings { visible: true, corner: Corner::TopLeft }));
+    let (x, y) = bar_rect(&doc).unwrap();
+    assert!(x < 100.0 && y < 100.0, "en haut à gauche : {x} {y}");
+    assert!(doc.set_scale_bar(ScaleBarSettings { visible: false, corner: Corner::TopLeft }));
+    assert_eq!(bar_rect(&doc), None);
+}

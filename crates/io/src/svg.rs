@@ -16,7 +16,8 @@ use crate::upright::{Frame, upright_document};
 use anyhow::{Context, Result};
 use image::RgbaImage;
 use meteroscope_core::geometry as geo;
-use meteroscope_core::{Document, Measurement, Pt, Shape};
+use meteroscope_core::scale_bar::TARGET_FRACTION;
+use meteroscope_core::{Corner, Document, Measurement, Pt, Shape};
 use std::f32::consts::PI;
 use std::fmt::Write as _;
 
@@ -563,26 +564,19 @@ impl Svg {
         }
     }
 
-    /// Barre d'échelle en bas à droite (comme l'image annotée).
-    fn scale_bar(&mut self, units_per_px: f64, unit: &str) {
-        if !(units_per_px > 0.0 && units_per_px.is_finite()) {
-            return;
-        }
-        let target = 0.2 * self.w as f64 * units_per_px;
-        let base = 10f64.powf(target.log10().floor());
-        let m = target / base;
-        let nice = base * if m >= 5.0 { 5.0 } else if m >= 2.0 { 2.0 } else { 1.0 };
-        let len = (nice / units_per_px) as f32;
-        let text = format!("{} {unit}", crate::table::format_precise(nice));
+    /// Barre d'échelle dans le coin choisi (comme l'image annotée) : longueur
+    /// ronde visant ~17,5 % de la largeur, sur fond sombre.
+    fn scale_bar(&mut self, units_per_px: f64, unit: &str, corner: Corner) {
+        let Some(bar) = meteroscope_core::scale_bar(units_per_px, unit, self.w as f64 * TARGET_FRACTION) else { return };
+        let len = bar.px as f32;
+        let text = bar.label;
         let size = self.text;
         let pad = size * 0.5;
         let bar_h = self.line * 1.6;
         let tw = text_width(&text, size);
         let bw = len.max(tw) + 2.0 * pad;
         let bh = size * 1.1 + bar_h + 2.5 * pad;
-        let margin = self.text;
-        let x0 = (self.w - bw - margin).max(0.0);
-        let y0 = (self.h - bh - margin).max(0.0);
+        let (x0, y0) = corner.place((0.0, 0.0, self.w, self.h), (bw, bh), self.text);
         let _ = writeln!(self.out, "<g id=\"echelle\">");
         let _ = writeln!(
             self.out,
@@ -695,8 +689,11 @@ pub fn svg_string(image: &RgbaImage, doc: &Document, background: &SvgBackground)
     }
     out.push_str(&std::mem::take(&mut s.out));
     out.push_str("</g>\n");
-    if let Some(sc) = &up.calibration.scale {
-        s.scale_bar(sc.units_per_px, &sc.unit);
+    // Vue redressée : la barre reste horizontale, comme à l'écran.
+    if let Some(sc) = &up.calibration.scale
+        && up.scale_bar.visible
+    {
+        s.scale_bar(sc.units_per_px, &sc.unit, up.scale_bar.corner);
         out.push_str(&s.out);
     }
     out.push_str("</svg>\n");

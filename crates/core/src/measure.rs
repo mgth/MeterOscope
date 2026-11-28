@@ -403,6 +403,9 @@ impl Shape {
                 value: geo::line_angle_deg(*a, *b, *c, *d),
                 unit: "°".to_owned(),
             }],
+            // Extrémités confondues : plus de droite, distance indéfinie (les
+            // poignées restent pour corriger la mesure).
+            Shape::PointLine { a, b, .. } | Shape::Parallel { a, b, .. } if a == b => vec![],
             Shape::PointLine { a, b, p } | Shape::Parallel { a, b, p } => {
                 vec![len(Quantity::Distance, geo::dist_point_line(*p, *a, *b))]
             }
@@ -633,6 +636,11 @@ mod tests {
         let s = Shape::from_points(ShapeKind::PointLine, &[p(0., 0.), p(10., 0.), p(30., -40.)]).unwrap();
         let v = s.values(&cal);
         assert_eq!((v.len(), v[0].quantity, v[0].text()), (1, Quantity::Distance, "4,00 mm".to_owned()));
+        // Extrémités de référence confondues : pas de droite, pas de valeur.
+        for k in [ShapeKind::PointLine, ShapeKind::Parallel] {
+            let s = Shape::from_points(k, &[p(0., 0.), p(0., 0.), p(3., 4.)]).unwrap();
+            assert!(s.values(&cal).is_empty() && s.points().len() == 3);
+        }
         // Écart entre parallèles : même grandeur, autre type.
         let s = Shape::from_points(ShapeKind::Parallel, &[p(0., 0.), p(0., 10.), p(25., 3.)]).unwrap();
         assert_eq!(s.kind(), ShapeKind::Parallel);
