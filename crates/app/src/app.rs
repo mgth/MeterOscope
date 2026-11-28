@@ -2,6 +2,7 @@
 
 use meteroscope_i18n::tr;
 use crate::camera_view::CameraView;
+use crate::detect_view::DetectView;
 use egui::{Align, Color32, ColorImage, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextureHandle, TextureOptions, Ui};
 use image::RgbaImage;
 use meteroscope_canvas::Canvas;
@@ -53,6 +54,7 @@ pub struct MeterOscopeApp {
     scale_presets: meteroscope_core::ScalePresets,
     mode: Mode,
     camera: CameraView,
+    detect: DetectView,
     /// Profils d'intensité : résultats calculés sur l'image, panneau de la courbe.
     profiles: crate::profile_view::ProfileView,
     toast: Option<(String, bool, Instant)>,
@@ -117,6 +119,7 @@ impl MeterOscopeApp {
             scale_presets: crate::prefs::load_scale_presets(),
             mode: Mode::Image,
             camera: CameraView::default(),
+            detect: DetectView::default(),
             profiles: Default::default(),
             toast: None,
             history: ImageHistory::default(),
@@ -261,6 +264,7 @@ impl MeterOscopeApp {
         self.image = Some(img);
         self.flat = None;
         self.straight = None;
+        self.detect.invalidate();
         self.image_path = path;
         self.image_modified = false;
         self.project_path = None;
@@ -291,6 +295,8 @@ impl MeterOscopeApp {
     fn put_workspace(&mut self, ctx: &egui::Context, w: Workspace) {
         self.image = Some(w.image);
         self.straight = None;
+        // Une détection en cours appartient à l'image remplacée.
+        self.detect.invalidate();
         self.image_path = w.image_path;
         self.image_modified = w.image_modified;
         self.project_path = w.project_path;
@@ -380,6 +386,7 @@ impl MeterOscopeApp {
                 self.set_image(ctx, img, project.image_path.clone());
             }
             self.doc = project.document;
+            self.detect.invalidate();
             self.saved_revision = self.doc.revision();
             self.project_path = Some(path.to_owned());
             self.settings.add_recent(path);
@@ -531,6 +538,7 @@ impl MeterOscopeApp {
         if let Some(img) = &self.image {
             self.image = Some(io::apply_transform(img, &mut self.doc, t));
             self.straight = None;
+            self.detect.invalidate();
             self.image_modified = true;
             // L'image corrigée suit la photo.
             self.sync_flat();
@@ -729,6 +737,10 @@ impl MeterOscopeApp {
                         meteroscope_panels::scale_bar_menu(ui, &mut self.doc);
                     });
                 });
+                let detect = ui.selectable_label(self.detect.is_open(), format!("🔍  {}", tr!("toolbar.detect")));
+                if detect.on_hover_text(tr!("toolbar.detect_tip")).clicked() {
+                    self.detect.toggle();
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("1:1").on_hover_text(tr!("zoom.actual_tip")).clicked() {
                         self.canvas.zoom_actual();
@@ -903,6 +915,20 @@ impl eframe::App for MeterOscopeApp {
                     self.export_profile();
                 }
             }
+        }
+
+        // La détection travaille sur l'image de travail (corrigée de la
+        // perspective s'il y a lieu) : à refaire quand celle-ci change.
+        if self.mode == Mode::Image {
+            self.sync_flat();
+            if self.flat_changed {
+                self.detect.invalidate();
+            }
+        }
+        let work = self.flat.as_ref().and_then(|f| f.image.as_ref()).or(self.image.as_ref());
+        let image = work.filter(|_| self.mode == Mode::Image);
+        if let Some((msg, err)) = self.detect.frame(&ctx, image, &mut self.doc, &mut self.canvas) {
+            if err { self.error(msg) } else { self.info(msg) }
         }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match self.mode {
