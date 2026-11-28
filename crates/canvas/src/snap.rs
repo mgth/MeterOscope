@@ -7,7 +7,7 @@
 //! 3. sinon, la contrainte Maj habituelle s'applique.
 
 use crate::edit::segments;
-use meteroscope_core::geometry::{line_angle_vertex, rect_corners};
+use meteroscope_core::geometry::{circle_from_3_points, line_angle_vertex, rect_corners};
 use meteroscope_core::{Document, Pt, Shape};
 use meteroscope_i18n::tr;
 
@@ -18,7 +18,7 @@ pub enum SnapKind {
     Point,
     /// Intersection des deux droites d'une inclinaison.
     Intersection,
-    /// Centre d'un cercle.
+    /// Centre d'un cercle, d'une ellipse ou d'un arc.
     Center,
     /// Milieu d'un segment.
     Midpoint,
@@ -47,10 +47,15 @@ pub struct Snap {
 pub fn snap_points(shape: &Shape) -> Vec<Snap> {
     let mut v = Vec::new();
     let mut push = |pt: Pt, kind: SnapKind| v.push(Snap { pt, kind });
-    let center = shape.circle().map(|(c, _)| c);
+    let center = match shape {
+        Shape::Ellipse { center, .. } => Some(*center),
+        Shape::Arc { a, m, b } => circle_from_3_points(*a, *m, *b).map(|(c, _)| c),
+        s => s.circle().map(|(c, _)| c),
+    };
     match shape {
         Shape::Rect { a, b, angle } => rect_corners(*a, *b, *angle).into_iter().for_each(|c| push(c, SnapKind::Point)),
-        // Le centre d'un cercle centre-bord est annoncé comme centre, pas comme point.
+        // Le centre d'un cercle centre-bord ou d'une ellipse est annoncé comme
+        // centre, pas comme point.
         s => s.points().into_iter().filter(|p| Some(*p) != center).for_each(|p| push(p, SnapKind::Point)),
     }
     if let Some(c) = center {

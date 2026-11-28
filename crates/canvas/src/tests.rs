@@ -340,6 +340,14 @@ fn points_d_accroche() {
     assert_eq!(s.kind, SnapKind::Intersection);
     assert!(s.pt.dist(p(420., 0.)) < 1e-9, "{s:?}");
 
+    // Centre d'une ellipse et d'un arc.
+    doc.add(Shape::Ellipse { center: p(500., 0.), a: p(520., 0.), b: p(500., 10.) });
+    assert_eq!(find_snap(&doc, p(501., 1.), 2.0, None), Some(Snap { pt: p(500., 0.), kind: SnapKind::Center }));
+    doc.add(Shape::Arc { a: p(590., 50.), m: p(600., 40.), b: p(610., 50.) });
+    let s = find_snap(&doc, p(600.5, 50.5), 2.0, None).unwrap();
+    assert_eq!(s.kind, SnapKind::Center);
+    assert!(s.pt.dist(p(600., 50.)) < 1e-9, "{s:?}");
+
     // À distance égale, un point l'emporte sur un milieu.
     let mut d2 = Document::new();
     d2.add(Shape::Length { a: p(0., 0.), b: p(20., 0.) });
