@@ -126,6 +126,22 @@ impl Document {
         true
     }
 
+    /// Remplace l'échelle (annulable), p. ex. par un préréglage. Renvoie
+    /// `false` si elle ne change pas.
+    pub fn set_scale(&mut self, scale: Option<crate::calibration::Scale>) -> bool {
+        let same = match (&self.calibration.scale, &scale) {
+            (Some(a), Some(b)) => crate::presets::same_scale(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return false;
+        }
+        self.checkpoint();
+        self.calibration.scale = scale;
+        true
+    }
+
     /// Ajoute une mesure (nom et couleur automatiques), la sélectionne et renvoie son id.
     pub fn add(&mut self, shape: Shape) -> u64 {
         self.checkpoint();
