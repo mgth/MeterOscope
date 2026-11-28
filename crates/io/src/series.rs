@@ -7,7 +7,7 @@
 
 use crate::image_io::{describe_io, file_name};
 use crate::project::{FORMAT_ID, absolute_clean, relative_to, resolve_image, write_atomic};
-use crate::table::{csv_field, csv_separator, format_precise, measurement_rows, tsv_field};
+use crate::table::{csv_field, csv_separator, format_precise, measurement_rows, quantity_columns, tsv_field};
 use crate::Project;
 use anyhow::{Context, Result, anyhow, bail};
 use image::RgbaImage;
@@ -238,10 +238,11 @@ fn series_rows(images: &[(String, &Document)]) -> Vec<Vec<String>> {
         let mut header = rows.next().unwrap_or_default();
         if out.is_empty() {
             if mixed {
-                // Les deux dernières colonnes (X, Y) sont toujours en pixels.
-                let n = header.len().saturating_sub(2);
+                // Seules les colonnes de grandeurs perdent leur unité : X et
+                // Y restent en pixels, quelle que soit l'unité de l'image.
+                let columns = quantity_columns();
                 let units = [format!(" ({})", doc.calibration.length_unit()), format!(" ({})", doc.calibration.area_unit())];
-                for cell in &mut header[..n] {
+                for cell in header.iter_mut().take(columns.end).skip(columns.start) {
                     if let Some(short) = units.iter().find_map(|u| cell.strip_suffix(u.as_str())) {
                         *cell = short.to_owned();
                     }
@@ -508,6 +509,13 @@ Nombre d'images;3\r\n\
         assert_eq!(lines[0], "Image;Unité;Nom;Type;Longueur;Angle (°);Aire;Périmètre;Largeur;Hauteur;Diamètre;Rayon;Distance;Grand axe;Petit axe;Longueur d'arc;Corde;X (px);Y (px);Groupe");
         assert_eq!(lines[1], "a.jpg;mm;Longueur 1;Longueur;5;;;;;;;;;;;;;;;");
         assert_eq!(lines[2], "b.jpg;px;Longueur 1;Longueur;50;;;;;;;;;;;;;;;");
+        // Dans l'autre ordre (image en pixels d'abord), même en-tête : X
+        // garde son unité.
+        let inverse = [("b.jpg".to_owned(), &b), ("a.jpg".to_owned(), &a)];
+        let t = series_csv_string(&inverse);
+        assert_eq!(t.trim_start_matches('\u{feff}').split("\r\n").next(), Some(lines[0]));
+        assert!(lines[0].ends_with(";X (px);Y (px);Groupe"));
+        assert_eq!(series_clipboard_table(&inverse).lines().next(), series_clipboard_table(&images).lines().next());
         // Une ligne de statistiques par unité, une ligne d'échelle par image.
         assert!(s.contains("Longueur;Longueur;mm;1;5;0;5;5\r\nLongueur;Longueur;px;1;50;0;50;50\r\n"));
         assert!(s.ends_with("Échelle;a.jpg;0,1;mm/px\r\nÉchelle;b.jpg;non étalonnée (mesures en pixels)\r\n"));

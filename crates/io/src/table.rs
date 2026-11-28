@@ -53,6 +53,12 @@ fn unit_of(doc: &Document, q: Quantity) -> String {
     }
 }
 
+/// Colonnes de grandeurs dans les lignes de `measurement_rows` : entre le
+/// nom et le type d'un côté, X, Y et le groupe de l'autre.
+pub(crate) fn quantity_columns() -> std::ops::Range<usize> {
+    2..2 + COLUMNS.len()
+}
+
 /// Lignes du tableau des mesures (en-tête compris), cellules brutes.
 pub(crate) fn measurement_rows(doc: &Document) -> Vec<Vec<String>> {
     let mut header = vec![tr!("table.name").to_owned(), tr!("item.type").to_owned()];
