@@ -348,6 +348,8 @@ impl Canvas {
                 (ShapeKind::Arc, 0) => tr!("hint.arc.first"),
                 (ShapeKind::Arc, 1) => tr!("hint.arc.middle"),
                 (ShapeKind::Arc, _) => tr!("hint.arc.last"),
+                (ShapeKind::Profile, 0) => tr!("hint.profile.first"),
+                (ShapeKind::Profile, _) => tr!("hint.profile.second"),
             },
         };
         // Aimantation : partout où l'on pose un point ou déplace une poignée.
