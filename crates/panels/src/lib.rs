@@ -17,7 +17,9 @@ pub use format::{format_significant, parse_number, scale_texts, scale_texts_raw}
 pub use icons::paint_tool_icon;
 pub use list::{measurements_panel, measurements_panel_with_presets};
 pub use profile::{ProfilePanelOutput, edge_method_name, profile_panel};
-pub use palette::{TOOLS, tool_description, tool_name, tool_palette, tool_shortcut, tool_tooltip};
+pub use palette::{
+    GROUPS, TOOLS, ToolGroup, tool_description, tool_group, tool_name, tool_palette, tool_shortcut, tool_tooltip,
+};
 
 /// Actions demandées depuis le panneau des mesures.
 #[derive(Clone, Debug, Default)]
