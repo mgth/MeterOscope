@@ -9,7 +9,7 @@ use egui::{
 use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
-pub const TOOLS: [Tool; 17] = [
+pub const TOOLS: [Tool; 18] = [
     Tool::Select,
     Tool::Calibrate,
     Tool::Straighten,
@@ -17,6 +17,7 @@ pub const TOOLS: [Tool; 17] = [
     Tool::Draw(ShapeKind::Path),
     Tool::Draw(ShapeKind::PointLine),
     Tool::Draw(ShapeKind::Parallel),
+    Tool::Draw(ShapeKind::Profile),
     Tool::Draw(ShapeKind::Angle),
     Tool::Draw(ShapeKind::LineAngle),
     Tool::Draw(ShapeKind::Area),
@@ -60,6 +61,7 @@ pub const GROUPS: [ToolGroup; 7] = [
             Tool::Draw(ShapeKind::Path),
             Tool::Draw(ShapeKind::PointLine),
             Tool::Draw(ShapeKind::Parallel),
+            Tool::Draw(ShapeKind::Profile),
         ],
     },
     ToolGroup {
@@ -134,6 +136,7 @@ pub fn tool_description(tool: Tool) -> &'static str {
             ShapeKind::Parallel => tr!("tool_help.parallel"),
             ShapeKind::Ellipse => tr!("tool_help.ellipse"),
             ShapeKind::Arc => tr!("tool_help.arc"),
+            ShapeKind::Profile => tr!("tool_help.profile"),
         },
     }
 }
@@ -144,6 +147,7 @@ pub fn tool_description(tool: Tool) -> &'static str {
 /// Brisée (chemin) · A Angle · I Inclinaison · P Polygone (surface) ·
 /// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur ·
 /// D Distance point-droite · G écart (« Gap ») entre parallèles · V ellipse (oVale) · U arc (en U).
+/// W profil d'intensité (« Width », largeur d'un trait).
 pub fn tool_shortcut(tool: Tool) -> Option<Key> {
     Some(match tool {
         Tool::Select => Key::S,
@@ -164,6 +168,7 @@ pub fn tool_shortcut(tool: Tool) -> Option<Key> {
             ShapeKind::Parallel => Key::G,
             ShapeKind::Ellipse => Key::V,
             ShapeKind::Arc => Key::U,
+            ShapeKind::Profile => Key::W,
         },
     })
 }
@@ -361,7 +366,7 @@ mod tests {
             assert_eq!(k.name().len(), 1, "{k:?} n'est pas une lettre");
             assert!(k.name().chars().all(|c| c.is_ascii_uppercase()));
         }
-        assert_eq!(seen.len(), 17);
+        assert_eq!(seen.len(), 18);
     }
 
     #[test]

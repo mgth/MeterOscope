@@ -15,6 +15,8 @@ impl MeterOscopeApp {
     pub(super) fn enter_camera(&mut self, ctx: &egui::Context) {
         std::mem::swap(&mut self.doc, &mut self.camera.other_doc);
         std::mem::swap(&mut self.canvas, &mut self.camera.other_canvas);
+        // Les identifiants de mesures se recoupent d'un document à l'autre.
+        self.profiles.invalidate();
         self.mode = Mode::Camera;
         self.camera.start(ctx);
     }
@@ -24,6 +26,7 @@ impl MeterOscopeApp {
         self.camera.stop();
         std::mem::swap(&mut self.doc, &mut self.camera.other_doc);
         std::mem::swap(&mut self.canvas, &mut self.camera.other_canvas);
+        self.profiles.invalidate();
         self.mode = Mode::Image;
     }
 
@@ -75,6 +78,9 @@ impl MeterOscopeApp {
         self.canvas.set_baked(None);
         let out = self.canvas.show(ui, &mut self.doc, self.camera.texture());
         self.camera.overlay(ui, rect, &self.canvas, &self.doc.calibration);
+        if let Some(id) = out.created {
+            self.profiles.created(&mut self.doc, id);
+        }
         if let Some((a, b)) = out.calibration_segment {
             self.calibration.open(a.dist(b));
         }
