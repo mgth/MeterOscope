@@ -245,6 +245,29 @@ impl Document {
         id
     }
 
+    /// Ajoute plusieurs mesures d'un coup (noms en série, couleur du type),
+    /// annulables ensemble par un seul Ctrl+Z ; la sélection ne change pas.
+    /// Renvoie leurs ids.
+    pub fn add_many(&mut self, shapes: impl IntoIterator<Item = Shape>) -> Vec<u64> {
+        let mut shapes = shapes.into_iter().peekable();
+        if shapes.peek().is_none() {
+            return vec![];
+        }
+        self.checkpoint();
+        let mut ids = vec![];
+        for shape in shapes {
+            self.next_id += 1;
+            let kind = shape.kind();
+            let n = self.counters.entry(kind).or_insert(0);
+            *n += 1;
+            let color = PALETTE[ShapeKind::ALL.iter().position(|k| *k == kind).unwrap_or(0) % PALETTE.len()];
+            let name = format!("{} {}", kind.label(), n);
+            self.measurements.push(Measurement { id: self.next_id, name, shape, color, visible: true });
+            ids.push(self.next_id);
+        }
+        ids
+    }
+
     pub fn remove(&mut self, id: u64) -> bool {
         if self.get(id).is_none() {
             return false;
@@ -331,6 +354,28 @@ mod tests {
         assert_eq!(d.rotation, -3.5);
         assert!(d.set_rotation(363.5));
         assert_eq!(d.rotation, 3.5);
+    }
+
+    #[test]
+    fn add_many_un_seul_annuler() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = Document::new();
+        let first = d.add(Shape::Area { pts: vec![Pt::new(0., 0.), Pt::new(1., 0.), Pt::new(0., 1.)] });
+        let tri = |x: f64| Shape::Area { pts: vec![Pt::new(x, 0.), Pt::new(x + 2., 0.), Pt::new(x, 2.)] };
+        assert!(d.add_many(std::iter::empty()).is_empty());
+        let ids = d.add_many((0..300).map(|i| tri(i as f64)));
+        assert_eq!((ids.len(), d.measurements.len(), d.selected), (300, 301, Some(first)));
+        assert_eq!(d.get(ids[0]).unwrap().name, "Surface 2");
+        assert_eq!(d.get(ids[299]).unwrap().name, "Surface 301");
+        assert_eq!(d.get(ids[0]).unwrap().color, d.get(first).unwrap().color);
+        assert_eq!(d.summary()[0].3.n, 301);
+        assert!(d.undo());
+        assert_eq!(d.measurements.len(), 1);
+        assert!(d.redo());
+        assert_eq!(d.measurements.len(), 301);
+        // La numérotation continue après la série.
+        let next = d.add(tri(0.));
+        assert_eq!(d.get(next).unwrap().name, "Surface 302");
     }
 
     #[test]

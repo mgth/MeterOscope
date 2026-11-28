@@ -2,6 +2,7 @@
 
 use meteroscope_i18n::tr;
 use crate::camera_view::CameraView;
+use crate::detect_view::DetectView;
 use egui::{Align, Color32, ColorImage, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextureHandle, TextureOptions, Ui};
 use image::RgbaImage;
 use meteroscope_canvas::Canvas;
@@ -71,6 +72,7 @@ pub struct MeterOscopeApp {
     scale_presets: meteroscope_core::ScalePresets,
     mode: Mode,
     camera: CameraView,
+    detect: DetectView,
     /// Profils d'intensité : résultats calculés sur l'image, panneau de la courbe.
     profiles: crate::profile_view::ProfileView,
     toast: Option<(String, bool, Instant)>,
@@ -152,6 +154,7 @@ impl MeterOscopeApp {
             scale_presets: crate::prefs::load_scale_presets(),
             mode: Mode::Image,
             camera: CameraView::default(),
+            detect: DetectView::default(),
             profiles: Default::default(),
             toast: None,
             history: ImageHistory::default(),
@@ -205,10 +208,11 @@ impl MeterOscopeApp {
             _ => None,
         };
         self.flat_changed = true;
-        // L'image de travail a changé : redressement et profils sont à refaire.
+        // L'image de travail a changé : redressement, profils et détection sont à refaire.
         self.image_gen += 1;
         self.straight = None;
         self.profiles.invalidate();
+        self.detect.invalidate();
     }
 
     /// Rotation et filtre dont dépend la texture : sans filtre, la texture
@@ -250,6 +254,8 @@ impl MeterOscopeApp {
         self.flat = None;
         // Les profils d'intensité se lisent dans ces pixels.
         self.profiles.invalidate();
+        // Une détection en cours appartient aux anciens pixels.
+        self.detect.invalidate();
     }
 
     /// Remet les pixels dans l'orientation du document : un quart de tour ou
@@ -510,6 +516,7 @@ impl MeterOscopeApp {
             // Le fichier image du projet est déjà dans l'orientation mesurée.
             self.applied = self.doc.orientation;
             self.file_orientation = self.doc.orientation;
+            self.detect.invalidate();
             self.saved_revision = self.doc.revision();
             self.project_path = Some(path.to_owned());
             self.settings.add_recent(path);
@@ -897,6 +904,10 @@ impl MeterOscopeApp {
                         meteroscope_panels::scale_bar_menu(ui, &mut self.doc);
                     });
                 });
+                let detect = ui.selectable_label(self.detect.is_open(), format!("🔍  {}", tr!("toolbar.detect")));
+                if detect.on_hover_text(tr!("toolbar.detect_tip")).clicked() {
+                    self.detect.toggle();
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("1:1").on_hover_text(tr!("zoom.actual_tip")).clicked() {
                         self.canvas.zoom_actual();
@@ -1073,6 +1084,19 @@ impl eframe::App for MeterOscopeApp {
                     self.export_profile();
                 }
             }
+        }
+
+        // La détection travaille sur l'image de travail (corrigée de la
+        // perspective s'il y a lieu) : à refaire quand celle-ci change.
+        // `sync_flat` et la remise en orientation l'invalident alors.
+        if self.mode == Mode::Image {
+            self.sync_orientation();
+            self.sync_flat();
+        }
+        let work = self.flat.as_ref().and_then(|f| f.image.as_deref()).or(self.image.as_deref());
+        let image = work.filter(|_| self.mode == Mode::Image);
+        if let Some((msg, err)) = self.detect.frame(&ctx, image, &mut self.doc, &mut self.canvas) {
+            if err { self.error(msg) } else { self.info(msg) }
         }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match self.mode {
