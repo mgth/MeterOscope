@@ -1,6 +1,6 @@
 //! Saisie du groupe d'une ou plusieurs mesures, avec proposition des groupes existants.
 
-use egui::{Id, Key, TextEdit, Ui};
+use egui::{Align, Id, Key, Layout, TextEdit, Ui};
 use meteroscope_i18n::tr;
 
 /// Champ de groupe : texte libre (validé par Entrée ou en quittant le champ)
@@ -15,13 +15,33 @@ pub fn group_editor(
 ) -> Option<String> {
     let id = Id::unique(("meteroscope_groupe", salt));
     let mut chosen = None;
-    ui.horizontal(|ui| {
+    let mut picked = None;
+    // De droite à gauche : le bouton « … » d'abord, puis le champ dans la
+    // place qui reste. Réserver une largeur fixe au bouton débordait de
+    // quelques pixels, ce qui élargissait le panneau à chaque image.
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
+        ui.menu_button("…", |ui| {
+            if groups.is_empty() {
+                ui.label(egui::RichText::new(tr!("group.no_groups")).weak());
+            }
+            for g in groups {
+                if ui.selectable_label(g == current, g).clicked() {
+                    picked = Some(g.clone());
+                }
+            }
+            ui.separator();
+            if ui.selectable_label(current.is_empty(), tr!("group.none")).clicked() {
+                picked = Some(String::new());
+            }
+        })
+        .response
+        .on_hover_text(tr!("group.pick_tip"));
         let mut text: String = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| current.to_owned());
         let resp = ui.add(
             TextEdit::singleline(&mut text)
                 .id(id.with("champ"))
-                .desired_width((ui.available_width() - 26.0).max(60.0))
+                .desired_width(ui.available_width().max(60.0))
                 .hint_text(tr!("group.none")),
         );
         if resp.lost_focus() {
@@ -35,22 +55,10 @@ pub fn group_editor(
             // Hors saisie : le champ suit la valeur du document (annuler, autre mesure…).
             ui.data_mut(|d| d.remove::<String>(id));
         }
-        ui.menu_button("…", |ui| {
-            if groups.is_empty() {
-                ui.label(egui::RichText::new(tr!("group.no_groups")).weak());
-            }
-            for g in groups {
-                if ui.selectable_label(g == current, g).clicked() {
-                    chosen = Some(g.clone());
-                }
-            }
-            ui.separator();
-            if ui.selectable_label(current.is_empty(), tr!("group.none")).clicked() {
-                chosen = Some(String::new());
-            }
-        })
-        .response
-        .on_hover_text(tr!("group.pick_tip"));
     });
+    // Un groupe pris dans le menu l'emporte sur la saisie qu'il interrompt.
+    if picked.is_some() {
+        chosen = picked;
+    }
     chosen
 }
