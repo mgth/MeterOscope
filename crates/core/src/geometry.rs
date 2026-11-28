@@ -347,6 +347,70 @@ pub fn arc_from_3_points(a: Pt, m: Pt, b: Pt) -> Option<Arc> {
     Some(Arc { center, radius, start, sweep })
 }
 
+impl Arc {
+    /// Distance exacte de `p` à l'arc : au cercle si `p` est dans le
+    /// balayage, sinon à l'extrémité la plus proche.
+    pub fn dist(&self, p: Pt) -> f64 {
+        let theta = (p.y - self.center.y).atan2(p.x - self.center.x);
+        let along = ((theta - self.start) * self.sweep.signum()).rem_euclid(std::f64::consts::TAU);
+        if along <= self.sweep.abs() {
+            (self.center.dist(p) - self.radius).abs()
+        } else {
+            self.point(0.0).dist(p).min(self.point(1.0).dist(p))
+        }
+    }
+}
+
+/// Coordonnées de `p` dans le repère de l'ellipse (axe `c→a`, puis axe
+/// perpendiculaire), et demi-axes. `None` si `c` et `a` sont confondus.
+fn ellipse_local(c: Pt, a: Pt, b: Pt, p: Pt) -> Option<(f64, f64, f64, f64)> {
+    let (ra, rb) = ellipse_semi_axes(c, a, b);
+    if ra == 0.0 {
+        return None;
+    }
+    let (ux, uy) = ((a.x - c.x) / ra, (a.y - c.y) / ra);
+    let (dx, dy) = (p.x - c.x, p.y - c.y);
+    Some((dx * ux + dy * uy, dy * ux - dx * uy, ra, rb))
+}
+
+/// Distance exacte de `p` au contour de l'ellipse (centre `c`, extrémités `a`
+/// et `b` des demi-axes), par itérations sur le point le plus proche.
+pub fn dist_point_ellipse(c: Pt, a: Pt, b: Pt, p: Pt) -> f64 {
+    let Some((x, y, ra, rb)) = ellipse_local(c, a, b, p) else {
+        // Ellipse réduite à un segment (ou à un point) le long de `c→b`.
+        let e = c.offset(c.x - b.x, c.y - b.y);
+        return dist_point_segment(p, e, b);
+    };
+    if rb == 0.0 {
+        return dist_point_segment(p, c.offset(c.x - a.x, c.y - a.y), a);
+    }
+    let (px, py) = (x.abs(), y.abs());
+    let (mut tx, mut ty) = (std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2);
+    for _ in 0..4 {
+        let (ex, ey) = ((ra * ra - rb * rb) * tx.powi(3) / ra, (rb * rb - ra * ra) * ty.powi(3) / rb);
+        let (rx, ry) = (ra * tx - ex, rb * ty - ey);
+        let (qx, qy) = (px - ex, py - ey);
+        let q = qx.hypot(qy);
+        if q == 0.0 {
+            break;
+        }
+        let r = rx.hypot(ry);
+        tx = ((qx * r / q + ex) / ra).clamp(0.0, 1.0);
+        ty = ((qy * r / q + ey) / rb).clamp(0.0, 1.0);
+        let t = tx.hypot(ty);
+        (tx, ty) = (tx / t, ty / t);
+    }
+    (px - ra * tx).hypot(py - rb * ty)
+}
+
+/// `p` est à l'intérieur de l'ellipse (bord compris).
+pub fn point_in_ellipse(c: Pt, a: Pt, b: Pt, p: Pt) -> bool {
+    match ellipse_local(c, a, b, p) {
+        Some((x, y, ra, rb)) if rb > 0.0 => (x / ra).powi(2) + (y / rb).powi(2) <= 1.0,
+        _ => false,
+    }
+}
+
 /// Test point-dans-polygone (règle pair-impair).
 pub fn point_in_polygon(p: Pt, pts: &[Pt]) -> bool {
     let n = pts.len();
@@ -528,4 +592,30 @@ mod tests {
         assert!(arc_from_3_points(p(0., 0.), p(1., 1.), p(0., 0.)).is_none());
         assert!(arc_from_3_points(p(0., 0.), p(0., 0.), p(3., 1.)).is_none());
     }
+    #[test]
+    fn distances_exactes_ellipse_et_arc() {
+        // Ellipse inclinée de 30°, demi-axes 3000 et 1000 : comparaison avec un contour très fin.
+        let (c, (s, co)) = (Pt::new(50., -20.), (30f64.to_radians()).sin_cos());
+        let (a, b) = (c.offset(3000. * co, 3000. * s), c.offset(-1000. * s, 1000. * co));
+        let fine = ellipse_outline(c, a, b, 20000);
+        for p in [Pt::new(0., 0.), Pt::new(3500., 900.), Pt::new(-2000., 2500.), Pt::new(50., 980.), c] {
+            let brute = fine.iter().map(|q| q.dist(p)).fold(f64::INFINITY, f64::min);
+            let d = dist_point_ellipse(c, a, b, p);
+            assert!(d <= brute + 1e-6 && brute - d < 0.05, "{p:?} : {d} / {brute}");
+        }
+        assert!(point_in_ellipse(c, a, b, c) && !point_in_ellipse(c, a, b, Pt::new(50., 1300.)));
+        // Cercle, et ellipses dégénérées en segment.
+        let o = Pt::new(0., 0.);
+        assert!((dist_point_ellipse(o, Pt::new(5., 0.), Pt::new(0., 5.), Pt::new(6., 8.)) - 5.0).abs() < 1e-9);
+        assert!((dist_point_ellipse(o, Pt::new(5., 0.), Pt::new(0., 0.), Pt::new(2., 3.)) - 3.0).abs() < 1e-12);
+        assert!((dist_point_ellipse(o, o, Pt::new(0., 5.), Pt::new(3., 2.)) - 3.0).abs() < 1e-12);
+        assert!(!point_in_ellipse(o, Pt::new(5., 0.), o, Pt::new(1., 0.)));
+        // Arc dans les deux sens de parcours.
+        for (a, m, b) in [(Pt::new(10., 0.), Pt::new(0., 10.), Pt::new(-10., 0.)), (Pt::new(-10., 0.), Pt::new(0., 10.), Pt::new(10., 0.))] {
+            let arc = arc_from_3_points(a, m, b).unwrap();
+            assert!((arc.dist(Pt::new(0., 12.)) - 2.0).abs() < 1e-12);
+            assert!((arc.dist(Pt::new(0., -12.)) - (10f64.powi(2) + 12f64.powi(2)).sqrt()).abs() < 1e-12);
+        }
+    }
+
 }

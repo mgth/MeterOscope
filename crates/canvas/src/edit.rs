@@ -2,8 +2,8 @@
 
 use crate::draft::{snap45, square_in};
 use meteroscope_core::geometry::{
-    arc_from_3_points, direction_deg, dist_point_segment, ellipse_outline, foot_on_line, from_frame, normalize_deg,
-    parallel_through, point_in_polygon, rect_corners, to_frame,
+    arc_from_3_points, direction_deg, dist_point_ellipse, dist_point_segment, foot_on_line, from_frame, normalize_deg,
+    parallel_through, point_in_ellipse, point_in_polygon, rect_corners, to_frame,
 };
 use meteroscope_core::{Document, Pt, Shape};
 
@@ -226,7 +226,7 @@ pub fn constrain_handle(shape: &Shape, i: usize, p: Pt, shift: bool, rot: f64) -
     }
 }
 
-/// Segments du contour d'une forme (hors cercles).
+/// Segments du contour d'une forme (hors cercles, ellipses et arcs).
 fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
     let open = |pts: &[Pt]| pts.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>();
     let closed = |pts: &[Pt]| {
@@ -249,11 +249,8 @@ fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
             let (s, e, ..) = parallel_through(*a, *b, *p);
             vec![(*a, *b), (s, e)]
         }
-        Shape::Ellipse { center, a, b } => closed(&ellipse_outline(*center, *a, *b, 72)),
-        Shape::Arc { a, m, b } => match arc_from_3_points(*a, *m, *b) {
-            Some(arc) => open(&(0..=48).map(|i| arc.point(i as f64 / 48.0)).collect::<Vec<_>>()),
-            None => open(&[*a, *m, *b]),
-        },
+        // Arc aligné : les deux segments (l'arc lui-même est traité à part).
+        Shape::Arc { a, m, b } => open(&[*a, *m, *b]),
         _ => vec![],
     }
 }
@@ -266,8 +263,18 @@ pub fn dist_to_outline(shape: &Shape, p: Pt) -> f64 {
             Some((c, r)) => (c.dist(p) - r).abs(),
             None => f64::INFINITY,
         },
-        s => segments(s).iter().map(|(a, b)| dist_point_segment(p, *a, *b)).fold(f64::INFINITY, f64::min),
+        // Distances exactes : le tracé reste sélectionnable à tous les zooms.
+        Shape::Ellipse { center, a, b } => dist_point_ellipse(*center, *a, *b, p),
+        Shape::Arc { a, m, b } => match arc_from_3_points(*a, *m, *b) {
+            Some(arc) => arc.dist(p),
+            None => dist_to_segments(shape, p),
+        },
+        s => dist_to_segments(s, p),
     }
+}
+
+fn dist_to_segments(shape: &Shape, p: Pt) -> f64 {
+    segments(shape).iter().map(|(a, b)| dist_point_segment(p, *a, *b)).fold(f64::INFINITY, f64::min)
 }
 
 /// Le point est à l'intérieur d'une forme fermée.
@@ -279,7 +286,7 @@ pub fn inside(shape: &Shape, p: Pt) -> bool {
             (a.x.min(b.x)..=a.x.max(b.x)).contains(&p.x) && (a.y.min(b.y)..=a.y.max(b.y)).contains(&p.y)
         }
         Shape::Circle { .. } | Shape::Circle3 { .. } => shape.circle().is_some_and(|(c, r)| c.dist(p) <= r),
-        Shape::Ellipse { center, a, b } => point_in_polygon(p, &ellipse_outline(*center, *a, *b, 72)),
+        Shape::Ellipse { center, a, b } => point_in_ellipse(*center, *a, *b, p),
         _ => false,
     }
 }
@@ -465,6 +472,14 @@ mod tests {
         // Arc aligné : survol sur les segments.
         let flat = Shape::Arc { a: p(0., 0.), m: p(5., 0.), b: p(10., 0.) };
         assert_eq!(dist_to_outline(&flat, p(7., 2.)), 2.0);
+        // Grand demi-cercle : le trait reste sélectionnable partout, même entre deux points du rendu.
+        let big = Shape::Arc { a: p(2000., 0.), m: p(0., 2000.), b: p(-2000., 0.) };
+        for k in 0..=100 {
+            let t = std::f64::consts::PI * (k as f64 + 0.5) / 101.0;
+            assert!(dist_to_outline(&big, p(2000.0 * t.cos(), 2000.0 * t.sin())) < 1e-6);
+        }
+        // Hors du balayage : distance à l'extrémité la plus proche.
+        assert!((dist_to_outline(&big, p(2003., -4.)) - 5.0).abs() < 1e-9);
         let mut arc = arc;
         set_handle(&mut arc, 1, p(0., -10.));
         assert_eq!(arc.points()[1], p(0., -10.));
