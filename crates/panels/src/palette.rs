@@ -9,19 +9,23 @@ use egui::{
 use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
-pub const TOOLS: [Tool; 13] = [
+pub const TOOLS: [Tool; 17] = [
     Tool::Select,
     Tool::Calibrate,
     Tool::Straighten,
     Tool::Draw(ShapeKind::Length),
     Tool::Draw(ShapeKind::Path),
+    Tool::Draw(ShapeKind::PointLine),
+    Tool::Draw(ShapeKind::Parallel),
     Tool::Draw(ShapeKind::Angle),
     Tool::Draw(ShapeKind::LineAngle),
     Tool::Draw(ShapeKind::Area),
     Tool::Draw(ShapeKind::Rect),
     Tool::Draw(ShapeKind::Rect3),
+    Tool::Draw(ShapeKind::Ellipse),
     Tool::Draw(ShapeKind::Circle),
     Tool::Draw(ShapeKind::Circle3),
+    Tool::Draw(ShapeKind::Arc),
     Tool::Draw(ShapeKind::Marker),
 ];
 
@@ -51,7 +55,12 @@ pub const GROUPS: [ToolGroup; 7] = [
     ToolGroup { label: Some(|| tr!("tool_group.reference")), tools: &[Tool::Calibrate, Tool::Straighten] },
     ToolGroup {
         label: Some(|| tr!("tool_group.lines")),
-        tools: &[Tool::Draw(ShapeKind::Length), Tool::Draw(ShapeKind::Path)],
+        tools: &[
+            Tool::Draw(ShapeKind::Length),
+            Tool::Draw(ShapeKind::Path),
+            Tool::Draw(ShapeKind::PointLine),
+            Tool::Draw(ShapeKind::Parallel),
+        ],
     },
     ToolGroup {
         label: Some(|| tr!("tool_group.angles")),
@@ -59,11 +68,16 @@ pub const GROUPS: [ToolGroup; 7] = [
     },
     ToolGroup {
         label: Some(|| tr!("tool_group.surfaces")),
-        tools: &[Tool::Draw(ShapeKind::Area), Tool::Draw(ShapeKind::Rect), Tool::Draw(ShapeKind::Rect3)],
+        tools: &[
+            Tool::Draw(ShapeKind::Area),
+            Tool::Draw(ShapeKind::Rect),
+            Tool::Draw(ShapeKind::Rect3),
+            Tool::Draw(ShapeKind::Ellipse),
+        ],
     },
     ToolGroup {
         label: Some(|| tr!("tool_group.circles")),
-        tools: &[Tool::Draw(ShapeKind::Circle), Tool::Draw(ShapeKind::Circle3)],
+        tools: &[Tool::Draw(ShapeKind::Circle), Tool::Draw(ShapeKind::Circle3), Tool::Draw(ShapeKind::Arc)],
     },
     ToolGroup { label: None, tools: &[Tool::Draw(ShapeKind::Marker)] },
 ];
@@ -93,6 +107,8 @@ fn short_name(tool: Tool) -> &'static str {
     match tool {
         Tool::Draw(ShapeKind::Circle3) => tr!("tool.circle3_short"),
         Tool::Draw(ShapeKind::Rect3) => tr!("tool.rect3_short"),
+        Tool::Draw(ShapeKind::PointLine) => tr!("tool.point_line_short"),
+        Tool::Draw(ShapeKind::Parallel) => tr!("tool.parallel_short"),
         t => tool_name(t),
     }
 }
@@ -114,6 +130,10 @@ pub fn tool_description(tool: Tool) -> &'static str {
             ShapeKind::Marker => tr!("tool_help.marker"),
             ShapeKind::LineAngle => tr!("tool_help.line_angle"),
             ShapeKind::Rect3 => tr!("tool_help.rect3"),
+            ShapeKind::PointLine => tr!("tool_help.point_line"),
+            ShapeKind::Parallel => tr!("tool_help.parallel"),
+            ShapeKind::Ellipse => tr!("tool_help.ellipse"),
+            ShapeKind::Arc => tr!("tool_help.arc"),
         },
     }
 }
@@ -122,7 +142,8 @@ pub fn tool_description(tool: Tool) -> &'static str {
 ///
 /// S Sélection · E Échelle · H Horizon (redresser) · L Longueur · B ligne
 /// Brisée (chemin) · A Angle · I Inclinaison · P Polygone (surface) ·
-/// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur.
+/// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur ·
+/// D Distance point-droite · G écart (« Gap ») entre parallèles · V ellipse (oVale) · U arc (en U).
 pub fn tool_shortcut(tool: Tool) -> Option<Key> {
     Some(match tool {
         Tool::Select => Key::S,
@@ -139,6 +160,10 @@ pub fn tool_shortcut(tool: Tool) -> Option<Key> {
             ShapeKind::Marker => Key::M,
             ShapeKind::LineAngle => Key::I,
             ShapeKind::Rect3 => Key::O,
+            ShapeKind::PointLine => Key::D,
+            ShapeKind::Parallel => Key::G,
+            ShapeKind::Ellipse => Key::V,
+            ShapeKind::Arc => Key::U,
         },
     })
 }
@@ -157,23 +182,33 @@ pub fn tool_tooltip(tool: Tool) -> String {
 /// Les outils semblables sont regroupés ([`GROUPS`]) : le bouton montre
 /// l'outil actif du groupe, ou le dernier utilisé ; un clic droit, un appui
 /// long ou un nouveau clic sur le bouton déjà actif ouvre les autres outils
-/// du groupe à côté. Les raccourcis clavier gardent un outil chacun.
+/// du groupe à côté. Les raccourcis clavier gardent un outil chacun. Si la
+/// hauteur ne suffit pas pour une seule colonne, les boutons se rangent deux
+/// par deux.
 pub fn tool_palette(ui: &mut Ui, tool: &mut Tool) {
-    ui.set_width(BUTTON_W);
+    let columns = palette_columns(ui.available_height());
+    let gap = ui.spacing().item_spacing.x;
+    ui.set_width(BUTTON_W * columns as f32 + gap * (columns - 1) as f32);
     ScrollArea::vertical()
         .id_salt("meteroscope_palette_outils")
         .auto_shrink([true, true])
         .content_margin(0.0)
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.spacing_mut().item_spacing.y = ROW_GAP;
             ui.add_space(4.0);
-            for (i, group) in GROUPS.iter().enumerate() {
-                if group.tools.contains(&Tool::Draw(ShapeKind::Length)) {
+            for (s, section) in sections().iter().enumerate() {
+                if s > 0 {
                     ui.add_space(2.0);
                     ui.separator();
                     ui.add_space(2.0);
                 }
-                group_button(ui, i, group, tool);
+                for row in section.chunks(columns) {
+                    ui.horizontal(|ui| {
+                        for (index, group) in row {
+                            group_button(ui, *index, group, tool);
+                        }
+                    });
+                }
             }
             ui.add_space(4.0);
         });
@@ -220,6 +255,31 @@ fn group_button(ui: &mut Ui, index: usize, group: &ToolGroup, tool: &mut Tool) {
                 }
             });
         });
+}
+
+/// Espace vertical entre deux boutons.
+const ROW_GAP: f32 = 3.0;
+/// Hauteur prise par un séparateur de familles (marges comprises).
+const SEPARATOR_H: f32 = 12.0;
+
+/// Boutons de la palette par section (séparées d'un trait) : réglages de
+/// l'image, puis les mesures. Chaque bouton garde l'indice de son groupe.
+fn sections() -> [Vec<(usize, &'static ToolGroup)>; 2] {
+    let first_measure = GROUPS.iter().position(|g| matches!(g.tools[0], Tool::Draw(_))).unwrap_or(GROUPS.len());
+    let all: Vec<_> = GROUPS.iter().enumerate().collect();
+    [all[..first_measure].to_vec(), all[first_measure..].to_vec()]
+}
+
+/// Hauteur de la palette sur `columns` colonnes.
+fn palette_height(columns: usize) -> f32 {
+    let sections = sections();
+    let rows: usize = sections.iter().map(|g| g.len().div_ceil(columns)).sum();
+    8.0 + rows as f32 * (BUTTON_H + ROW_GAP) + (sections.len() - 1) as f32 * SEPARATOR_H
+}
+
+/// Une colonne si tout tient dans la hauteur `available`, sinon deux.
+fn palette_columns(available: f32) -> usize {
+    if palette_height(1) <= available { 1 } else { 2 }
 }
 
 /// Un bouton de la palette : icône au-dessus, nom dessous, lettre du
@@ -301,7 +361,7 @@ mod tests {
             assert_eq!(k.name().len(), 1, "{k:?} n'est pas une lettre");
             assert!(k.name().chars().all(|c| c.is_ascii_uppercase()));
         }
-        assert_eq!(seen.len(), 13);
+        assert_eq!(seen.len(), 17);
     }
 
     #[test]
@@ -323,5 +383,11 @@ mod tests {
             assert_eq!(g.label.is_some(), g.tools.len() > 1, "{}", g.name());
         }
         assert_eq!(tool_group(Tool::Draw(ShapeKind::Rect3)).name(), "Surfaces");
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Arc)).name(), "Cercles et arcs");
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Parallel)).name(), "Lignes et distances");
+        // Deux colonnes quand la hauteur manque : bien moins haut, mêmes outils.
+        assert_eq!(palette_columns(2000.0), 1);
+        assert_eq!(palette_columns(300.0), 2);
+        assert!(palette_height(2) < 0.7 * palette_height(1));
     }
 }
