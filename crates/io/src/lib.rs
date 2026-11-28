@@ -4,6 +4,7 @@
 //! CONTRAT PUBLIC (utilisé par `crates/app`) — ne pas changer les signatures
 //! existantes ; on peut en ajouter.
 
+mod draw;
 mod fonts;
 pub mod detect;
 mod image_io;
@@ -18,7 +19,6 @@ mod svg;
 mod series;
 mod table;
 mod transform;
-mod upright;
 
 use meteroscope_i18n::tr;
 use anyhow::{Context, Result, anyhow};
@@ -113,11 +113,7 @@ pub fn render_annotated(image: &RgbaImage, doc: &Document) -> RgbaImage {
 /// redressée à l'horizontale l'est aussi dans le fichier exporté). Sans
 /// redressement, identique à [`render_annotated`].
 pub fn render_view(image: &RgbaImage, doc: &Document, filter: RotationFilter) -> RgbaImage {
-    if doc.rotation == 0.0 {
-        return render::render_annotated(image, doc);
-    }
-    let s = rotate::straighten(image, doc.rotation, filter, u32::MAX, WORK_BUDGET);
-    render::render_annotated_in(&s.image, doc, Some(&s.frame))
+    render::render_view(image, doc, filter, u32::MAX)
 }
 
 /// Image annotée en SVG : l'image en fond (intégrée ou liée) et les mesures,

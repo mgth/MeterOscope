@@ -50,7 +50,7 @@ fn svg_bien_forme() {
     assert_eq!(groups.len(), doc.measurements.len() - 1);
     assert_eq!(groups[0].attribute("data-groupe"), Some("Zone 1"));
     let texts: Vec<String> = x.descendants().filter(|n| n.has_tag_name("text")).filter_map(|n| n.text().map(str::to_owned)).collect();
-    for expected in ["Pièce <A> & \"B\"", "Défaut 欠陥 결함 缺陷", "1", "71,57 °"] {
+    for expected in ["Pièce <A> & \"B\"", "Défaut 欠陥 결함 缺陷", "1", "71,57°"] {
         assert!(texts.iter().any(|t| t == expected), "{expected:?} absent de {texts:?}");
     }
     assert!(texts.iter().any(|t| t.ends_with(" mm")), "barre d'échelle");
@@ -207,4 +207,78 @@ fn svg_barre_d_echelle_reglee() {
     assert!(x < 100.0 && y < 100.0, "en haut à gauche : {x} {y}");
     assert!(doc.set_scale_bar(ScaleBarSettings { visible: false, corner: Corner::TopLeft }));
     assert_eq!(bar_rect(&doc), None);
+}
+
+fn svg_texts(doc: &Document) -> Vec<String> {
+    let svg = svg_string(&photo(640, 480), doc, &SvgBackground::None).unwrap();
+    let x = roxmltree::Document::parse(&svg).unwrap();
+    x.descendants().filter(|n| n.has_tag_name("text")).filter_map(|n| n.text().map(str::to_owned)).collect()
+}
+
+/// Les étiquettes exportées portent le même texte qu'à l'écran.
+#[test]
+fn etiquettes_comme_a_l_ecran() {
+    meteroscope_i18n::set_language("fr");
+    let doc = sample();
+    let texts = svg_texts(&doc);
+    for m in doc.measurements.iter().filter(|m| m.visible && !matches!(m.shape, Shape::Marker { .. })) {
+        for line in meteroscope_core::label_text(&m.shape, &doc.calibration, 0).lines() {
+            assert!(texts.iter().any(|t| t == line), "{line:?} ({}) absent de {texts:?}", m.name);
+        }
+    }
+    // Rectangle : côtés puis aire ; cercle : diamètre ; angle sans espace.
+    for expected in ["3,75 × 2,25 mm", "8,44 mm²", "Ø 2,50 mm", "71,57°"] {
+        assert!(texts.iter().any(|t| t == expected), "{expected:?} absent de {texts:?}");
+    }
+}
+
+/// Le numéro dessiné d'un marqueur est celui de son nom, même après une suppression.
+#[test]
+fn numero_de_marqueur_comme_son_nom() {
+    meteroscope_i18n::set_language("fr");
+    let mut doc = Document::new();
+    let ids: Vec<u64> = (0..3).map(|i| doc.add(Shape::Marker { p: Pt::new(100. + 100. * i as f64, 200.) })).collect();
+    assert!(doc.remove(ids[1]));
+    assert_eq!(doc.measurements.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Marqueur 1", "Marqueur 3"]);
+    assert_eq!(svg_texts(&doc), ["1", "3"]);
+}
+
+/// Démo seulement (`METEROSCOPE_REPORT_DEMO`) : le même document, sur une
+/// image de plus de 2400 px redressée, étalonné puis non, en PNG, SVG et
+/// PDF, pour comparer les trois exports à l'œil.
+#[test]
+fn coherence_demo() {
+    let Ok(dir) = std::env::var("METEROSCOPE_REPORT_DEMO") else { return };
+    meteroscope_i18n::set_language("fr");
+    let dir = std::path::Path::new(&dir);
+    let img = photo(3600, 2400);
+    let k = 3600.0 / 640.0;
+    let mut doc = sample();
+    doc.measurements.iter_mut().for_each(|m| m.shape.map_points(|p| Pt::new(p.x * k, p.y * k)));
+    let mut profile = Shape::profile(Pt::new(1500., 1900.), Pt::new(2700., 1700.));
+    if let Shape::Profile { params, result, .. } = &mut profile {
+        params.band = 160.0;
+        *result = Some(meteroscope_core::ProfileResult { edges: [300.0, 900.0], tilt: 0.0 });
+    }
+    let p = doc.add(profile);
+    doc.add(Shape::Ellipse { center: Pt::new(3000., 2000.), a: Pt::new(3350., 2000.), b: Pt::new(3000., 1800.) });
+    doc.add(Shape::Path { pts: vec![Pt::new(300., 2100.), Pt::new(700., 2250.), Pt::new(1100., 2050.), Pt::new(1300., 2300.)] });
+    // Trois marqueurs de plus, dont un supprimé : restent 1, 2 et 4.
+    let extra: Vec<u64> = (0..3).map(|i| doc.add(Shape::Marker { p: Pt::new(2000. + 300. * i as f64, 250.) })).collect();
+    doc.remove(extra[1]);
+    doc.set_group(&[p, extra[0]], "Zone 2");
+    doc.rotation = 8.0;
+    let info = ReportInfo { title: "Rapport de mesures".into(), image_name: "pièce.png".into(), date: today() };
+    for (name, calibrated) in [("etalonne", true), ("pixels", false)] {
+        if calibrated {
+            doc.calibration.set_from_reference(100.0 * k, 2.5, "mm");
+        } else {
+            doc.calibration = Default::default();
+        }
+        let filter = RotationFilter::default();
+        save_image(&render_view(&img, &doc, filter), &dir.join(format!("coherence-{name}.png"))).unwrap();
+        export_svg(&img, &doc, &SvgBackground::Embedded, &dir.join(format!("coherence-{name}.svg"))).unwrap();
+        export_pdf(&img, &doc, filter, &info, &dir.join(format!("coherence-{name}.pdf"))).unwrap();
+        export_csv(&doc, &dir.join(format!("coherence-{name}.csv"))).unwrap();
+    }
 }

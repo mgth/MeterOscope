@@ -14,7 +14,7 @@
 //! englobante dont le coin haut-gauche est l'origine.
 
 use image::{RgbaImage, imageops};
-use meteroscope_core::Pt;
+use meteroscope_core::{Pt, Shape};
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -645,15 +645,18 @@ pub fn straighten_scale(w: u32, h: u32, deg: f64, filter: RotationFilter, max_si
     s
 }
 
-/// Repère d'une image produite par [`straighten`] : où tombe un point de
-/// l'image d'origine. Même formule que l'affichage (`Xf::rotated` du canevas),
-/// q = k·R·(p − centre) + boîte/2.
+/// Repère d'une image exportée ou affichée : où tombe un point de l'image
+/// d'origine une fois celle-ci réduite puis pivotée dans sa boîte englobante.
+/// Même formule que l'affichage (`Xf::rotated` du canevas),
+/// q = k·R·(p − centre) + boîte/2. C'est le seul report de coordonnées des
+/// exports : [`straighten`] le renvoie avec l'image, [`Frame::rotation`] le
+/// donne pour un dessin vectoriel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
     cos: f64,
     sin: f64,
-    center: (f64, f64),
-    half: (f64, f64),
+    /// Translation : boîte/2 − k·R·centre.
+    t: (f64, f64),
     /// Pixels de l'image redressée par pixel de l'image d'origine (≤ 1).
     pub scale: f64,
     /// Angle du redressement, en degrés.
@@ -661,26 +664,45 @@ pub struct Frame {
 }
 
 impl Frame {
-    fn new(size: (u32, u32), reduced: (u32, u32), scale: f64, deg: f64) -> Self {
-        let (sin, cos) = deg.to_radians().sin_cos();
+    /// Repère de l'image `size`, réduite à `reduced` (facteur `scale`) puis
+    /// pivotée de `deg` degrés.
+    pub(crate) fn new(size: (u32, u32), reduced: (u32, u32), scale: f64, deg: f64) -> Self {
+        // Sans rotation : valeurs exactes, les points ne bougent pas d'un bit.
+        let (sin, cos) = if deg == 0.0 { (0.0, 1.0) } else { deg.to_radians().sin_cos() };
         let (rw, rh) = (reduced.0 as f64, reduced.1 as f64);
-        Self {
-            cos,
-            sin,
-            center: (size.0 as f64 / 2.0, size.1 as f64 / 2.0),
-            half: ((cos.abs() * rw + sin.abs() * rh) / 2.0, (sin.abs() * rw + cos.abs() * rh) / 2.0),
-            scale,
-            deg,
-        }
+        let (cx, cy) = (size.0 as f64 / 2.0, size.1 as f64 / 2.0);
+        let half = ((cos.abs() * rw + sin.abs() * rh) / 2.0, (sin.abs() * rw + cos.abs() * rh) / 2.0);
+        let t = (half.0 - scale * (cos * cx - sin * cy), half.1 - scale * (sin * cx + cos * cy));
+        Self { cos, sin, t, scale, deg }
+    }
+
+    /// Repère de l'image `w` × `h` pivotée de `deg` degrés, sans réduction.
+    pub fn rotation(w: u32, h: u32, deg: f64) -> Self {
+        Self::new((w, h), (w, h), 1.0, deg)
     }
 
     /// Position, dans l'image redressée, du point `p` de l'image d'origine.
     pub fn map(&self, p: Pt) -> Pt {
-        let (dx, dy) = (p.x - self.center.0, p.y - self.center.1);
         Pt::new(
-            self.scale * (self.cos * dx - self.sin * dy) + self.half.0,
-            self.scale * (self.sin * dx + self.cos * dy) + self.half.1,
+            self.scale * (self.cos * p.x - self.sin * p.y) + self.t.0,
+            self.scale * (self.sin * p.x + self.cos * p.y) + self.t.1,
         )
+    }
+
+    /// Forme reportée dans ce repère, à dessiner sur l'image redressée :
+    /// points déplacés, rectangle réorienté, bande et bords d'un profil mis à
+    /// l'échelle. Ses valeurs mesurées sont celles de l'image redressée, pas
+    /// de l'image d'origine : les valeurs à afficher se lisent sur `shape`.
+    pub fn place(&self, shape: &Shape) -> Shape {
+        let mut placed = shape.clone();
+        placed.map_similar(|p| self.map(p), self.deg, self.scale);
+        placed
+    }
+
+    /// Matrice SVG `matrix(a b c d e f)` qui amène l'image d'origine dans ce repère.
+    pub fn svg_matrix(&self) -> [f64; 6] {
+        let k = self.scale;
+        [k * self.cos, k * self.sin, -k * self.sin, k * self.cos, self.t.0, self.t.1]
     }
 }
 
@@ -1089,5 +1111,44 @@ mod tests {
             let q = out.frame.map(Pt::new(px, py));
             assert!((q.x - ex).abs() < 0.5 && (q.y - ey).abs() < 0.5);
         }
+    }
+
+    #[test]
+    fn formes_reportees_dans_le_repere() {
+        meteroscope_i18n::set_language("fr");
+        // Quart de tour horaire d'une image 200 × 100 : boîte 100 × 200,
+        // le coin haut-gauche part en haut à droite.
+        let f = Frame::rotation(200, 100, 90.0);
+        assert!(f.map(Pt::new(0., 0.)).dist(Pt::new(100., 0.)) < 1e-9);
+        assert!(f.map(Pt::new(200., 100.)).dist(Pt::new(0., 200.)) < 1e-9);
+        let m = f.svg_matrix();
+        let by_matrix = |p: Pt| Pt::new(m[0] * p.x + m[2] * p.y + m[4], m[1] * p.x + m[3] * p.y + m[5]);
+        assert!(by_matrix(Pt::new(30., 70.)).dist(f.map(Pt::new(30., 70.))) < 1e-9);
+        // Sans rotation ni réduction : rien ne bouge.
+        let same = Frame::rotation(200, 100, 0.0);
+        assert_eq!(same.map(Pt::new(12.3, 45.6)), Pt::new(12.3, 45.6));
+
+        // Rotation seule : mêmes valeurs mesurées, rectangle réorienté.
+        let cal = meteroscope_core::Calibration::default();
+        let rect = Shape::Rect { a: Pt::new(10., 10.), b: Pt::new(50., 30.), angle: 0.0 };
+        let length = Shape::Length { a: Pt::new(0., 0.), b: Pt::new(30., 40.) };
+        for s in [&rect, &length] {
+            for (a, b) in s.values(&cal).iter().zip(f.place(s).values(&cal)) {
+                assert!((a.value - b.value).abs() < 1e-9, "{a:?} {b:?}");
+            }
+        }
+        let Shape::Rect { angle, .. } = f.place(&rect) else { panic!() };
+        assert_eq!(angle, 90.0);
+
+        // Réduction de moitié : bords et bande d'un profil suivent.
+        let half = Frame::new((200, 100), (100, 50), 0.5, 0.0);
+        let mut profile = Shape::profile(Pt::new(20., 50.), Pt::new(180., 50.));
+        if let Shape::Profile { params, result, .. } = &mut profile {
+            params.band = 12.0;
+            *result = Some(meteroscope_core::ProfileResult { edges: [40.0, 100.0], tilt: 0.0 });
+        }
+        let placed = half.place(&profile);
+        assert_eq!(placed.profile_edges(), Some([Pt::new(30., 25.), Pt::new(60., 25.)]));
+        assert_eq!(placed.profile_band().map(|b| b.0), Some(3.0));
     }
 }

@@ -193,6 +193,72 @@ pub fn line_angle_vertex(a: Pt, b: Pt, c: Pt, d: Pt) -> Option<(Pt, Pt, Pt)> {
     Some((x, u1, u2))
 }
 
+/// Parties à ajouter au segment `p0→p1` pour qu'il atteigne les points
+/// `reach` (pris sur sa droite) : de quoi le prolonger en pointillés.
+pub fn extensions(p0: Pt, p1: Pt, reach: &[Pt]) -> Vec<(Pt, Pt)> {
+    let d = (p1.x - p0.x, p1.y - p0.y);
+    let l2 = d.0 * d.0 + d.1 * d.1;
+    if l2 == 0.0 {
+        return vec![];
+    }
+    let (lo, hi) = reach
+        .iter()
+        .map(|q| ((q.x - p0.x) * d.0 + (q.y - p0.y) * d.1) / l2)
+        .fold((0.0f64, 1.0f64), |(lo, hi), t| (lo.min(t), hi.max(t)));
+    let mut v = vec![];
+    if lo < 0.0 {
+        v.push((p0.lerp(p1, lo), p0));
+    }
+    if hi > 1.0 {
+        v.push((p1, p0.lerp(p1, hi)));
+    }
+    v
+}
+
+/// Ramène un balayage (radians) dans ]−π, π] : le plus court des deux sens.
+pub fn short_sweep(mut sweep: f64) -> f64 {
+    use std::f64::consts::{PI, TAU};
+    while sweep > PI {
+        sweep -= TAU;
+    }
+    while sweep <= -PI {
+        sweep += TAU;
+    }
+    sweep
+}
+
+/// Arc qui marque l'angle de sommet `v` : (direction du côté `a`, balayage
+/// vers le côté `b` par le plus court), en radians.
+pub fn angle_arc(a: Pt, v: Pt, b: Pt) -> (f64, f64) {
+    let start = (a.y - v.y).atan2(a.x - v.x);
+    (start, short_sweep((b.y - v.y).atan2(b.x - v.x) - start))
+}
+
+/// `n` segments le long de l'arc de centre `c`, de rayon `r`, de l'angle
+/// `start` sur `sweep` radians.
+pub fn arc_points(c: Pt, r: f64, start: f64, sweep: f64, n: usize) -> Vec<Pt> {
+    let n = n.max(1);
+    (0..=n)
+        .map(|i| {
+            let t = start + sweep * i as f64 / n as f64;
+            c.offset(r * t.cos(), r * t.sin())
+        })
+        .collect()
+}
+
+/// Symbole d'angle droit au pied `foot` d'une perpendiculaire : trois points
+/// d'un carré de côté `size`, un côté le long de la droite (vers `along`),
+/// l'autre vers `toward`. `None` s'il n'y a pas la place de le dessiner.
+pub fn right_angle_mark(foot: Pt, along: Pt, toward: Pt, size: f64) -> Option<[Pt; 3]> {
+    let (lu, lw) = (foot.dist(along), foot.dist(toward));
+    if lu < 1e-9 || lw < size {
+        return None;
+    }
+    let u = ((along.x - foot.x) / lu * size, (along.y - foot.y) / lu * size);
+    let w = ((toward.x - foot.x) / lw * size, (toward.y - foot.y) / lw * size);
+    Some([foot.offset(u.0, u.1), foot.offset(u.0 + w.0, u.1 + w.1), foot.offset(w.0, w.1)])
+}
+
 /// Cercle passant par trois points : (centre, rayon). `None` si alignés.
 pub fn circle_from_3_points(a: Pt, b: Pt, c: Pt) -> Option<(Pt, f64)> {
     let d = 2.0 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
@@ -635,4 +701,27 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn prolongements_arcs_et_angle_droit() {
+        let p = Pt::new;
+        // Prolongement jusqu'au sommet, d'un seul côté.
+        let e = extensions(p(20., 0.), p(40., 0.), &[p(10., 0.), p(14., 0.)]);
+        assert_eq!(e, vec![(p(10., 0.), p(20., 0.))]);
+        assert!(extensions(p(0., 0.), p(40., 0.), &[p(10., 0.)]).is_empty());
+        assert!(extensions(p(1., 1.), p(1., 1.), &[p(10., 0.)]).is_empty());
+        assert_eq!(extensions(p(0., 0.), p(10., 0.), &[p(-5., 0.), p(30., 0.)]).len(), 2);
+        // Arc d'un angle : par le plus court, de a vers b.
+        let (start, sweep) = angle_arc(p(10., 0.), p(0., 0.), p(0., -10.));
+        assert!(start.abs() < 1e-12 && (sweep + std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        assert!((short_sweep(1.5 * std::f64::consts::PI) + std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        let pts = arc_points(p(1., 1.), 2.0, 0.0, std::f64::consts::PI, 8);
+        assert_eq!(pts.len(), 9);
+        assert!(pts[0].dist(p(3., 1.)) < 1e-12 && pts[8].dist(p(-1., 1.)) < 1e-12 && pts[4].dist(p(1., 3.)) < 1e-12);
+        // Angle droit : carré de 2 au pied, absent si la perpendiculaire est trop courte.
+        let m = right_angle_mark(p(5., 0.), p(0., 0.), p(5., 10.), 2.0).unwrap();
+        assert!(m[0].dist(p(3., 0.)) < 1e-12 && m[1].dist(p(3., 2.)) < 1e-12 && m[2].dist(p(5., 2.)) < 1e-12);
+        assert!(right_angle_mark(p(5., 0.), p(0., 0.), p(5., 1.), 2.0).is_none());
+        assert!(right_angle_mark(p(5., 0.), p(5., 0.), p(5., 10.), 2.0).is_none());
+    }
 }

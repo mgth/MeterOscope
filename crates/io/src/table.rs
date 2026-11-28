@@ -1,7 +1,10 @@
 //! Tableau des mesures : CSV (séparateurs selon la langue) et texte tabulé (presse-papiers).
 
 use meteroscope_i18n::tr;
+use meteroscope_core::groups::KindStats;
 use meteroscope_core::{Document, Quantity, Shape};
+
+pub use meteroscope_core::measure::format_precise;
 
 /// Colonnes de grandeurs, dans l'ordre du tableau.
 const COLUMNS: [Quantity; 13] = [
@@ -19,30 +22,6 @@ const COLUMNS: [Quantity; 13] = [
     Quantity::ArcLength,
     Quantity::Chord,
 ];
-
-/// Nombre avec ~6 chiffres significatifs, virgule décimale, sans notation
-/// scientifique ni zéros inutiles.
-pub fn format_precise(v: f64) -> String {
-    if !v.is_finite() {
-        return String::new();
-    }
-    if v == 0.0 {
-        return "0".to_owned();
-    }
-    let mag = v.abs().log10().floor() as i32;
-    let decimals = (5 - mag).clamp(0, 15) as usize;
-    let mut s = format!("{v:.decimals$}");
-    if s.contains('.') {
-        s = s.trim_end_matches('0').trim_end_matches('.').to_owned();
-    }
-    if s == "-0" {
-        s = "0".to_owned();
-    }
-    match meteroscope_i18n::decimal_separator() {
-        '.' => s,
-        sep => s.replace('.', &sep.to_string()),
-    }
-}
 
 /// Unité d'une grandeur pour l'étalonnage du document.
 fn unit_of(doc: &Document, q: Quantity) -> String {
@@ -82,24 +61,48 @@ pub(crate) fn measurement_rows(doc: &Document) -> Vec<Vec<String>> {
     rows
 }
 
-/// Bloc statistiques + échelle.
+/// Cellules d'une ligne de statistiques : type, grandeur, unité, n, moyenne,
+/// écart-type, min, max. L'écart-type d'une seule valeur n'existe pas : « — ».
+pub(crate) fn stats_cells((kind, q, unit, s): &KindStats) -> Vec<String> {
+    let sd = if s.n < 2 { "—".to_owned() } else { format_precise(s.sd) };
+    vec![
+        kind.label().to_owned(),
+        q.label().to_owned(),
+        unit.clone(),
+        s.n.to_string(),
+        format_precise(s.mean),
+        sd,
+        format_precise(s.min),
+        format_precise(s.max),
+    ]
+}
+
+/// Statistiques du document, découpées comme tous les tableaux les
+/// présentent : une seule section sans titre s'il n'y a aucun groupe, sinon
+/// une section par groupe (« sans groupe » en dernier). Sections vides omises.
+pub(crate) fn stats_sections(doc: &Document) -> Vec<(Option<String>, Vec<KindStats>)> {
+    if doc.groups().is_empty() {
+        let all = doc.summary();
+        return if all.is_empty() { vec![] } else { vec![(None, all)] };
+    }
+    doc.summary_by_group()
+        .into_iter()
+        .map(|(g, stats)| (Some(if g.is_empty() { tr!("group.ungrouped").to_owned() } else { g }), stats))
+        .collect()
+}
+
+/// Bloc statistiques (par groupe s'il y en a) + échelle.
 fn stats_rows(doc: &Document) -> Vec<Vec<String>> {
     let mut rows: Vec<Vec<String>> = vec![
         [tr!("stats.title"), tr!("table.quantity"), tr!("calib.unit"), "n", tr!("stats.mean"), tr!("stats.std_dev"), tr!("stats.min"), tr!("stats.max")]
             .map(str::to_owned)
             .to_vec(),
     ];
-    for (kind, q, unit, s) in doc.summary() {
-        rows.push(vec![
-            kind.label().to_owned(),
-            q.label().to_owned(),
-            unit,
-            s.n.to_string(),
-            format_precise(s.mean),
-            format_precise(s.sd),
-            format_precise(s.min),
-            format_precise(s.max),
-        ]);
+    for (group, stats) in stats_sections(doc) {
+        if let Some(g) = group {
+            rows.push(vec![tr!("table.group").to_owned(), g]);
+        }
+        rows.extend(stats.iter().map(stats_cells));
     }
     rows.push(vec![tr!("table.marker_count").to_owned(), doc.marker_count().to_string()]);
     rows.push(vec![]);
@@ -211,8 +214,8 @@ Marqueur 1;Marqueur;;;;;;;;;;;;;;12,5;7;\r\n\
 \r\n\
 Statistiques;Grandeur;Unité;n;Moyenne;Écart-type;Min;Max\r\n\
 Longueur;Longueur;mm;2;7,5;3,53553;5;10\r\n\
-Angle;Angle;°;1;90;0;90;90\r\n\
-Rectangle;Aire;mm²;1;2;0;2;2\r\n\
+Angle;Angle;°;1;90;—;90;90\r\n\
+Rectangle;Aire;mm²;1;2;—;2;2\r\n\
 Nombre de marqueurs;2\r\n\
 \r\n\
 Échelle;0,1;mm/px\r\n";
@@ -252,6 +255,16 @@ Nombre de marqueurs;2\r\n\
         assert!(s.contains("Rectangle 1;Rectangle;;;2;6;2;1;;;;;;;;;;\r\n"));
         assert!(s.contains("Marqueur 1;Marqueur;;;;;;;;;;;;;;12,5;7;\"Lot; 2\"\r\n"));
         assert!(clipboard_table(&d).lines().nth(2).unwrap().ends_with("\tPièce A"));
+        // Statistiques par groupe, comme au rapport PDF.
+        let stats = s.split("Statistiques;").nth(1).unwrap();
+        let expected = "Grandeur;Unité;n;Moyenne;Écart-type;Min;Max\r\n\
+Groupe;Pièce A\r\n\
+Longueur;Longueur;mm;2;7,5;3,53553;5;10\r\n\
+Groupe;Sans groupe\r\n\
+Angle;Angle;°;1;90;—;90;90\r\n\
+Rectangle;Aire;mm²;1;2;—;2;2\r\n\
+Nombre de marqueurs;2\r\n";
+        assert!(stats.starts_with(expected), "{stats}");
     }
 
     #[test]
@@ -280,6 +293,6 @@ Nombre de marqueurs;2\r\n\
         assert!(s.contains("Ellipse 1;Ellipse;;;157,08;48,4422;;;;;;20;10;;;;;\r\n"), "{s}");
         assert!(s.contains("Arc 1;Arc;;180;;;;;;10;;;;31,4159;20;;;\r\n"), "{s}");
         // Statistiques par type sur la valeur principale.
-        assert!(s.contains("Ellipse;Grand axe;px;1;20;0;20;20\r\n") && s.contains("Arc;Rayon;px;1;10;0;10;10\r\n"), "{s}");
+        assert!(s.contains("Ellipse;Grand axe;px;1;20;—;20;20\r\n") && s.contains("Arc;Rayon;px;1;10;—;10;10\r\n"), "{s}");
     }
 }

@@ -6,13 +6,23 @@ use egui::{
     pos2, vec2,
 };
 use meteroscope_core::geometry::{
-    arc_from_3_points, ellipse_outline, ellipse_semi_axes, foot_on_line, line_angle_vertex, parallel_through,
-    rect_corners,
+    self as geo, arc_from_3_points, ellipse_outline, ellipse_semi_axes, foot_on_line, line_angle_vertex,
+    parallel_through, rect_corners,
 };
-use meteroscope_core::measure::format_number;
 use meteroscope_core::scale_bar::TARGET_FRACTION;
 use meteroscope_core::{Calibration, Corner, Pt, Shape, scale_bar};
-use std::f32::consts::TAU;
+
+/// Texte de l'étiquette d'une forme : le même que dans les exports.
+pub use meteroscope_core::label_text;
+
+/// Point écran vu comme un point du plan, pour la géométrie commune.
+fn pt(p: Pos2) -> Pt {
+    Pt::new(p.x as f64, p.y as f64)
+}
+
+fn pos(p: Pt) -> Pos2 {
+    pos2(p.x as f32, p.y as f32)
+}
 
 /// Contour sombre sous les traits, pour rester lisible sur toute photo.
 const HALO: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 170);
@@ -64,22 +74,14 @@ fn cross(p: &Painter, c: Pos2, color: Color32, r: f32) {
 /// Arc de cercle écran de l'angle `a0` sur `sweep` radians.
 fn arc_points(c: Pos2, r: f32, a0: f32, sweep: f32) -> Vec<Pos2> {
     let n = ((sweep.abs() * r / 4.0).ceil() as usize).clamp(4, 64);
-    (0..=n).map(|i| c + Vec2::angled(a0 + sweep * i as f32 / n as f32) * r).collect()
+    geo::arc_points(pt(c), r as f64, a0 as f64, sweep as f64, n).into_iter().map(pos).collect()
 }
 
 /// Géométrie de l'arc d'un angle en écran : (angle de départ, balayage, rayon).
 fn angle_arc(a: Pos2, v: Pos2, b: Pos2) -> (f32, f32, f32) {
-    let (u, w) = (a - v, b - v);
-    let a0 = u.angle();
-    let mut sweep = w.angle() - a0;
-    while sweep > std::f32::consts::PI {
-        sweep -= TAU;
-    }
-    while sweep <= -std::f32::consts::PI {
-        sweep += TAU;
-    }
-    let r = (u.length().min(w.length()) * 0.4).clamp(6.0, 32.0);
-    (a0, sweep, r)
+    let (a0, sweep) = geo::angle_arc(pt(a), pt(v), pt(b));
+    let r = ((a - v).length().min((b - v).length()) * 0.4).clamp(6.0, 32.0);
+    (a0 as f32, sweep as f32, r)
 }
 
 /// Rayon écran de l'arc d'une inclinaison.
@@ -94,35 +96,15 @@ pub fn line_angle_arc(xf: Xf, a: Pt, b: Pt, c: Pt, d: Pt) -> Option<(Pos2, f32, 
     // Directions écran (la vue peut être pivotée), sur ~1 pixel écran.
     let k = 1.0 / xf.zoom as f64;
     let dir = |u: Pt| (xf.to_screen(x.offset(u.x * k, u.y * k)) - v).normalized();
-    let a0 = dir(u1).angle();
-    let mut sweep = dir(u2).angle() - a0;
-    while sweep > std::f32::consts::PI {
-        sweep -= TAU;
-    }
-    while sweep <= -std::f32::consts::PI {
-        sweep += TAU;
-    }
-    Some((v, a0, sweep, LINE_ANGLE_RADIUS))
+    let (a0, sweep) = geo::angle_arc(pt(v + dir(u1)), pt(v), pt(v + dir(u2)));
+    Some((v, a0 as f32, sweep as f32, LINE_ANGLE_RADIUS))
 }
 
 /// Parties à ajouter en pointillés au segment `p0→p1` pour qu'il atteigne
 /// les points `reach` (pris sur sa droite).
 fn extensions(p0: Pos2, p1: Pos2, reach: &[Pos2]) -> Vec<(Pos2, Pos2)> {
-    let d = p1 - p0;
-    let l2 = d.length_sq();
-    if l2 == 0.0 {
-        return vec![];
-    }
-    let ts = reach.iter().map(|q| (*q - p0).dot(d) / l2);
-    let (lo, hi) = ts.fold((0.0f32, 1.0f32), |(lo, hi), t| (lo.min(t), hi.max(t)));
-    let mut v = vec![];
-    if lo < 0.0 {
-        v.push((p0 + d * lo, p0));
-    }
-    if hi > 1.0 {
-        v.push((p1, p0 + d * hi));
-    }
-    v
+    let reach: Vec<Pt> = reach.iter().map(|q| pt(*q)).collect();
+    geo::extensions(pt(p0), pt(p1), &reach).into_iter().map(|(a, b)| (pos(a), pos(b))).collect()
 }
 
 /// Trait en pointillés avec halo.
@@ -135,25 +117,6 @@ fn dashed(p: &Painter, a: Pos2, b: Pos2, color: Color32) {
 fn align_out(dir: Vec2) -> Align2 {
     let side = |v: f32| if v > 0.3 { egui::Align::Min } else if v < -0.3 { egui::Align::Max } else { egui::Align::Center };
     Align2([side(dir.x), side(dir.y)])
-}
-
-/// Texte de l'étiquette d'une forme. `marker_no` : numéro du marqueur.
-pub fn label_text(shape: &Shape, cal: &Calibration, marker_no: usize) -> String {
-    let v = shape.values(cal);
-    match shape {
-        Shape::Marker { .. } => marker_no.to_string(),
-        Shape::Text { text, .. } | Shape::Arrow { text, .. } => text.clone(),
-        Shape::Rect { .. } if v.len() >= 3 => {
-            format!("{} × {} {}\n{}", format_number(v[1].value), format_number(v[2].value), v[1].unit, v[0].text())
-        }
-        Shape::Circle { .. } | Shape::Circle3 { .. } if !v.is_empty() => format!("Ø {}", v[0].text()),
-        Shape::Angle { .. } | Shape::LineAngle { .. } if !v.is_empty() => format!("{}°", format_number(v[0].value)),
-        Shape::Ellipse { .. } if v.len() >= 2 => {
-            format!("{} × {} {}", format_number(v[0].value), format_number(v[1].value), v[0].unit)
-        }
-        Shape::Arc { .. } if !v.is_empty() => format!("R {}", v[0].text()),
-        _ => v.first().map(|v| v.text()).unwrap_or_default(),
-    }
 }
 
 /// Position (ancre) de l'étiquette en écran.
@@ -437,13 +400,9 @@ pub fn arrow(p: &Painter, a: Pos2, b: Pos2, color: Color32, width: f32) {
 /// Petit symbole d'angle droit au pied `f` d'une perpendiculaire : un côté
 /// le long de la droite (vers `along`), l'autre vers le point `toward`.
 fn right_angle(p: &Painter, f: Pos2, along: Pos2, toward: Pos2, color: Color32) {
-    const SIZE: f32 = 8.0;
-    let (u, w) = (along - f, toward - f);
-    if u.length() < 1e-3 || w.length() < SIZE {
-        return;
+    if let Some(mark) = geo::right_angle_mark(pt(f), pt(along), pt(toward), 8.0) {
+        outlined(p, mark.map(pos).to_vec(), false, color, 1.2);
     }
-    let (u, w) = (u.normalized() * SIZE, w.normalized() * SIZE);
-    outlined(p, vec![f + u, f + u + w, f + w], false, color, 1.2);
 }
 
 /// Distance d'un point à une droite : la droite (prolongée en pointillés
