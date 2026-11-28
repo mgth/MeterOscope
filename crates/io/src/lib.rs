@@ -5,6 +5,7 @@
 //! existantes ; on peut en ajouter.
 
 mod image_io;
+mod presets;
 mod profile;
 mod project;
 mod render;
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub use image_io::can_save_extension;
+pub use presets::{scale_presets_from_json, scale_presets_to_json};
 pub use profile::{measure_profile, profile_csv_string};
 pub use project::PROJECT_FORMAT_VERSION;
 pub use rotate::{RotationFilter, rotate_image, rotated_dimensions};
