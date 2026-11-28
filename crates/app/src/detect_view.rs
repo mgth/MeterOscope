@@ -67,12 +67,21 @@ impl Default for DetectView {
 }
 
 /// Polygone de la zone de détection : la mesure sélectionnée si c'est un
-/// rectangle, une surface ou un cercle ; sinon l'image entière (`None`).
+/// rectangle, une surface, un cercle ou une ellipse ; sinon l'image entière
+/// (`None`).
 pub fn zone_of(doc: &Document) -> Option<(String, Vec<Pt>)> {
+    use meteroscope_core::geometry::{ellipse_outline, ellipse_semi_axes};
     let m = doc.selected()?;
     let pts = match &m.shape {
         Shape::Rect { a, b, angle } => rect_corners(*a, *b, *angle).to_vec(),
         Shape::Area { pts } if pts.len() >= 3 => pts.clone(),
+        Shape::Ellipse { center, a, b } => {
+            let (ra, rb) = ellipse_semi_axes(*center, *a, *b);
+            if ra <= 0.0 || rb <= 0.0 {
+                return None;
+            }
+            ellipse_outline(*center, *a, *b, 72)
+        }
         s => {
             let (c, r) = s.circle()?;
             (0..72).map(|i| (i as f64 * 5.0).to_radians()).map(|t| Pt::new(c.x + r * t.cos(), c.y + r * t.sin())).collect()
@@ -299,6 +308,11 @@ mod tests {
         assert_eq!((name.as_str(), z.len()), ("Rectangle 1", 4));
         doc.add(Shape::Circle { center: Pt::new(0., 0.), edge: Pt::new(10., 0.) });
         assert_eq!(zone_of(&doc).unwrap().1.len(), 72);
+        let e = doc.add(Shape::Ellipse { center: Pt::new(100., 50.), a: Pt::new(130., 50.), b: Pt::new(100., 60.) });
+        let (name, z) = zone_of(&doc).unwrap();
+        assert_eq!(name, doc.get(e).unwrap().name);
+        assert!(z.iter().all(|p| ((p.x - 100.) / 30.).powi(2) + ((p.y - 50.) / 10.).powi(2) - 1.0 < 1e-9));
+        assert!(z.iter().any(|p| p.x > 129.) && z.iter().any(|p| p.y > 59.));
         doc.add(Shape::Length { a: Pt::new(0., 0.), b: Pt::new(1., 1.) });
         assert!(zone_of(&doc).is_none(), "une longueur ne délimite pas de zone");
         doc.selected = Some(id);

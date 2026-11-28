@@ -194,15 +194,18 @@ pub fn set_handle(shape: &mut Shape, i: usize, p: Pt) {
 }
 
 /// Contrainte Maj pendant le glisser d'une poignée : horizontale/verticale/45°
-/// à l'écran (`rot` : rotation d'affichage en degrés) pour une longueur ou un
-/// segment d'inclinaison ou une droite de référence, carré pour un rectangle,
-/// cercle pour une ellipse, pas de 15° à l'écran pour leur rotation.
+/// à l'écran (`rot` : rotation d'affichage en degrés) pour une longueur, un
+/// profil, une flèche, un segment d'inclinaison ou une droite de référence,
+/// carré pour un rectangle, cercle pour une ellipse, pas de 15° à l'écran pour
+/// leur rotation.
 pub fn constrain_handle(shape: &Shape, i: usize, p: Pt, shift: bool, rot: f64) -> Pt {
     if !shift {
         return p;
     }
     match shape {
-        Shape::Length { a, b } | Shape::Profile { a, b, .. } => snap45(if i == 0 { *b } else { *a }, p, rot),
+        Shape::Length { a, b } | Shape::Profile { a, b, .. } | Shape::Arrow { a, b, .. } => {
+            snap45(if i == 0 { *b } else { *a }, p, rot)
+        }
         // L'autre extrémité du même segment.
         Shape::LineAngle { .. } => snap45(shape.points()[i ^ 1], p, rot),
         // Les deux points de la droite de référence.
@@ -484,5 +487,14 @@ mod tests {
         let mut arc = arc;
         set_handle(&mut arc, 1, p(0., -10.));
         assert_eq!(arc.points()[1], p(0., -10.));
+    }
+
+    #[test]
+    fn maj_sur_une_extremite_de_fleche() {
+        // Comme au tracé : horizontale/verticale/45° depuis l'autre extrémité.
+        let f = Shape::Arrow { a: p(0., 0.), b: p(10., 0.), text: String::new() };
+        assert_eq!(constrain_handle(&f, 1, p(20., 1.), true, 0.0), p(20., 0.));
+        assert_eq!(constrain_handle(&f, 0, p(9., 12.), true, 0.0), p(10., 12.));
+        assert_eq!(constrain_handle(&f, 1, p(20., 1.), false, 0.0), p(20., 1.));
     }
 }

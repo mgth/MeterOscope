@@ -554,3 +554,16 @@ fn aimantation_d_une_poignee() {
     assert!(near(m, Pt::new(149.0, 79.0)), "{m:?}");
     assert!(matches!(h.state().doc.get(other).unwrap().shape, Shape::Marker { p } if p == Pt::new(150.0, 80.0)));
 }
+
+#[test]
+fn rotation_d_une_ellipse_sans_aimantation() {
+    let mut doc = Document::new();
+    let r = doc.add(Shape::Rect { a: Pt::new(0.0, 0.0), b: Pt::new(10.0, 10.0), angle: 0.0 });
+    let e = doc.add(Shape::Ellipse { center: Pt::new(50.0, 50.0), a: Pt::new(70.0, 50.0), b: Pt::new(50.0, 60.0) });
+    // Seul l'angle compte pour la poignée de rotation : pas d'aimantation.
+    assert!(!crate::handle_snaps(&doc, r, crate::edit::ROTATE_HANDLE));
+    assert!(!crate::handle_snaps(&doc, e, crate::edit::ELLIPSE_ROTATE_HANDLE));
+    // Le centre et les demi-axes s'aimantent toujours.
+    assert!((0..3).all(|i| crate::handle_snaps(&doc, e, i)));
+    assert!((0..4).all(|i| crate::handle_snaps(&doc, r, i)));
+}
