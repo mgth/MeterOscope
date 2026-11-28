@@ -107,3 +107,94 @@ fn annuler_un_miroir_avec_une_perspective_corrigee() {
     assert_eq!(*app.work_image().unwrap(), flat, "l'image corrigée est reconstruite sur la photo remise à l'endroit");
     assert!(!app.image_modified());
 }
+
+/// Dossier de test, supprimé à la fin.
+struct TestDir(std::path::PathBuf);
+
+impl TestDir {
+    fn new(name: &str) -> Self {
+        let d = std::path::absolute(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target-tests").join(name)).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        Self(d)
+    }
+}
+
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn la_photo_d_origine_survit_a_deux_enregistrements() {
+    meteroscope_i18n::set_language("fr");
+    let ctx = egui::Context::default();
+    let dir = TestDir::new("deux_enregistrements");
+    let (source, project) = (dir.0.join("photo.png"), dir.0.join("photo.meteroscope"));
+    io::save_image(&photo(), &source).unwrap();
+    let mut app = MeterOscopeApp::blank();
+    app.set_image(&ctx, io::load_image(&source).unwrap(), Some(source.clone()));
+
+    // Miroir, quart de tour, premier enregistrement : l'image part dans un fichier dérivé.
+    app.transform(io::Transform::FlipHorizontal);
+    app.transform(io::Transform::RotateRight);
+    assert!(app.write_project(&project));
+    let derived = dir.0.join("photo-image.png");
+    assert_eq!(app.image_path.as_deref(), Some(derived.as_path()));
+    assert_eq!(io::load_image(&source).unwrap(), photo());
+    assert_eq!(io::load_image(&derived).unwrap(), **app.image.as_ref().unwrap());
+
+    // Quart de tour annulé, second enregistrement : le fichier dérivé est
+    // réécrit, la photo d'origine reste intacte.
+    assert!(app.doc.undo());
+    assert!(app.write_project(&project));
+    assert_eq!(io::load_image(&source).unwrap(), photo(), "la photo d'origine a été écrasée");
+    assert_eq!(app.image_path.as_deref(), Some(derived.as_path()));
+    let mirrored = image::imageops::flip_horizontal(&photo());
+    assert_eq!(io::load_image(&derived).unwrap(), mirrored);
+    assert!(!app.image_modified());
+
+    // Tout annulé : l'image est de nouveau celle de la photo, mais le projet
+    // pointe vers son fichier dérivé, réécrit à l'identique de la photo.
+    assert!(app.doc.undo());
+    assert!(app.write_project(&project));
+    assert_eq!(io::load_image(&source).unwrap(), photo());
+    assert_eq!(io::load_image(&derived).unwrap(), photo());
+    // Le projet relu retrouve l'image mesurée.
+    let saved = io::load_project(&project).unwrap();
+    assert_eq!(saved.image_path.as_deref(), Some(derived.as_path()));
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 3, "aucun fichier en trop");
+}
+
+#[test]
+fn un_projet_rouvert_n_ecrase_aucun_fichier_existant() {
+    meteroscope_i18n::set_language("fr");
+    let ctx = egui::Context::default();
+    let dir = TestDir::new("projet_rouvert");
+    // Session précédente : photo.png d'origine, photo-image.png dérivé, projet enregistré.
+    let (source, derived, project) = (dir.0.join("photo.png"), dir.0.join("photo-image.png"), dir.0.join("photo.meteroscope"));
+    io::save_image(&photo(), &source).unwrap();
+    let old = image::imageops::flip_horizontal(&photo());
+    io::save_image(&old, &derived).unwrap();
+    // Nouvelle session : le projet est rouvert sur son fichier dérivé, puis l'image est retournée.
+    let mut app = MeterOscopeApp::blank();
+    app.set_image(&ctx, io::load_image(&derived).unwrap(), Some(derived.clone()));
+    app.project_path = Some(project.clone());
+    app.transform(io::Transform::FlipVertical);
+    assert!(app.write_project(&project));
+    // Ni la photo d'origine ni l'ancien fichier dérivé ne sont touchés.
+    assert_eq!(io::load_image(&source).unwrap(), photo());
+    assert_eq!(io::load_image(&derived).unwrap(), old);
+    assert_eq!(app.image_path.as_deref(), Some(dir.0.join("photo-image-2.png").as_path()));
+
+    // Capture sans fichier : `<projet>.png` s'il est libre.
+    let mut app = MeterOscopeApp::blank();
+    app.set_image(&ctx, photo(), None);
+    let capture = dir.0.join("capture.meteroscope");
+    assert!(app.write_project(&capture));
+    assert_eq!(app.image_path.as_deref(), Some(dir.0.join("capture.png").as_path()));
+    // Enregistrée de nouveau sans changement : rien de plus à écrire.
+    assert!(app.write_project(&capture));
+    assert_eq!(app.image_path.as_deref(), Some(dir.0.join("capture.png").as_path()));
+}

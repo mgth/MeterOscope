@@ -56,6 +56,9 @@ pub struct MeterOscopeApp {
     /// Calcul qui a échoué : on ne le relance pas, l'aperçu GPU reste.
     failed: Option<(u64, TexKey)>,
     image_path: Option<PathBuf>,
+    /// Fichier image que cette session a écrit pour le projet (image sans
+    /// fichier, ou transformée) : le seul qu'un enregistrement peut réécrire.
+    owned_image: Option<PathBuf>,
     project_path: Option<PathBuf>,
     /// Révision du document au dernier enregistrement.
     saved_revision: u64,
@@ -138,6 +141,7 @@ impl MeterOscopeApp {
             job: None,
             failed: None,
             image_path: None,
+            owned_image: None,
             project_path: None,
             saved_revision: 0,
             brightness: 0.0,
@@ -379,6 +383,7 @@ impl MeterOscopeApp {
         self.image = Some(Arc::new(img));
         self.pixels_changed();
         self.image_path = path;
+        self.owned_image = None;
         self.project_path = None;
         self.doc = Document::new();
         self.applied = Orientation::IDENTITY;
@@ -398,6 +403,7 @@ impl MeterOscopeApp {
         Some(Workspace {
             image: self.image.take()?,
             image_path: self.image_path.take(),
+            owned_image: self.owned_image.take(),
             applied: self.applied,
             file_orientation: self.file_orientation,
             project_path: self.project_path.take(),
@@ -412,6 +418,7 @@ impl MeterOscopeApp {
         self.image = Some(w.image);
         self.pixels_changed();
         self.image_path = w.image_path;
+        self.owned_image = w.owned_image;
         self.applied = w.applied;
         self.file_orientation = w.file_orientation;
         self.project_path = w.project_path;
@@ -566,26 +573,53 @@ impl MeterOscopeApp {
                 None => return,
             },
         };
+        if self.write_project(&path) {
+            self.settings.add_recent(&path);
+        }
+    }
+
+    /// Fichier où écrire l'image mesurée quand elle n'a pas de fichier
+    /// identique (capture, image collée, pivotée ou retournée). Jamais un
+    /// fichier existant, la photo d'origine en premier lieu : on reprend le
+    /// fichier que cette session a déjà écrit pour cette image à côté du
+    /// projet, sinon le premier nom libre.
+    fn image_file_for(&self, project: &Path) -> PathBuf {
+        if let Some(own) = self.owned_image.as_ref().filter(|p| p.parent() == project.parent()) {
+            return own.clone();
+        }
+        let stem = project.file_stem().map_or_else(|| self.default_stem(), |s| s.to_string_lossy().into_owned());
+        let named = |suffix: &str| project.with_file_name(format!("{stem}{suffix}.png"));
+        std::iter::once(String::new())
+            .chain(std::iter::once("-image".to_owned()))
+            .chain((2..).map(|n| format!("-image-{n}")))
+            .map(|suffix| named(&suffix))
+            .find(|p| !p.exists())
+            .expect("suite de noms sans fin")
+    }
+
+    /// Écrit le projet dans `path`, et d'abord l'image si aucun fichier ne
+    /// lui est identique. Renvoie `false` en cas d'échec (déjà signalé).
+    fn write_project(&mut self, path: &Path) -> bool {
+        self.sync_orientation();
         // Capture caméra ou image pivotée/retournée : le projet doit pointer
         // vers un fichier identique à l'image mesurée, sans écraser l'original.
         if self.image_path.is_none() || self.image_modified() {
-            let mut png = path.with_extension("png");
-            if self.image_modified() && self.image_path.as_deref() == Some(png.as_path()) {
-                png = path.with_file_name(format!("{}-image.png", self.default_stem()));
-            }
+            let png = self.image_file_for(path);
             let r = io::save_image(self.image.as_ref().unwrap(), &png);
             if self.report(r, "").is_none() {
-                return;
+                return false;
             }
+            self.owned_image = Some(png.clone());
             self.image_path = Some(png);
             self.file_orientation = self.applied;
         }
         let project = io::Project { image_path: self.image_path.clone(), document: self.doc.clone() };
-        if self.report(io::save_project(&project, &path), tr!("msg.project_saved")).is_some() {
-            self.saved_revision = self.doc.revision();
-            self.settings.add_recent(&path);
-            self.project_path = Some(path);
+        if self.report(io::save_project(&project, path), tr!("msg.project_saved")).is_none() {
+            return false;
         }
+        self.saved_revision = self.doc.revision();
+        self.project_path = Some(path.to_owned());
+        true
     }
 
     fn export_csv(&mut self) {
