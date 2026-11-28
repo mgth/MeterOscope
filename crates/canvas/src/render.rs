@@ -5,7 +5,10 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Shape as EShape, Stroke, StrokeKind, TextureId, Vec2,
     pos2, vec2,
 };
-use meteroscope_core::geometry::{line_angle_vertex, project_on_line, rect_corners};
+use meteroscope_core::geometry::{
+    arc_from_3_points, ellipse_outline, ellipse_semi_axes, foot_on_line, line_angle_vertex, parallel_through,
+    rect_corners,
+};
 use meteroscope_core::measure::format_number;
 use meteroscope_core::{Calibration, Pt, Shape};
 use std::f32::consts::TAU;
@@ -112,22 +115,6 @@ fn extensions(p0: Pos2, p1: Pos2, reach: &[Pos2]) -> Vec<(Pos2, Pos2)> {
     v
 }
 
-/// Équerre de côté `k` au pied `f` de la perpendiculaire abaissée de `q` sur
-/// la droite `a→b`, tournée vers le milieu du segment. `None` s'il n'y a pas
-/// la place de la dessiner.
-pub fn right_angle_mark(a: Pos2, b: Pos2, q: Pos2, f: Pos2, k: f32) -> Option<Vec<Pos2>> {
-    let w = q - f;
-    let mut u = a + (b - a) / 2.0 - f;
-    if u.length() < 1e-3 {
-        u = b - a;
-    }
-    if u.length() < 1e-3 || w.length() < 2.0 * k {
-        return None;
-    }
-    let (u, w) = (u.normalized() * k, w.normalized() * k);
-    Some(vec![f + u, f + u + w, f + w])
-}
-
 /// Trait en pointillés avec halo.
 fn dashed(p: &Painter, a: Pos2, b: Pos2, color: Color32) {
     p.extend(EShape::dashed_line(&[a, b], Stroke::new(3.0, HALO), 5.0, 4.0));
@@ -150,6 +137,10 @@ pub fn label_text(shape: &Shape, cal: &Calibration, marker_no: usize) -> String 
         }
         Shape::Circle { .. } | Shape::Circle3 { .. } if !v.is_empty() => format!("Ø {}", v[0].text()),
         Shape::Angle { .. } | Shape::LineAngle { .. } if !v.is_empty() => format!("{}°", format_number(v[0].value)),
+        Shape::Ellipse { .. } if v.len() >= 2 => {
+            format!("{} × {} {}", format_number(v[0].value), format_number(v[1].value), v[0].unit)
+        }
+        Shape::Arc { .. } if !v.is_empty() => format!("R {}", v[0].text()),
         _ => v.first().map(|v| v.text()).unwrap_or_default(),
     }
 }
@@ -193,6 +184,22 @@ pub fn label_anchor(shape: &Shape, xf: Xf) -> (Pos2, Align2) {
             None => (s(shape.points()[0]), Align2::LEFT_BOTTOM),
         },
         Shape::Marker { p } => (s(*p), Align2::CENTER_CENTER),
+        // À côté de la cote perpendiculaire.
+        Shape::PointLine { a, b, p } => beside_segment(s(foot_on_line(*p, *a, *b).0), s(*p)),
+        Shape::Parallel { a, b, p } => {
+            let (_, _, c0, c1) = parallel_through(*a, *b, *p);
+            beside_segment(s(c0), s(c1))
+        }
+        Shape::Ellipse { center, .. } => (s(*center) + vec2(0.0, 6.0), Align2::CENTER_TOP),
+        // Au milieu de l'arc, du côté extérieur.
+        Shape::Arc { a, m, b } => match arc_from_3_points(*a, *m, *b) {
+            Some(arc) => {
+                let (c, mid) = (s(arc.center), s(arc.point(0.5)));
+                let dir = (mid - c).normalized();
+                (mid + dir * 8.0, align_out(dir))
+            }
+            None => beside_segment(s(*a), s(*b)),
+        },
         Shape::LineAngle { a, b, c, d } => match line_angle_arc(xf, *a, *b, *c, *d) {
             // Sur l'arc, du côté extérieur.
             Some((v, a0, sweep, r)) => {
@@ -205,8 +212,6 @@ pub fn label_anchor(shape: &Shape, xf: Xf) -> (Pos2, Align2) {
                 (m1 + (m2 - m1) / 2.0, Align2::CENTER_CENTER)
             }
         },
-        // Le long de la perpendiculaire.
-        Shape::Perp { a, b, p } => beside_segment(s(*p), s(project_on_line(*p, *a, *b))),
     }
 }
 
@@ -282,20 +287,6 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
             segment(p, a, b, color, width);
             segment(p, c, d, color, width);
         }
-        Shape::Perp { a: pa, b: pb, p: pp } => {
-            let (a, b, q, f) = (s(*pa), s(*pb), s(*pp), s(project_on_line(*pp, *pa, *pb)));
-            // Pied de la perpendiculaire hors du segment : droite prolongée
-            // en pointillés jusqu'à lui.
-            for (e0, e1) in extensions(a, b, &[f]) {
-                dashed(p, e0, e1, color);
-            }
-            outlined(p, vec![q, f], false, color, width * 0.75);
-            if let Some(mark) = right_angle_mark(a, b, q, f, 7.0) {
-                outlined(p, mark, false, color, width * 0.6);
-            }
-            segment(p, a, b, color, width);
-            dot(p, q, color);
-        }
         Shape::Path { pts } => {
             outlined(p, pts.iter().map(|q| s(*q)).collect(), false, color, width);
             for q in pts {
@@ -337,6 +328,10 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
                 }
             }
         }
+        Shape::PointLine { a, b, p: q } => paint_point_line(p, xf, *a, *b, *q, color, width),
+        Shape::Parallel { a, b, p: q } => paint_parallel(p, xf, *a, *b, *q, color, width),
+        Shape::Ellipse { center, a, b } => paint_ellipse(p, xf, *center, *a, *b, color, width),
+        Shape::Arc { a, m, b } => paint_arc(p, xf, *a, *m, *b, color, width),
         Shape::Marker { p: m } => {
             let c = s(*m);
             p.circle_filled(c, MARKER_RADIUS + 1.5, HALO);
@@ -348,6 +343,81 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
             };
             p.text(c, Align2::CENTER_CENTER, marker_no.to_string(), FontId::proportional(11.0), text_color);
         }
+    }
+}
+
+/// Petit symbole d'angle droit au pied `f` d'une perpendiculaire : un côté
+/// le long de la droite (vers `along`), l'autre vers le point `toward`.
+fn right_angle(p: &Painter, f: Pos2, along: Pos2, toward: Pos2, color: Color32) {
+    const SIZE: f32 = 8.0;
+    let (u, w) = (along - f, toward - f);
+    if u.length() < 1e-3 || w.length() < SIZE {
+        return;
+    }
+    let (u, w) = (u.normalized() * SIZE, w.normalized() * SIZE);
+    outlined(p, vec![f + u, f + u + w, f + w], false, color, 1.2);
+}
+
+/// Distance d'un point à une droite : la droite (prolongée en pointillés
+/// jusqu'au pied de la perpendiculaire s'il tombe hors du segment), la
+/// perpendiculaire cotée et le symbole d'angle droit.
+fn paint_point_line(p: &Painter, xf: Xf, pa: Pt, pb: Pt, pp: Pt, color: Color32, width: f32) {
+    let s = |q: Pt| xf.to_screen(q);
+    let (a, b, q) = (s(pa), s(pb), s(pp));
+    let (foot, t) = foot_on_line(pp, pa, pb);
+    let f = s(foot);
+    for (e0, e1) in extensions(a, b, &[f]) {
+        dashed(p, e0, e1, color);
+    }
+    outlined(p, vec![a, b], false, color, width);
+    // Le côté de l'angle droit le long de la droite va vers le segment.
+    let toward_segment = if t > 0.5 { a } else { b };
+    right_angle(p, f, toward_segment, q, color);
+    segment(p, f, q, color, width * 0.75);
+    for e in [a, b, q] {
+        dot(p, e, color);
+    }
+}
+
+/// Écart entre parallèles : les deux droites et la cote perpendiculaire.
+fn paint_parallel(p: &Painter, xf: Xf, pa: Pt, pb: Pt, pp: Pt, color: Color32, width: f32) {
+    let s = |q: Pt| xf.to_screen(q);
+    let (start, end, c0, c1) = parallel_through(pa, pb, pp);
+    outlined(p, vec![s(pa), s(pb)], false, color, width);
+    outlined(p, vec![s(start), s(end)], false, color, width);
+    segment(p, s(c0), s(c1), color, width * 0.75);
+    for e in [pa, pb, pp] {
+        dot(p, s(e), color);
+    }
+}
+
+/// Ellipse : contour, croix au centre, demi-axes en pointillés.
+fn paint_ellipse(p: &Painter, xf: Xf, c: Pt, a: Pt, b: Pt, color: Color32, width: f32) {
+    let s = |q: Pt| xf.to_screen(q);
+    let (ra, rb) = ellipse_semi_axes(c, a, b);
+    let n = ((ra + rb) * xf.zoom as f64).clamp(24.0, 180.0) as usize;
+    outlined(p, ellipse_outline(c, a, b, n).into_iter().map(s).collect(), true, color, width);
+    cross(p, s(c), color, 4.0);
+    for e in [a, b] {
+        p.extend(EShape::dashed_line(&[s(c), s(e)], Stroke::new(1.0, color), 5.0, 4.0));
+    }
+}
+
+/// Arc par trois points : l'arc seul, et un rayon en pointillés vers le centre.
+fn paint_arc(p: &Painter, xf: Xf, a: Pt, m: Pt, b: Pt, color: Color32, width: f32) {
+    let s = |q: Pt| xf.to_screen(q);
+    match arc_from_3_points(a, m, b) {
+        Some(arc) => {
+            let n = ((arc.length() * xf.zoom as f64) / 4.0).clamp(8.0, 256.0) as usize;
+            let pts: Vec<Pos2> = (0..=n).map(|i| s(arc.point(i as f64 / n as f64))).collect();
+            dashed(p, s(arc.point(0.5)), s(arc.center), color);
+            cross(p, s(arc.center), color, 4.0);
+            outlined(p, pts, false, color, width);
+        }
+        None => outlined(p, vec![s(a), s(m), s(b)], false, color, width),
+    }
+    for e in [a, m, b] {
+        dot(p, s(e), color);
     }
 }
 
@@ -498,22 +568,6 @@ mod tests {
     }
 
     #[test]
-    fn distance_orthogonale_equerre_et_cote() {
-        let xf = Xf::new(Pos2::ZERO, 1.0);
-        let (a, b, q) = (Pt::new(0., 0.), Pt::new(100., 0.), Pt::new(150., 40.));
-        // Pied en (150, 0), hors du segment : équerre tournée vers le segment.
-        let f = xf.to_screen(project_on_line(q, a, b));
-        let m = right_angle_mark(xf.to_screen(a), xf.to_screen(b), xf.to_screen(q), f, 7.0).unwrap();
-        assert_eq!(m, vec![pos2(143., 0.), pos2(143., 7.), pos2(150., 7.)]);
-        assert_eq!(extensions(xf.to_screen(a), xf.to_screen(b), &[f]), vec![(pos2(100., 0.), pos2(150., 0.))]);
-        // Point trop près de la droite : pas d'équerre.
-        assert!(right_angle_mark(pos2(0., 0.), pos2(100., 0.), pos2(50., 5.), pos2(50., 0.), 7.0).is_none());
-        // Cote à mi-hauteur de la perpendiculaire.
-        let (pos, _) = label_anchor(&Shape::Perp { a, b, p: q }, xf);
-        assert!((pos.y - 20.0).abs() < 0.01 && (pos.x - 150.0).abs() < 10.0, "{pos:?}");
-    }
-
-    #[test]
     fn inclinaison_arc_et_prolongements() {
         meteroscope_i18n::set_language("fr");
         let xf = Xf::new(Pos2::ZERO, 2.0);
@@ -537,5 +591,26 @@ mod tests {
         meteroscope_i18n::set_language("fr");
         let (_, sweep, _) = angle_arc(pos2(10.0, 0.0), pos2(0.0, 0.0), pos2(0.0, -10.0));
         assert!((sweep.abs() - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn etiquettes_nouvelles_formes() {
+        meteroscope_i18n::set_language("fr");
+        let cal = Calibration::default();
+        let e = Shape::Ellipse { center: Pt::new(0., 0.), a: Pt::new(10., 0.), b: Pt::new(0., 4.) };
+        assert_eq!(label_text(&e, &cal, 0), "20,00 × 8,00 px");
+        let arc = Shape::Arc { a: Pt::new(5., 0.), m: Pt::new(0., 5.), b: Pt::new(-5., 0.) };
+        assert_eq!(label_text(&arc, &cal, 0), "R 5,00 px");
+        let pl = Shape::PointLine { a: Pt::new(0., 0.), b: Pt::new(10., 0.), p: Pt::new(20., -3.) };
+        assert_eq!(label_text(&pl, &cal, 0), "3,00 px");
+        let xf = Xf::new(Pos2::ZERO, 1.0);
+        // Étiquette de la distance à côté de la perpendiculaire (x = 20), pas de la droite.
+        let (pos, _) = label_anchor(&pl, xf);
+        assert!((pos.x - 20.0).abs() > 1.0 && (pos.x - 20.0).abs() < 12.0 && pos.y < 0.0 && pos.y > -3.0, "{pos:?}");
+        // Arc par le bas (y positif) : étiquette sous l'arc.
+        let (pos, _) = label_anchor(&arc, xf);
+        assert!(pos.y > 5.0 && pos.x.abs() < 1e-3, "{pos:?}");
+        let (pos, _) = label_anchor(&Shape::Parallel { a: Pt::new(0., 0.), b: Pt::new(10., 0.), p: Pt::new(3., 6.) }, xf);
+        assert!((pos.y - 3.0).abs() < 1.0 && pos.x != 5.0, "{pos:?}");
     }
 }

@@ -243,8 +243,6 @@ fn render_demo() {
         d.add(Shape::Circle { center: s(150., 200.), edge: s(200., 200.) });
         d.add(Shape::Circle3 { a: s(480., 100.), b: s(540., 120.), c: s(500., 180.) });
         d.add(Shape::Path { pts: vec![s(480., 300.), s(520., 340.), s(500., 380.), s(560., 400.)] });
-        d.add(Shape::Perp { a: s(60., 150.), b: s(90., 260.), p: s(30., 215.) });
-        d.add(Shape::Perp { a: s(240., 450.), b: s(330., 462.), p: s(470., 440.) });
         for i in 0..4 {
             d.add(Shape::Marker { p: s(250. + 30. * i as f64, 20. + 8. * i as f64) });
         }

@@ -5,6 +5,7 @@
 
 use ab_glyph::{Font, FontRef, OutlineCurve};
 use image::RgbaImage;
+use meteroscope_core::geometry as geo;
 use meteroscope_core::{Document, Pt, Shape};
 use std::f32::consts::PI;
 use std::sync::OnceLock;
@@ -17,6 +18,8 @@ fn font() -> &'static FontRef<'static> {
 }
 
 type Rgba = [u8; 4];
+/// Point du calque (pixels).
+type P2 = (f32, f32);
 const SHADOW: Rgba = [0, 0, 0, 190];
 const LABEL_BG: Rgba = [0, 0, 0, 185];
 const WHITE: Rgba = [255, 255, 255, 255];
@@ -89,6 +92,42 @@ impl Painter {
             self.fill(&c, rgb(color, 255));
             self.stroke(&c, SHADOW, self.halo);
         }
+    }
+
+    /// Traits en pointillés avec contour sombre.
+    fn dashed(&mut self, segs: &[(P2, P2)], color: [u8; 3]) {
+        let mut pb = PathBuilder::new();
+        for (a, b) in segs {
+            pb.move_to(a.0, a.1);
+            pb.line_to(b.0, b.1);
+        }
+        let Some(path) = pb.finish() else { return };
+        let dash = self.line * 2.0;
+        for (c, width) in [(SHADOW, self.line * 0.6 + 2.0 * self.halo), (rgb(color, 255), self.line * 0.6)] {
+            let mut st = stroke(width);
+            st.dash = tiny_skia::StrokeDash::new(vec![dash, dash], 0.0);
+            self.pm.stroke_path(&path, &paint(c), &st, Transform::identity(), None);
+        }
+    }
+
+    /// Trait fin (arc d'angle, symbole d'angle droit) avec contour sombre.
+    fn thin(&mut self, path: &Path, color: [u8; 3]) {
+        self.stroke(path, SHADOW, self.line * 0.6 + 2.0 * self.halo);
+        self.stroke(path, rgb(color, 255), self.line * 0.6);
+    }
+
+    /// Petite croix (centre d'ellipse ou d'arc).
+    fn cross(&mut self, c: (f32, f32), color: [u8; 3]) -> f32 {
+        let t = self.line * 3.0;
+        let mut cross = PathBuilder::new();
+        cross.move_to(c.0 - t, c.1);
+        cross.line_to(c.0 + t, c.1);
+        cross.move_to(c.0, c.1 - t);
+        cross.line_to(c.0, c.1 + t);
+        if let Some(p) = cross.finish() {
+            self.outlined(&p, color);
+        }
+        t
     }
 
     // ----- texte -----
@@ -307,58 +346,6 @@ impl Painter {
                     }
                 }
             }
-            Shape::Perp { a, b, p: q } => {
-                let f = meteroscope_core::geometry::project_on_line(*q, *a, *b);
-                let (pa, pb_, pq, pf) = (p32(*a), p32(*b), p32(*q), p32(f));
-                // Pied de la perpendiculaire hors du segment : droite
-                // prolongée en pointillés jusqu'à lui.
-                let dash = self.line * 2.0;
-                let mut dashes = PathBuilder::new();
-                for (e0, e1) in extensions(pa, pb_, &[pf]) {
-                    dashes.move_to(e0.0, e0.1);
-                    dashes.line_to(e1.0, e1.1);
-                }
-                if let Some(p) = dashes.finish() {
-                    for (w, c) in [(self.line * 0.6 + 2.0 * self.halo, SHADOW), (self.line * 0.6, rgb(color, 255))] {
-                        let mut st = stroke(w);
-                        st.dash = tiny_skia::StrokeDash::new(vec![dash, dash], 0.0);
-                        self.pm.stroke_path(&p, &paint(c), &st, Transform::identity(), None);
-                    }
-                }
-                // Perpendiculaire et équerre au pied, tournée vers le segment.
-                let (wx, wy) = (pq.0 - pf.0, pq.1 - pf.1);
-                let wl = wx.hypot(wy);
-                let mut u = ((pa.0 + pb_.0) / 2.0 - pf.0, (pa.1 + pb_.1) / 2.0 - pf.1);
-                if u.0.hypot(u.1) < 1e-3 {
-                    u = (pb_.0 - pa.0, pb_.1 - pa.1);
-                }
-                let ul = u.0.hypot(u.1);
-                let k = self.line * 3.5;
-                let mut pb = PathBuilder::new();
-                pb.move_to(pq.0, pq.1);
-                pb.line_to(pf.0, pf.1);
-                if ul > 1e-3 && wl > 2.0 * k {
-                    let (u, w) = ((u.0 / ul * k, u.1 / ul * k), (wx / wl * k, wy / wl * k));
-                    pb.move_to(pf.0 + u.0, pf.1 + u.1);
-                    pb.line_to(pf.0 + u.0 + w.0, pf.1 + u.1 + w.1);
-                    pb.line_to(pf.0 + w.0, pf.1 + w.1);
-                }
-                if let Some(p) = pb.finish() {
-                    self.stroke(&p, SHADOW, self.line * 0.8 + 2.0 * self.halo);
-                    self.stroke(&p, rgb(color, 255), self.line * 0.8);
-                }
-                self.segment(pa, pb_, color);
-                self.handle(*q, color);
-                if let Some(s) = main {
-                    // À côté du milieu de la perpendiculaire.
-                    let mut n = if wl > 1e-6 { (-wy / wl, wx / wl) } else { (0.0, -1.0) };
-                    if n.1 > 0.0 || (n.1 == 0.0 && n.0 < 0.0) {
-                        n = (-n.0, -n.1);
-                    }
-                    let mid = ((pq.0 + pf.0) / 2.0, (pq.1 + pf.1) / 2.0);
-                    self.label_beside(&s, mid, n, gap, size, color);
-                }
-            }
             Shape::Path { pts } => {
                 if let Some(p) = polyline(pts, false) {
                     self.outlined(&p, color);
@@ -472,6 +459,93 @@ impl Painter {
                     if !matches!(shape, Shape::Circle { center, .. } if *center == p) {
                         self.handle(p, color);
                     }
+                }
+            }
+            Shape::PointLine { a, b, p } => {
+                let (foot, t) = geo::foot_on_line(*p, *a, *b);
+                let (pa, pb_, pp, pf) = (p32(*a), p32(*b), p32(*p), p32(foot));
+                // Droite prolongée en pointillés jusqu'au pied de la perpendiculaire.
+                let ext = extensions(pa, pb_, &[pf]);
+                self.dashed(&ext, color);
+                if let Some(path) = polyline(&[*a, *b], false) {
+                    self.outlined(&path, color);
+                }
+                // Symbole d'angle droit, un côté vers le segment, l'autre vers le point.
+                let k = self.line * 4.0;
+                let along = if t > 0.5 { *a } else { *b };
+                let (lu, lw) = (foot.dist(along), foot.dist(*p));
+                if lu > 0.0 && lw > k as f64 {
+                    let u = ((along.x - foot.x) / lu * k as f64, (along.y - foot.y) / lu * k as f64);
+                    let w = ((p.x - foot.x) / lw * k as f64, (p.y - foot.y) / lw * k as f64);
+                    let corner = [foot.offset(u.0, u.1), foot.offset(u.0 + w.0, u.1 + w.1), foot.offset(w.0, w.1)];
+                    if let Some(path) = polyline(&corner, false) {
+                        self.thin(&path, color);
+                    }
+                }
+                let n = self.segment(pf, pp, color);
+                for q in [*a, *b, *p] {
+                    self.handle(q, color);
+                }
+                if let Some(s) = main {
+                    let mid = ((pf.0 + pp.0) / 2.0, (pf.1 + pp.1) / 2.0);
+                    self.label_beside(&s, mid, n, gap + self.line * 3.0, size, color);
+                }
+            }
+            Shape::Parallel { a, b, p } => {
+                let (start, end, c0, c1) = geo::parallel_through(*a, *b, *p);
+                for line in [[*a, *b], [start, end]] {
+                    if let Some(path) = polyline(&line, false) {
+                        self.outlined(&path, color);
+                    }
+                }
+                let (q0, q1) = (p32(c0), p32(c1));
+                let n = self.segment(q0, q1, color);
+                for q in [*a, *b, *p] {
+                    self.handle(q, color);
+                }
+                if let Some(s) = main {
+                    let mid = ((q0.0 + q1.0) / 2.0, (q0.1 + q1.1) / 2.0);
+                    self.label_beside(&s, mid, n, gap + self.line * 3.0, size, color);
+                }
+            }
+            Shape::Ellipse { center, a, b } => {
+                if let Some(path) = polyline(&geo::ellipse_outline(*center, *a, *b, 180), true) {
+                    self.fill(&path, rgb(color, 35));
+                    self.outlined(&path, color);
+                }
+                let c = p32(*center);
+                let t = self.cross(c, color);
+                let axes = [(c, p32(*a)), (c, p32(*b))];
+                self.dashed(&axes, color);
+                if let Some(s) = main {
+                    self.label_beside(&s, c, (0.0, -1.0), gap + t, size, color);
+                }
+            }
+            Shape::Arc { a, m, b } => {
+                match geo::arc_from_3_points(*a, *m, *b) {
+                    Some(arc) => {
+                        let pts: Vec<Pt> = (0..=180).map(|i| arc.point(i as f64 / 180.0)).collect();
+                        let (mid, c) = (p32(arc.point(0.5)), p32(arc.center));
+                        // Rayon en pointillés du milieu de l'arc vers le centre.
+                        self.dashed(&[(mid, c)], color);
+                        self.cross(c, color);
+                        if let Some(path) = polyline(&pts, false) {
+                            self.outlined(&path, color);
+                        }
+                        if let Some(s) = main {
+                            let (dx, dy) = (mid.0 - c.0, mid.1 - c.1);
+                            let l = dx.hypot(dy).max(1e-6);
+                            self.label_beside(&s, mid, (dx / l, dy / l), gap, size, color);
+                        }
+                    }
+                    None => {
+                        if let Some(path) = polyline(&[*a, *m, *b], false) {
+                            self.outlined(&path, color);
+                        }
+                    }
+                }
+                for q in [*a, *m, *b] {
+                    self.handle(q, color);
                 }
             }
             Shape::Marker { p } => {
@@ -664,6 +738,32 @@ mod tests {
                 .count();
             assert!(white > 50);
         }
+    }
+
+    #[test]
+    fn nouvelles_formes_dessinees() {
+        meteroscope_i18n::set_language("fr");
+        let img = RgbaImage::from_pixel(640, 480, Rgba([90, 90, 90, 255]));
+        let mut doc = Document::new();
+        let pl = doc.add(Shape::PointLine { a: Pt::new(50., 100.), b: Pt::new(150., 100.), p: Pt::new(250., 40.) });
+        let par = doc.add(Shape::Parallel { a: Pt::new(50., 200.), b: Pt::new(150., 200.), p: Pt::new(60., 260.) });
+        let el = doc.add(Shape::Ellipse { center: Pt::new(450., 120.), a: Pt::new(550., 120.), b: Pt::new(450., 80.) });
+        let arc = doc.add(Shape::Arc { a: Pt::new(350., 400.), m: Pt::new(450., 300.), b: Pt::new(550., 400.) });
+        let out = render_annotated(&img, &doc);
+        let color = |id| doc.get(id).unwrap().color;
+        let at = |x: u32, y: u32| out.get_pixel(x, y).0;
+        // Perpendiculaire en x = 250, entre la droite prolongée (y = 100) et le point.
+        assert_eq!(&at(250, 75)[..3], &color(pl)[..]);
+        // Prolongement en pointillés entre x = 150 et 250.
+        assert!((155..245).filter(|&x| at(x, 99) != img.get_pixel(0, 0).0).count() > 20);
+        // Seconde droite parallèle en y = 260, qui s'étend jusqu'à x = 150.
+        assert_eq!(&at(140, 260)[..3], &color(par)[..]);
+        // Contour de l'ellipse au bout du grand axe, intérieur teinté mais pas plein.
+        assert_eq!(&at(450, 160)[..3], &color(el)[..]);
+        assert_ne!(at(500, 140), img.get_pixel(0, 0).0);
+        // Arc : passe par son point intermédiaire ; la corde n'est pas tracée.
+        assert_eq!(&at(450, 300)[..3], &color(arc)[..]);
+        assert_eq!(at(400, 400), img.get_pixel(0, 0).0);
     }
 
     #[test]
