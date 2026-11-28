@@ -5,7 +5,7 @@ use egui::{
     Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Shape as EShape, Stroke, StrokeKind, TextureId, Vec2,
     pos2, vec2,
 };
-use meteroscope_core::geometry::{line_angle_vertex, rect_corners};
+use meteroscope_core::geometry::{line_angle_vertex, project_on_line, rect_corners};
 use meteroscope_core::measure::format_number;
 use meteroscope_core::{Calibration, Pt, Shape};
 use std::f32::consts::TAU;
@@ -112,6 +112,22 @@ fn extensions(p0: Pos2, p1: Pos2, reach: &[Pos2]) -> Vec<(Pos2, Pos2)> {
     v
 }
 
+/// Équerre de côté `k` au pied `f` de la perpendiculaire abaissée de `q` sur
+/// la droite `a→b`, tournée vers le milieu du segment. `None` s'il n'y a pas
+/// la place de la dessiner.
+pub fn right_angle_mark(a: Pos2, b: Pos2, q: Pos2, f: Pos2, k: f32) -> Option<Vec<Pos2>> {
+    let w = q - f;
+    let mut u = a + (b - a) / 2.0 - f;
+    if u.length() < 1e-3 {
+        u = b - a;
+    }
+    if u.length() < 1e-3 || w.length() < 2.0 * k {
+        return None;
+    }
+    let (u, w) = (u.normalized() * k, w.normalized() * k);
+    Some(vec![f + u, f + u + w, f + w])
+}
+
 /// Trait en pointillés avec halo.
 fn dashed(p: &Painter, a: Pos2, b: Pos2, color: Color32) {
     p.extend(EShape::dashed_line(&[a, b], Stroke::new(3.0, HALO), 5.0, 4.0));
@@ -189,6 +205,8 @@ pub fn label_anchor(shape: &Shape, xf: Xf) -> (Pos2, Align2) {
                 (m1 + (m2 - m1) / 2.0, Align2::CENTER_CENTER)
             }
         },
+        // Le long de la perpendiculaire.
+        Shape::Perp { a, b, p } => beside_segment(s(*p), s(project_on_line(*p, *a, *b))),
     }
 }
 
@@ -263,6 +281,20 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
             }
             segment(p, a, b, color, width);
             segment(p, c, d, color, width);
+        }
+        Shape::Perp { a: pa, b: pb, p: pp } => {
+            let (a, b, q, f) = (s(*pa), s(*pb), s(*pp), s(project_on_line(*pp, *pa, *pb)));
+            // Pied de la perpendiculaire hors du segment : droite prolongée
+            // en pointillés jusqu'à lui.
+            for (e0, e1) in extensions(a, b, &[f]) {
+                dashed(p, e0, e1, color);
+            }
+            outlined(p, vec![q, f], false, color, width * 0.75);
+            if let Some(mark) = right_angle_mark(a, b, q, f, 7.0) {
+                outlined(p, mark, false, color, width * 0.6);
+            }
+            segment(p, a, b, color, width);
+            dot(p, q, color);
         }
         Shape::Path { pts } => {
             outlined(p, pts.iter().map(|q| s(*q)).collect(), false, color, width);
@@ -463,6 +495,22 @@ mod tests {
         assert_eq!(label_text(&Shape::Marker { p: Pt::default() }, &cal, 3), "3");
         let la = Shape::LineAngle { a: Pt::new(0., 0.), b: Pt::new(10., 0.), c: Pt::new(0., 5.), d: Pt::new(0., 9.) };
         assert_eq!(label_text(&la, &cal, 0), "90,00°");
+    }
+
+    #[test]
+    fn distance_orthogonale_equerre_et_cote() {
+        let xf = Xf::new(Pos2::ZERO, 1.0);
+        let (a, b, q) = (Pt::new(0., 0.), Pt::new(100., 0.), Pt::new(150., 40.));
+        // Pied en (150, 0), hors du segment : équerre tournée vers le segment.
+        let f = xf.to_screen(project_on_line(q, a, b));
+        let m = right_angle_mark(xf.to_screen(a), xf.to_screen(b), xf.to_screen(q), f, 7.0).unwrap();
+        assert_eq!(m, vec![pos2(143., 0.), pos2(143., 7.), pos2(150., 7.)]);
+        assert_eq!(extensions(xf.to_screen(a), xf.to_screen(b), &[f]), vec![(pos2(100., 0.), pos2(150., 0.))]);
+        // Point trop près de la droite : pas d'équerre.
+        assert!(right_angle_mark(pos2(0., 0.), pos2(100., 0.), pos2(50., 5.), pos2(50., 0.), 7.0).is_none());
+        // Cote à mi-hauteur de la perpendiculaire.
+        let (pos, _) = label_anchor(&Shape::Perp { a, b, p: q }, xf);
+        assert!((pos.y - 20.0).abs() < 0.01 && (pos.x - 150.0).abs() < 10.0, "{pos:?}");
     }
 
     #[test]

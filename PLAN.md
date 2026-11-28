@@ -34,7 +34,8 @@ Longueur, chemin (ligne brisée), angle (3 points), surface (polygone : aire + p
 rectangle (largeur, hauteur, aire ; par deux coins, ou incliné par trois points, et
 inclinable par sa poignée ronde), cercle centre-bord et cercle par 3 points
 (diamètre, rayon, aire, circonférence), marqueur (comptage), inclinaison entre deux
-segments distants (0° à 90°).
+segments distants (0° à 90°), distance orthogonale d'un point à un segment (ou à son
+prolongement, tracé en pointillés).
 Statistiques par type : n, moyenne, écart-type, min, max.
 
 Redressement : l'outil Redresser (H) fait pivoter l'affichage pour qu'un segment tracé

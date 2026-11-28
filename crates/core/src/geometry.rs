@@ -194,6 +194,18 @@ pub fn circle_from_3_points(a: Pt, b: Pt, c: Pt) -> Option<(Pt, f64)> {
     Some((center, center.dist(a)))
 }
 
+/// Projeté orthogonal de `p` sur la droite portant `a→b` (le pied de la
+/// perpendiculaire, éventuellement hors du segment). `a` si le segment est
+/// de longueur nulle.
+pub fn project_on_line(p: Pt, a: Pt, b: Pt) -> Pt {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let len2 = dx * dx + dy * dy;
+    if len2 == 0.0 {
+        return a;
+    }
+    a.lerp(b, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)
+}
+
 /// Distance d'un point à un segment.
 pub fn dist_point_segment(p: Pt, a: Pt, b: Pt) -> f64 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
@@ -238,6 +250,8 @@ mod tests {
         assert!(point_in_polygon(Pt::new(5., 5.), &sq));
         assert!(!point_in_polygon(Pt::new(15., 5.), &sq));
         assert_eq!(dist_point_segment(Pt::new(5., 3.), sq[0], sq[1]), 3.0);
+        assert_eq!(project_on_line(Pt::new(25., 3.), sq[0], sq[1]), Pt::new(25., 0.));
+        assert_eq!(project_on_line(Pt::new(25., 3.), sq[0], sq[0]), sq[0]);
     }
 
     #[test]

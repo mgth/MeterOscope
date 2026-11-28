@@ -6,11 +6,12 @@ use egui::{Align2, FontId, Key, Rect, RichText, ScrollArea, Sense, Ui, WidgetInf
 use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
-pub const TOOLS: [Tool; 13] = [
+pub const TOOLS: [Tool; 14] = [
     Tool::Select,
     Tool::Calibrate,
     Tool::Straighten,
     Tool::Draw(ShapeKind::Length),
+    Tool::Draw(ShapeKind::Perp),
     Tool::Draw(ShapeKind::Path),
     Tool::Draw(ShapeKind::Angle),
     Tool::Draw(ShapeKind::LineAngle),
@@ -42,6 +43,7 @@ fn short_name(tool: Tool) -> &'static str {
     match tool {
         Tool::Draw(ShapeKind::Circle3) => tr!("tool.circle3_short"),
         Tool::Draw(ShapeKind::Rect3) => tr!("tool.rect3_short"),
+        Tool::Draw(ShapeKind::Perp) => tr!("tool.perp_short"),
         t => tool_name(t),
     }
 }
@@ -63,13 +65,15 @@ pub fn tool_description(tool: Tool) -> &'static str {
             ShapeKind::Marker => tr!("tool_help.marker"),
             ShapeKind::LineAngle => tr!("tool_help.line_angle"),
             ShapeKind::Rect3 => tr!("tool_help.rect3"),
+            ShapeKind::Perp => tr!("tool_help.perp"),
         },
     }
 }
 
 /// Raccourci clavier (une lettre, sans modificateur) associé à un outil.
 ///
-/// S Sélection · E Échelle · H Horizon (redresser) · L Longueur · B ligne
+/// S Sélection · E Échelle · H Horizon (redresser) · L Longueur · D Distance
+/// orthogonale · B ligne
 /// Brisée (chemin) · A Angle · I Inclinaison · P Polygone (surface) ·
 /// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur.
 pub fn tool_shortcut(tool: Tool) -> Option<Key> {
@@ -88,6 +92,7 @@ pub fn tool_shortcut(tool: Tool) -> Option<Key> {
             ShapeKind::Marker => Key::M,
             ShapeKind::LineAngle => Key::I,
             ShapeKind::Rect3 => Key::O,
+            ShapeKind::Perp => Key::D,
         },
     })
 }
@@ -188,7 +193,7 @@ mod tests {
             assert_eq!(k.name().len(), 1, "{k:?} n'est pas une lettre");
             assert!(k.name().chars().all(|c| c.is_ascii_uppercase()));
         }
-        assert_eq!(seen.len(), 13);
+        assert_eq!(seen.len(), 14);
     }
 
     #[test]

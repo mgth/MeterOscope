@@ -307,6 +307,58 @@ impl Painter {
                     }
                 }
             }
+            Shape::Perp { a, b, p: q } => {
+                let f = meteroscope_core::geometry::project_on_line(*q, *a, *b);
+                let (pa, pb_, pq, pf) = (p32(*a), p32(*b), p32(*q), p32(f));
+                // Pied de la perpendiculaire hors du segment : droite
+                // prolongée en pointillés jusqu'à lui.
+                let dash = self.line * 2.0;
+                let mut dashes = PathBuilder::new();
+                for (e0, e1) in extensions(pa, pb_, &[pf]) {
+                    dashes.move_to(e0.0, e0.1);
+                    dashes.line_to(e1.0, e1.1);
+                }
+                if let Some(p) = dashes.finish() {
+                    for (w, c) in [(self.line * 0.6 + 2.0 * self.halo, SHADOW), (self.line * 0.6, rgb(color, 255))] {
+                        let mut st = stroke(w);
+                        st.dash = tiny_skia::StrokeDash::new(vec![dash, dash], 0.0);
+                        self.pm.stroke_path(&p, &paint(c), &st, Transform::identity(), None);
+                    }
+                }
+                // Perpendiculaire et équerre au pied, tournée vers le segment.
+                let (wx, wy) = (pq.0 - pf.0, pq.1 - pf.1);
+                let wl = wx.hypot(wy);
+                let mut u = ((pa.0 + pb_.0) / 2.0 - pf.0, (pa.1 + pb_.1) / 2.0 - pf.1);
+                if u.0.hypot(u.1) < 1e-3 {
+                    u = (pb_.0 - pa.0, pb_.1 - pa.1);
+                }
+                let ul = u.0.hypot(u.1);
+                let k = self.line * 3.5;
+                let mut pb = PathBuilder::new();
+                pb.move_to(pq.0, pq.1);
+                pb.line_to(pf.0, pf.1);
+                if ul > 1e-3 && wl > 2.0 * k {
+                    let (u, w) = ((u.0 / ul * k, u.1 / ul * k), (wx / wl * k, wy / wl * k));
+                    pb.move_to(pf.0 + u.0, pf.1 + u.1);
+                    pb.line_to(pf.0 + u.0 + w.0, pf.1 + u.1 + w.1);
+                    pb.line_to(pf.0 + w.0, pf.1 + w.1);
+                }
+                if let Some(p) = pb.finish() {
+                    self.stroke(&p, SHADOW, self.line * 0.8 + 2.0 * self.halo);
+                    self.stroke(&p, rgb(color, 255), self.line * 0.8);
+                }
+                self.segment(pa, pb_, color);
+                self.handle(*q, color);
+                if let Some(s) = main {
+                    // À côté du milieu de la perpendiculaire.
+                    let mut n = if wl > 1e-6 { (-wy / wl, wx / wl) } else { (0.0, -1.0) };
+                    if n.1 > 0.0 || (n.1 == 0.0 && n.0 < 0.0) {
+                        n = (-n.0, -n.1);
+                    }
+                    let mid = ((pq.0 + pf.0) / 2.0, (pq.1 + pf.1) / 2.0);
+                    self.label_beside(&s, mid, n, gap, size, color);
+                }
+            }
             Shape::Path { pts } => {
                 if let Some(p) = polyline(pts, false) {
                     self.outlined(&p, color);

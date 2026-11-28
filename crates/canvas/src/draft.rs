@@ -64,6 +64,8 @@ impl Draft {
             ShapeKind::Rect => square_in(prev, p, -rot),
             // Troisième point : largeur égale au premier côté (carré).
             ShapeKind::Rect3 if self.pts.len() == 2 => square3(self.pts[0], prev, p),
+            // Le point d'une distance orthogonale est libre.
+            ShapeKind::Perp if self.pts.len() == 2 => p,
             ShapeKind::Circle | ShapeKind::Circle3 | ShapeKind::Marker => p,
             _ => snap45(prev, p, rot),
         }
@@ -317,6 +319,22 @@ mod tests {
         let s = meteroscope_core::Shape::from_points(ShapeKind::Rect3, &pts).unwrap();
         let v = s.values(&meteroscope_core::Calibration::default());
         assert!((v[1].value - 50.0).abs() < 1e-9 && (v[2].value - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn distance_orthogonale() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = Draft::new(ShapeKind::Perp);
+        // Segment en glissant (Maj : horizontal), puis un clic pour le point.
+        d.press(p(0., 0.), TOL);
+        assert_eq!(d.constrain(p(40., 3.), true, 0.0), p(40., 0.));
+        assert_eq!(d.release(p(40., 0.), true, TOL), Step::Continue);
+        // Maj n'agit pas sur le point.
+        assert_eq!(d.constrain(p(70., 31.), true, 0.0), p(70., 31.));
+        d.press(p(70., 30.), TOL);
+        let Step::Done(pts) = d.release(p(70., 30.), false, TOL) else { panic!() };
+        let s = meteroscope_core::Shape::from_points(ShapeKind::Perp, &pts).unwrap();
+        assert_eq!(s.values(&meteroscope_core::Calibration::default())[0].value, 30.0);
     }
 
     #[test]

@@ -155,6 +155,17 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                     dot(*q);
                 }
             }
+            ShapeKind::Perp => {
+                // Un segment, un point à l'écart, la perpendiculaire et son angle droit.
+                let (a, b) = (p(0.06, 0.84), p(0.94, 0.84));
+                let (q, f) = (p(0.60, 0.14), p(0.60, 0.84));
+                painter.line_segment([a, b], stroke);
+                let thin = Stroke::new(w * 0.8, color);
+                painter.line_segment([q, f], thin);
+                let k = 0.16;
+                painter.add(Shape::line(vec![p(0.60 - k, 0.84), p(0.60 - k, 0.84 - k), p(0.60, 0.84 - k)], thin));
+                dot(q);
+            }
             ShapeKind::Marker => {
                 painter.line_segment([p(0.5, 0.06), p(0.5, 0.94)], stroke);
                 painter.line_segment([p(0.06, 0.5), p(0.94, 0.5)], stroke);

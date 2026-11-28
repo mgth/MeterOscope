@@ -36,10 +36,12 @@ pub enum ShapeKind {
     /// Rectangle tracé par trois points (un côté, puis la largeur) : outil
     /// de tracé seulement, il produit un [`Shape::Rect`] incliné.
     Rect3,
+    /// Distance orthogonale d'un point à la droite portant un segment.
+    Perp,
 }
 
 impl ShapeKind {
-    pub const ALL: [ShapeKind; 10] = [
+    pub const ALL: [ShapeKind; 11] = [
         ShapeKind::Length,
         ShapeKind::Path,
         ShapeKind::Angle,
@@ -50,6 +52,7 @@ impl ShapeKind {
         ShapeKind::Marker,
         ShapeKind::LineAngle,
         ShapeKind::Rect3,
+        ShapeKind::Perp,
     ];
 
     /// Type de la mesure produite par ce tracé (Rect3 → Rect).
@@ -73,6 +76,7 @@ impl ShapeKind {
             ShapeKind::Marker => tr!("shape.marker"),
             ShapeKind::LineAngle => tr!("shape.line_angle"),
             ShapeKind::Rect3 => tr!("shape.rect3"),
+            ShapeKind::Perp => tr!("shape.perp"),
         }
     }
 
@@ -81,7 +85,7 @@ impl ShapeKind {
     pub fn point_count(self) -> Option<usize> {
         match self {
             ShapeKind::Length | ShapeKind::Rect | ShapeKind::Circle => Some(2),
-            ShapeKind::Angle | ShapeKind::Circle3 | ShapeKind::Rect3 => Some(3),
+            ShapeKind::Angle | ShapeKind::Circle3 | ShapeKind::Rect3 | ShapeKind::Perp => Some(3),
             ShapeKind::Marker => Some(1),
             ShapeKind::LineAngle => Some(4),
             ShapeKind::Path | ShapeKind::Area => None,
@@ -138,6 +142,8 @@ pub enum Shape {
     Marker { p: Pt },
     /// Inclinaison entre le segment `a→b` et le segment `c→d`.
     LineAngle { a: Pt, b: Pt, c: Pt, d: Pt },
+    /// Distance orthogonale du point `p` à la droite portant le segment `a→b`.
+    Perp { a: Pt, b: Pt, p: Pt },
 }
 
 impl Shape {
@@ -161,6 +167,7 @@ impl Shape {
                 let (a, b, angle) = geo::rect_from_3_points(p[0], p[1], p[2]);
                 Shape::Rect { a, b, angle }
             }
+            ShapeKind::Perp => Shape::Perp { a: p[0], b: p[1], p: p[2] },
         })
     }
 
@@ -175,6 +182,7 @@ impl Shape {
             Shape::Circle3 { .. } => ShapeKind::Circle3,
             Shape::Marker { .. } => ShapeKind::Marker,
             Shape::LineAngle { .. } => ShapeKind::LineAngle,
+            Shape::Perp { .. } => ShapeKind::Perp,
         }
     }
 
@@ -188,6 +196,7 @@ impl Shape {
             Shape::Circle3 { a, b, c } => vec![*a, *b, *c],
             Shape::Marker { p } => vec![*p],
             Shape::LineAngle { a, b, c, d } => vec![*a, *b, *c, *d],
+            Shape::Perp { a, b, p } => vec![*a, *b, *p],
         }
     }
 
@@ -201,6 +210,7 @@ impl Shape {
             Shape::Circle3 { a, b, c } => vec![a, b, c],
             Shape::Marker { p } => vec![p],
             Shape::LineAngle { a, b, c, d } => vec![a, b, c, d],
+            Shape::Perp { a, b, p } => vec![a, b, p],
         }
     }
 
@@ -275,6 +285,7 @@ impl Shape {
                 value: geo::line_angle_deg(*a, *b, *c, *d),
                 unit: "°".to_owned(),
             }],
+            Shape::Perp { a, b, p } => vec![len(Quantity::Length, p.dist(geo::project_on_line(*p, *a, *b)))],
         }
     }
 }
@@ -376,6 +387,9 @@ mod tests {
         let la = Shape::LineAngle { a: Pt::new(0., 0.), b: Pt::new(10., 0.), c: Pt::new(50., 50.), d: Pt::new(60., 60.) };
         assert_eq!(la.values(&cal)[0].text(), "45,00 °");
         assert!(Shape::from_points(ShapeKind::Angle, &[Pt::default(); 2]).is_none());
+        // Distance orthogonale : à la droite, même au-delà des extrémités du segment.
+        let d = Shape::Perp { a: Pt::new(0., 0.), b: Pt::new(100., 0.), p: Pt::new(250., -30.) };
+        assert_eq!(d.values(&cal)[0].text(), "3,00 mm");
         // Rectangle par trois points : côté (0,0)→(10,10), largeur jusqu'à (0,20).
         let r = Shape::from_points(ShapeKind::Rect3, &[Pt::new(0., 0.), Pt::new(10., 10.), Pt::new(0., 20.)]).unwrap();
         assert_eq!(r.kind(), ShapeKind::Rect);

@@ -2,7 +2,8 @@
 
 use crate::draft::{snap45, square_in};
 use meteroscope_core::geometry::{
-    direction_deg, dist_point_segment, from_frame, normalize_deg, point_in_polygon, rect_corners, to_frame,
+    direction_deg, dist_point_segment, from_frame, normalize_deg, point_in_polygon, project_on_line, rect_corners,
+    to_frame,
 };
 use meteroscope_core::{Document, Pt, Shape};
 
@@ -109,6 +110,8 @@ pub fn constrain_handle(shape: &Shape, i: usize, p: Pt, shift: bool, rot: f64) -
         Shape::Length { a, b } => snap45(if i == 0 { *b } else { *a }, p, rot),
         // L'autre extrémité du même segment.
         Shape::LineAngle { .. } => snap45(shape.points()[i ^ 1], p, rot),
+        // Extrémités du segment seulement ; le point reste libre.
+        Shape::Perp { a, b, .. } if i < 2 => snap45(if i == 0 { *b } else { *a }, p, rot),
         Shape::Rect { a, b, .. } if i == ROTATE_HANDLE => {
             let c = rect_center(*a, *b);
             let step = 15.0;
@@ -138,6 +141,8 @@ fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
         Shape::Area { pts } => closed(pts),
         Shape::Rect { a, b, angle } => closed(&rect_corners(*a, *b, *angle)),
         Shape::LineAngle { a, b, c, d } => vec![(*a, *b), (*c, *d)],
+        // Le segment et la perpendiculaire abaissée du point.
+        Shape::Perp { a, b, p } => vec![(*a, *b), (*p, project_on_line(*p, *a, *b))],
         _ => vec![],
     }
 }
@@ -259,6 +264,11 @@ mod tests {
         assert_eq!(constrain_handle(&la, 0, p(-9., 1.), true, 0.0), p(-9., 0.));
         assert_eq!(dist_to_outline(&la, p(5., 19.)), 1.0);
         assert_eq!(dist_to_outline(&la, p(5., 10.)), 10.0);
+        let d = Shape::Perp { a: p(0., 0.), b: p(10., 0.), p: p(30., 20.) };
+        assert_eq!(constrain_handle(&d, 1, p(12., 1.), true, 0.0), p(12., 0.));
+        assert_eq!(constrain_handle(&d, 2, p(31., 1.), true, 0.0), p(31., 1.));
+        // La perpendiculaire se saisit aussi, pied hors du segment compris.
+        assert_eq!(dist_to_outline(&d, p(32., 10.)), 2.0);
     }
 
     #[test]
