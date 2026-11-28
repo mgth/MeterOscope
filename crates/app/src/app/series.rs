@@ -269,6 +269,7 @@ impl MeterOscopeApp {
         let several = missing.len() > 1;
         let entries = p.images.into_iter().map(|i| Entry::new(i.image_path, i.size, !i.own_scale, i.document)).collect();
         self.series_install(ctx, entries, missing, p.active, p.shared_scale, Some(path.to_owned()));
+        self.settings.add_recent(path);
         if n > 0 && several {
             self.error(tr!("msg.images_missing", n = n));
         }
@@ -513,6 +514,7 @@ impl MeterOscopeApp {
         if self.report(io::save_series(&project, path), tr!("msg.project_saved")).is_some() {
             self.series.saved = self.series.model.revision(&self.doc);
             self.project_path = Some(path.to_owned());
+            self.settings.add_recent(path);
         }
     }
 
