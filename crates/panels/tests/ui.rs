@@ -3,8 +3,8 @@
 use egui::Key;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use meteroscope_core::{Document, Pt, Shape, ShapeKind, Tool};
-use meteroscope_panels::{CalibrationDialog, PanelOutput, measurements_panel, tool_palette};
+use meteroscope_core::{Document, Pt, Scale, ScalePresets, Shape, ShapeKind, Tool};
+use meteroscope_panels::{CalibrationDialog, PanelOutput, measurements_panel, measurements_panel_with_presets, tool_palette};
 
 fn length(x: f64) -> Shape {
     Shape::Length { a: Pt::new(0.0, 0.0), b: Pt::new(x, 0.0) }
@@ -21,6 +21,30 @@ fn palette_change_l_outil() {
     harness.get_by_label("Échelle").click();
     harness.run();
     assert_eq!(*harness.state(), Tool::Calibrate);
+}
+
+#[test]
+fn palette_groupe_les_outils_semblables() {
+    meteroscope_i18n::set_language("fr");
+    let mut harness = Harness::new_ui_state(|ui, tool: &mut Tool| tool_palette(ui, tool), Tool::Select);
+    harness.run();
+    // Seul le premier outil du groupe « Cercles » est visible.
+    assert!(harness.query_by_label("Cercle 3 points").is_none());
+    // Le clic droit ouvre le volet du groupe sans changer d'outil.
+    harness.get_by_label("Cercle").click_secondary();
+    harness.run();
+    assert_eq!(*harness.state(), Tool::Select);
+    harness.get_by_label("Cercle 3 points").click();
+    harness.run();
+    assert_eq!(*harness.state(), Tool::Draw(ShapeKind::Circle3));
+    // Le volet se referme et le bouton du groupe montre désormais l'outil choisi.
+    harness.run();
+    assert!(harness.query_by_label("Cercle").is_none());
+    harness.get_by_label("Sélection").click();
+    harness.run();
+    harness.get_by_label("Cercle 3 points").click();
+    harness.run();
+    assert_eq!(*harness.state(), Tool::Draw(ShapeKind::Circle3));
 }
 
 struct PanelState {
@@ -246,4 +270,150 @@ fn changer_la_couleur() {
     let after = harness.state().doc.get(a).unwrap().color;
     assert_ne!(before, after);
     assert_eq!(after, meteroscope_core::PALETTE[7]);
+}
+
+/// Profil d'une barre claire (bords en 30 et 70 px) et son document.
+fn profile_state() -> (Document, u64, meteroscope_core::profile::Analysis) {
+    use meteroscope_core::profile::{EdgeMethod, analyze};
+    let values: Vec<f64> = (0..200).map(|i| if (60..140).contains(&i) { 0.8 } else { 0.2 }).collect();
+    let analysis = analyze(&values, 0.5, EdgeMethod::HalfHeight, None, None);
+    let mut doc = Document::new();
+    let id = doc.add(Shape::profile(Pt::new(0.0, 0.0), Pt::new(99.5, 0.0)));
+    if let Shape::Profile { result, .. } = &mut doc.get_mut(id).unwrap().shape {
+        *result = analysis.result();
+    }
+    (doc, id, analysis)
+}
+
+#[test]
+fn panneau_du_profil_reglages_annulables() {
+    meteroscope_i18n::set_language("fr");
+    let (doc, id, analysis) = profile_state();
+    assert!((analysis.result().unwrap().width_px() - 40.0).abs() < 0.05);
+    let undo_before = doc.clone();
+    let mut harness = Harness::builder().with_size(egui::vec2(900.0, 230.0)).build_ui_state(
+        move |ui, st: &mut (Document, bool)| {
+            let out = meteroscope_panels::profile_panel(ui, &mut st.0, id, &analysis);
+            st.1 |= out.export_csv;
+        },
+        (doc, false),
+    );
+    harness.run();
+    // Nom de la mesure, largeur en pixels (sans échelle) et réglages visibles.
+    harness.get_by_label("Profil 1");
+    harness.get_by_label("40,00 px");
+    harness.get_by_label("Mi-hauteur");
+    // Décocher la correction d'inclinaison : appliqué, en une étape d'annulation.
+    harness.get_by_label("Mesurer perpendiculairement aux bords").click();
+    harness.run();
+    let params = |d: &Document| match &d.get(id).unwrap().shape {
+        Shape::Profile { params, .. } => params.clone(),
+        _ => panic!(),
+    };
+    assert!(!params(&harness.state().0).perpendicular);
+    harness.get_by_label("Gradient").click();
+    harness.run();
+    assert_eq!(params(&harness.state().0).method, meteroscope_core::EdgeMethod::Gradient);
+    let st = harness.state_mut();
+    assert!(st.0.undo() && st.0.undo());
+    assert_eq!(st.0.measurements, undo_before.measurements);
+    assert!(!st.1);
+    harness.get_by_label("Exporter la courbe…").click();
+    harness.run();
+    assert!(harness.state().1);
+}
+
+struct PresetState {
+    doc: Document,
+    presets: ScalePresets,
+    changed: usize,
+}
+
+fn presets_harness(doc: Document, presets: ScalePresets) -> Harness<'static, PresetState> {
+    Harness::builder().with_size(egui::vec2(420.0, 700.0)).with_step_dt(0.05).build_ui_state(
+        |ui, st: &mut PresetState| {
+            let out = measurements_panel_with_presets(ui, &mut st.doc, &mut st.presets);
+            if out.presets_changed {
+                st.changed += 1;
+            }
+        },
+        PresetState { doc, presets, changed: 0 },
+    )
+}
+
+fn mm(k: f64) -> Scale {
+    Scale { units_per_px: k, unit: "mm".to_owned() }
+}
+
+#[test]
+fn prereglage_applique_en_un_clic_puis_annule() {
+    meteroscope_i18n::set_language("fr");
+    let mut presets = ScalePresets::default();
+    presets.save("objectif ×10", &mm(0.01));
+    presets.save("caméra atelier", &mm(0.2));
+    let mut harness = presets_harness(Document::new(), presets);
+    harness.run();
+    harness.get_by_label("Préréglages").click();
+    harness.run();
+    harness.get_by_label("caméra atelier").click();
+    harness.run();
+    let st = harness.state();
+    assert_eq!(st.doc.calibration.scale, Some(mm(0.2)));
+    assert_eq!(st.changed, 0, "appliquer ne modifie pas la liste");
+    // La carte rappelle le nom du préréglage reconnu.
+    harness.get_by_label("Préréglage : caméra atelier");
+    harness.state_mut().doc.undo();
+    harness.run();
+    assert!(!harness.state().doc.calibration.is_calibrated());
+}
+
+#[test]
+fn prereglage_enregistre_renomme_supprime() {
+    meteroscope_i18n::set_language("fr");
+    let mut doc = Document::new();
+    doc.calibration.set_from_reference(100.0, 10.0, "mm");
+    let mut harness = presets_harness(doc, ScalePresets::default());
+    harness.run();
+    harness.get_by_label("Préréglages").click();
+    harness.run();
+    harness.get_by_label("Aucun préréglage enregistré.");
+
+    // Enregistrer : taper un nom puis Entrée.
+    harness.get_by_role(egui::Role::TextInput).click();
+    harness.run();
+    harness.get_by_role(egui::Role::TextInput).type_text("objectif ×10");
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    {
+        let st = harness.state();
+        assert_eq!(st.presets.presets.len(), 1);
+        assert_eq!(st.presets.presets[0].name, "objectif ×10");
+        assert_eq!(st.presets.presets[0].scale, mm(0.1));
+        assert!(st.changed >= 1);
+        assert!(!st.doc.can_undo(), "enregistrer ne touche pas au document");
+    }
+
+    // Renommer : crayon, nouveau nom, Entrée.
+    harness.get_by_label("Renommer").click();
+    harness.run();
+    harness.run();
+    let changed = harness.state().changed;
+    let field = harness.get_all_by_role(egui::Role::TextInput).next().unwrap();
+    field.type_text(" Nikon");
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    assert_eq!(harness.state().presets.presets[0].name, "objectif ×10 Nikon");
+    assert!(harness.state().changed > changed);
+
+    // Option « garder l'échelle ».
+    harness.get_by_label("Garder l'échelle pour l'image suivante").click();
+    harness.run();
+    assert!(harness.state().presets.keep_scale);
+
+    // Supprimer.
+    harness.get_by_label("Supprimer ce préréglage").click();
+    harness.run();
+    assert!(harness.state().presets.presets.is_empty());
 }

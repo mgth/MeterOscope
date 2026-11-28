@@ -8,16 +8,21 @@
 //!   ou droit, Espace + glisser, ou glisser dans le vide (outil Sélection) :
 //!   déplacer la vue ;
 //! - outils de tracé : clic puis clic, ou presser-glisser-relâcher ; Maj
-//!   contraint ; Entrée / double-clic / clic droit terminent un chemin ou une
-//!   surface, Retour arrière retire le dernier point ;
+//!   contraint ; près d'un point remarquable d'une mesure, le point s'y
+//!   aimante (Alt maintenu : sans aimantation) ; Entrée / double-clic / clic
+//!   droit terminent un chemin ou une surface, Retour arrière retire le
+//!   dernier point ;
 //! - outil Sélection : clic pour sélectionner, glisser une poignée ou le corps ;
 //! - outil Redresser : tracer un segment le long d'une ligne qui doit être
 //!   horizontale ou verticale ; la vue pivote (`Document::rotation`), l'image
-//!   et les coordonnées des mesures restent inchangées.
+//!   et les coordonnées des mesures restent inchangées ;
+//! - outil Perspective : cliquer les quatre coins d'un objet rectangulaire ;
+//!   la vue signale le quadrilatère, l'application corrige la perspective.
 
 mod draft;
 mod edit;
 mod render;
+mod snap;
 mod view;
 #[cfg(test)]
 mod tests;
@@ -42,6 +47,8 @@ const DRAG_THRESHOLD: f32 = 4.0;
 const HIT_TOL: f32 = 6.0;
 /// Tolérance de clic sur une poignée ou un point (pixels écran).
 const HANDLE_TOL: f32 = 9.0;
+/// Distance d'aimantation aux points remarquables (pixels écran).
+const SNAP_TOL: f32 = 8.0;
 /// Distance écran entre le bord d'un rectangle et sa poignée de rotation.
 const ROTATE_GAP: f32 = 24.0;
 /// Délai et distance maximaux d'un double-clic.
@@ -53,6 +60,8 @@ const LOUPE_MAX_ZOOM: f32 = 12.0;
 const CALIB_COLOR: Color32 = Color32::from_rgb(255, 64, 170);
 /// Couleur du segment de redressement.
 const STRAIGHTEN_COLOR: Color32 = Color32::from_rgb(64, 224, 255);
+/// Couleur du quadrilatère de correction de perspective.
+const PERSPECTIVE_COLOR: Color32 = Color32::from_rgb(255, 196, 48);
 
 /// Ce que la vue signale à l'application après une frame.
 #[derive(Clone, Debug, Default)]
@@ -66,6 +75,10 @@ pub struct CanvasOutput {
     pub created: Option<u64>,
     /// La vue vient d'être redressée : nouvelle rotation (degrés).
     pub straightened: Option<f64>,
+    /// L'utilisateur vient de cliquer les quatre coins d'un objet
+    /// rectangulaire avec l'outil Perspective (dans l'ordre des clics) :
+    /// l'application doit corriger la perspective.
+    pub perspective_quad: Option<[Pt; 4]>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -125,6 +138,9 @@ pub struct Canvas {
     draft: Draft,
     /// Dernier segment d'étalonnage tracé (affiché tant que l'outil Échelle est actif).
     calib_seg: Option<(Pt, Pt)>,
+    /// Dernier quadrilatère de perspective cliqué (affiché tant que
+    /// l'application ne l'a pas traité : boîte de dialogue ouverte).
+    persp_quad: Option<[Pt; 4]>,
     gesture: Option<Gesture>,
     last_click: Option<(f64, Pos2)>,
     /// Rectangles des étiquettes de la dernière frame (clic sur une étiquette).
@@ -132,6 +148,12 @@ pub struct Canvas {
     has_selection: bool,
     hover_hit: Option<Hit>,
     shift: bool,
+    /// Alt maintenu : aimantation désactivée.
+    alt: bool,
+    /// Point d'accroche courant (tracé ou poignée), pour le repère et l'aide.
+    snap: Option<snap::Snap>,
+    /// La poignée saisie peut s'aimanter (voir [`handle_snaps`]).
+    handle_snaps: bool,
     out: CanvasOutput,
 }
 
@@ -149,12 +171,16 @@ impl Default for Canvas {
             overlay: None,
             draft: Draft::new(ShapeKind::Length),
             calib_seg: None,
+            persp_quad: None,
             gesture: None,
             last_click: None,
             label_rects: Vec::new(),
             has_selection: false,
             hover_hit: None,
             shift: false,
+            alt: false,
+            snap: None,
+            handle_snaps: false,
             out: CanvasOutput::default(),
         }
     }
@@ -165,8 +191,29 @@ fn draft_kind(tool: Tool) -> Option<ShapeKind> {
     match tool {
         Tool::Select => None,
         Tool::Calibrate | Tool::Straighten => Some(ShapeKind::Length),
+        // Quadrilatère : un polygone de quatre points.
+        Tool::Perspective => Some(ShapeKind::Area),
         Tool::Draw(k) => Some(k),
     }
+}
+
+/// Tracé vierge de l'outil.
+fn new_draft(tool: Tool) -> Draft {
+    match tool {
+        Tool::Perspective => Draft::polygon(4),
+        t => Draft::new(draft_kind(t).unwrap_or(ShapeKind::Length)),
+    }
+}
+
+/// La poignée `i` de la mesure `id` peut s'aimanter. Ni la rotation d'un
+/// rectangle (seul l'angle compte), ni un marqueur (deux marqueurs superposés
+/// se compteraient sans se voir).
+fn handle_snaps(doc: &Document, id: u64, i: usize) -> bool {
+    doc.get(id).is_some_and(|m| match m.shape {
+        Shape::Rect { .. } => i != edit::ROTATE_HANDLE,
+        Shape::Marker { .. } => false,
+        _ => true,
+    })
 }
 
 /// Couleur attribuée par `Document::add` à un type de forme.
@@ -184,7 +231,8 @@ impl Canvas {
     /// Change d'outil (annule un tracé en cours).
     pub fn set_tool(&mut self, tool: Tool) {
         self.tool = tool;
-        self.draft = Draft::new(draft_kind(tool).unwrap_or(ShapeKind::Length));
+        self.draft = new_draft(tool);
+        self.persp_quad = None;
         if self.gesture.as_ref().is_some_and(|g| g.kind == GestureKind::Draw) {
             self.gesture = None;
         }
@@ -248,6 +296,12 @@ impl Canvas {
         self.view.zoom
     }
 
+    /// Position à l'écran d'un point image selon la vue de la dernière frame
+    /// (pour superposer un dessin à l'image, p. ex. un réticule).
+    pub fn image_to_screen(&self, p: Pt) -> Pos2 {
+        self.xf().to_screen(p)
+    }
+
     /// Vrai si un tracé est en cours (Échap doit alors l'annuler plutôt que
     /// de revenir à l'outil Sélection).
     pub fn is_drawing(&self) -> bool {
@@ -265,6 +319,12 @@ impl Canvas {
     /// Dernier segment d'étalonnage tracé, tant que l'outil Échelle est actif.
     pub fn calibration_segment(&self) -> Option<(Pt, Pt)> {
         self.calib_seg
+    }
+
+    /// Oublie le quadrilatère de perspective affiché (correction appliquée
+    /// ou abandonnée par l'application).
+    pub fn clear_perspective_quad(&mut self) {
+        self.persp_quad = None;
     }
 
     /// Aide contextuelle d'une ligne pour la barre d'état, selon l'outil et
@@ -289,6 +349,13 @@ impl Canvas {
             Tool::Straighten => match n {
                 0 => tr!("hint.straighten.start"),
                 _ => tr!("hint.straighten.end"),
+            },
+            Tool::Perspective => match (n, self.persp_quad.is_some()) {
+                (0, true) => tr!("hint.perspective.dialog"),
+                (0, false) => tr!("hint.perspective.first"),
+                (1, _) => tr!("hint.perspective.second"),
+                (2, _) => tr!("hint.perspective.third"),
+                _ => tr!("hint.perspective.fourth"),
             },
             Tool::Draw(kind) => match (kind, n) {
                 (ShapeKind::Length, 0) => tr!("hint.length.first"),
@@ -321,9 +388,38 @@ impl Canvas {
                 (ShapeKind::LineAngle, 1) => tr!("hint.line_angle.first_end"),
                 (ShapeKind::LineAngle, 2) => tr!("hint.line_angle.second"),
                 (ShapeKind::LineAngle, _) => tr!("hint.line_angle.second_end"),
+                (ShapeKind::PointLine, 0) => tr!("hint.point_line.first"),
+                (ShapeKind::PointLine, 1) => tr!("hint.point_line.second"),
+                (ShapeKind::PointLine, _) => tr!("hint.point_line.point"),
+                (ShapeKind::Parallel, 0) => tr!("hint.parallel.first"),
+                (ShapeKind::Parallel, 1) => tr!("hint.parallel.second"),
+                (ShapeKind::Parallel, _) => tr!("hint.parallel.point"),
+                (ShapeKind::Ellipse, 0) => tr!("hint.ellipse.center"),
+                (ShapeKind::Ellipse, 1) => tr!("hint.ellipse.axis"),
+                (ShapeKind::Ellipse, _) => tr!("hint.ellipse.width"),
+                (ShapeKind::Arc, 0) => tr!("hint.arc.first"),
+                (ShapeKind::Arc, 1) => tr!("hint.arc.middle"),
+                (ShapeKind::Arc, _) => tr!("hint.arc.last"),
+                (ShapeKind::Profile, 0) => tr!("hint.profile.first"),
+                (ShapeKind::Profile, _) => tr!("hint.profile.second"),
             },
         };
-        s.to_owned()
+        // Aimantation : partout où l'on pose un point ou déplace une poignée.
+        let snapping = match self.tool {
+            Tool::Select => {
+                self.handle_snaps && matches!(self.gesture.as_ref().map(|g| g.kind), Some(GestureKind::Handle(..)))
+            }
+            Tool::Calibrate => n > 0 || self.calib_seg.is_none(),
+            Tool::Draw(k) => k != ShapeKind::Marker,
+            Tool::Straighten => true,
+            // Les coins s'aimantent ; plus rien à poser tant que le dialogue est ouvert.
+            Tool::Perspective => self.persp_quad.is_none(),
+        };
+        match (snapping, self.snap) {
+            (false, _) => s.to_owned(),
+            (true, Some(sn)) => format!("{s} — {}", tr!("hint.snapped", target = sn.kind.label())),
+            (true, None) => format!("{s} — {}", tr!("hint.snap")),
+        }
     }
 
     fn xf(&self) -> Xf {
@@ -362,10 +458,11 @@ impl Canvas {
         // Entrées de la frame.
         let kb_ok = !ui.ctx().egui_wants_keyboard_input();
         let hovering = resp.contains_pointer();
-        let (events, shift, space, time, scroll, pinch, hover) = ui.input(|i| {
+        let (events, shift, alt, space, time, scroll, pinch, hover) = ui.input(|i| {
             (
                 i.events.clone(),
                 i.modifiers.shift,
+                i.modifiers.alt,
                 i.key_down(Key::Space),
                 i.time,
                 i.smooth_scroll_delta,
@@ -374,6 +471,7 @@ impl Canvas {
             )
         });
         self.shift = shift;
+        self.alt = alt;
         let space = space && kb_ok && (hovering || self.gesture.is_some());
 
         // Zoom (molette, pincement) sous le curseur ; défilement horizontal = déplacement.
@@ -457,13 +555,26 @@ impl Canvas {
         // Aperçu du tracé (le point sous le curseur suit la contrainte Maj).
         let pointer = if self.gesture.is_some() { hover } else { hover_in };
         let draw_tool = draft_kind(self.tool).is_some();
-        let rot = self.rotation;
-        let preview_pt = pointer.filter(|_| draw_tool).map(|p| self.draft.constrain(xf.to_image(p), shift, rot));
+        // Repère d'aimantation : celui de la poignée déplacée (calculé au
+        // glisser) ou celui du point sous le curseur pendant un tracé.
+        if !matches!(self.gesture, Some(Gesture { kind: GestureKind::Handle(..), dragged: true, .. })) {
+            self.snap = None;
+        }
+        let preview_pt = pointer.filter(|_| draw_tool).map(|p| {
+            let (q, s) = self.draft_point(doc, xf.to_image(p), xf);
+            self.snap = s;
+            q
+        });
         if self.tool == Tool::Calibrate
             && !self.draft.is_active()
             && let Some((a, b)) = self.calib_seg
         {
             self.paint_draft(&painter, xf, &[a, b], Some(&doc.calibration));
+        }
+        if !self.draft.is_active()
+            && let Some(q) = self.persp_quad
+        {
+            self.paint_draft(&painter, xf, &q, None);
         }
         if draw_tool {
             let pts = self.draft.preview(preview_pt);
@@ -473,6 +584,10 @@ impl Canvas {
             {
                 painter.circle_stroke(xf.to_screen(self.draft.pts[0]), 8.0, Stroke::new(2.0, Color32::WHITE));
             }
+        }
+        let snap_mark = self.snap;
+        if let Some(s) = snap_mark {
+            render::paint_snap(&painter, xf.to_screen(s.pt), s.kind);
         }
         render::paint_scale_bar(&painter, rect, xf.zoom, &doc.calibration);
 
@@ -485,17 +600,23 @@ impl Canvas {
             if draw_tool && !panning && let Some(p) = preview_pt {
                 let pts = self.draft.preview(Some(p));
                 render::paint_loupe(&painter, tex.id(), [w, h], self.baked, xf, p, cur, rect, mag, |lp, lxf| {
-                    self.paint_draft(lp, lxf, &pts, None)
+                    self.paint_draft(lp, lxf, &pts, None);
+                    if let Some(s) = snap_mark {
+                        render::paint_snap(lp, lxf.to_screen(s.pt), s.kind);
+                    }
                 });
             } else if let Some(Gesture { kind: GestureKind::Handle(id, i), dragged: true, .. }) = &self.gesture
                 && let Some(m) = doc.get(*id)
-                // Pas de loupe pour la rotation d'un rectangle : la position exacte n'y compte pas.
-                && !(matches!(m.shape, Shape::Rect { .. }) && *i == edit::ROTATE_HANDLE)
+                // Pas de loupe pour une rotation : la position exacte n'y compte pas.
+                && !edit::is_rotate_handle(&m.shape, *i)
             {
                 let hp = edit::handles(&m.shape, xf.img_len(ROTATE_GAP))[*i];
                 let color = render::color32(m.color);
                 render::paint_loupe(&painter, tex.id(), [w, h], self.baked, xf, hp, cur, rect, mag, |lp, lxf| {
                     render::paint_shape(lp, lxf, &m.shape, color, 1.5, 0);
+                    if let Some(s) = snap_mark {
+                        render::paint_snap(lp, lxf.to_screen(s.pt), s.kind);
+                    }
                 });
             }
         }
@@ -571,6 +692,22 @@ impl Canvas {
         xf.img_len(HANDLE_TOL).min(xf.img_len(DOUBLE_CLICK_DIST))
     }
 
+    /// Point d'accroche près de `p` (pixels image), sauf si Alt est maintenu.
+    fn find_snap(&self, doc: &Document, p: Pt, xf: Xf, exclude: Option<u64>) -> Option<snap::Snap> {
+        if self.alt {
+            return None;
+        }
+        snap::find_snap(doc, p, xf.img_len(SNAP_TOL), exclude)
+    }
+
+    /// Point du tracé sous le pointeur `ip` : aimanté, sinon contraint par Maj.
+    /// Les marqueurs (comptage) ne s'aimantent pas : deux marqueurs
+    /// superposés se compteraient sans se voir.
+    fn draft_point(&self, doc: &Document, ip: Pt, xf: Xf) -> (Pt, Option<snap::Snap>) {
+        let s = if self.draft.kind == ShapeKind::Marker { None } else { self.find_snap(doc, ip, xf, None) };
+        (snap::snap_or(s, ip, |p| self.draft.constrain(p, self.shift, self.rotation)), s)
+    }
+
     fn press(&mut self, pos: Pos2, button: PointerButton, space: bool, doc: &mut Document) {
         let xf = self.xf();
         let ip = xf.to_image(pos);
@@ -586,6 +723,7 @@ impl Canvas {
                             let h = edit::handles(&m.shape, xf.img_len(ROTATE_GAP))[i];
                             grab = (h.x - ip.x, h.y - ip.y);
                         }
+                        self.handle_snaps = handle_snaps(doc, id, i);
                         GestureKind::Handle(id, i)
                     }
                     Some(Hit::Body(id)) => {
@@ -597,8 +735,9 @@ impl Canvas {
                 _ => {
                     if !self.draft.is_active() {
                         self.calib_seg = None;
+                        self.persp_quad = None;
                     }
-                    let p = self.draft.constrain(ip, self.shift, self.rotation);
+                    let (p, _) = self.draft_point(doc, ip, xf);
                     let step = self.draft.press(p, self.draft_tol(xf));
                     self.apply(step, doc);
                     GestureKind::Draw
@@ -641,14 +780,19 @@ impl Canvas {
                     self.fitted = false;
                     self.view.clamp(self.last_rect.size(), self.vimg());
                 }
-                GestureKind::Handle(id, i) => match doc.get_mut(id) {
-                    Some(m) => {
-                        let p = Pt::new(ip.x + g.grab.0, ip.y + g.grab.1);
-                        let p = edit::constrain_handle(&m.shape, i, p, self.shift, self.rotation);
-                        edit::set_handle(&mut m.shape, i, p);
+                GestureKind::Handle(id, i) => {
+                    let p = Pt::new(ip.x + g.grab.0, ip.y + g.grab.1);
+                    // Une mesure ne s'aimante jamais sur elle-même.
+                    self.snap = if handle_snaps(doc, id, i) { self.find_snap(doc, p, xf, Some(id)) } else { None };
+                    match doc.get_mut(id) {
+                        Some(m) => {
+                            let (shift, rot) = (self.shift, self.rotation);
+                            let p = snap::snap_or(self.snap, p, |p| edit::constrain_handle(&m.shape, i, p, shift, rot));
+                            edit::set_handle(&mut m.shape, i, p);
+                        }
+                        None => return, // mesure disparue (annuler pendant le glisser)
                     }
-                    None => return, // mesure disparue (annuler pendant le glisser)
-                },
+                }
                 GestureKind::Body(id) => match (doc.get_mut(id), &g.orig) {
                     (Some(m), Some(orig)) => {
                         m.shape = orig.clone();
@@ -670,7 +814,7 @@ impl Canvas {
         let xf = self.xf();
         match g.kind {
             GestureKind::Draw => {
-                let p = self.draft.constrain(xf.to_image(pos), self.shift, self.rotation);
+                let (p, _) = self.draft_point(doc, xf.to_image(pos), xf);
                 let step = self.draft.release(p, g.dragged, self.draft_tol(xf));
                 let done = matches!(step, Step::Done(_));
                 self.apply(step, doc);
@@ -704,6 +848,11 @@ impl Canvas {
                 && doc.set_rotation(r)
             {
                 self.out.straightened = Some(doc.rotation);
+            }
+        } else if self.tool == Tool::Perspective {
+            if let [a, b, c, d] = pts[..] {
+                self.persp_quad = Some([a, b, c, d]);
+                self.out.perspective_quad = self.persp_quad;
             }
         } else if self.tool == Tool::Calibrate {
             if let [a, b] = pts[..] {
@@ -763,8 +912,8 @@ impl Canvas {
             let gap = xf.img_len(ROTATE_GAP);
             let mut hs = edit::handles(&m.shape, gap);
             if let Some((base, h)) = edit::rotate_handle(&m.shape, gap) {
-                hs.truncate(edit::ROTATE_HANDLE);
-                render::paint_rotate_handle(p, xf.to_screen(base), xf.to_screen(h), hot == Some(edit::ROTATE_HANDLE));
+                hs.pop();
+                render::paint_rotate_handle(p, xf.to_screen(base), xf.to_screen(h), hot == Some(hs.len()));
             }
             render::paint_handles(p, xf, &hs, hot);
         }
@@ -781,9 +930,18 @@ impl Canvas {
         let color = match self.tool {
             Tool::Calibrate => CALIB_COLOR,
             Tool::Straighten => STRAIGHTEN_COLOR,
+            Tool::Perspective => PERSPECTIVE_COLOR,
             _ => kind_color(kind),
         };
-        if let (Tool::Straighten, [a, b]) = (self.tool, pts) {
+        if self.tool == Tool::Perspective {
+            // Quadrilatère en cours : contour refermé dès le troisième coin.
+            render::outlined(p, pts.iter().map(|q| xf.to_screen(*q)).collect(), pts.len() >= 3, color, 2.0);
+            if pts.len() == 4 && !self.draft.is_active() {
+                for q in pts {
+                    render::dot(p, xf.to_screen(*q), color);
+                }
+            }
+        } else if let (Tool::Straighten, [a, b]) = (self.tool, pts) {
             // Segment de redressement : on affiche son écart à l'horizontale ou
             // à la verticale de l'écran, c.-à-d. la rotation qui sera appliquée.
             render::segment(p, xf.to_screen(*a), xf.to_screen(*b), color, 2.0);

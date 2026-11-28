@@ -6,6 +6,9 @@
 //! - les points suivants sont posés au relâchement d'un clic (clic puis clic) ;
 //! - un point trop proche du précédent est ignoré (évite les doublons d'un double-clic) ;
 //! - Inclinaison : deux segments, chacun tracé comme une longueur ;
+//! - Perspective : quatre coins, chacun posé par un clic ;
+//! - Distance point-droite, écart entre parallèles : la droite se trace comme
+//!   une longueur, puis un clic pour le point ;
 //! - Chemin/Surface se terminent par [`Draft::finish`] (double-clic, Entrée, clic
 //!   droit) ou, pour la surface, par un clic sur le premier point.
 
@@ -23,6 +26,9 @@ pub enum Step {
 pub struct Draft {
     pub kind: ShapeKind,
     pub pts: Vec<Pt>,
+    /// Nombre de points imposé, à la place de celui de `kind` (quadrilatère
+    /// de la correction de perspective : un polygone de quatre points).
+    count: Option<usize>,
     /// Un appui est en cours (reçu par la vue).
     pressing: bool,
     /// L'appui en cours a posé le premier point.
@@ -31,7 +37,16 @@ pub struct Draft {
 
 impl Draft {
     pub fn new(kind: ShapeKind) -> Self {
-        Self { kind, pts: Vec::new(), pressing: false, press_started: false }
+        Self { kind, pts: Vec::new(), count: None, pressing: false, press_started: false }
+    }
+
+    /// Polygone qui se termine de lui-même au `n`-ième point.
+    pub fn polygon(n: usize) -> Self {
+        Self { count: Some(n), ..Self::new(ShapeKind::Area) }
+    }
+
+    fn point_count(&self) -> Option<usize> {
+        self.count.or(self.kind.point_count())
     }
 
     pub fn is_active(&self) -> bool {
@@ -39,11 +54,11 @@ impl Draft {
     }
 
     pub fn reset(&mut self) {
-        *self = Draft::new(self.kind);
+        *self = Draft { count: self.count, ..Draft::new(self.kind) };
     }
 
     fn variable(&self) -> bool {
-        self.kind.point_count().is_none()
+        self.point_count().is_none()
     }
 
     /// Le prochain point commence un segment (premier point, ou début du
@@ -64,7 +79,11 @@ impl Draft {
             ShapeKind::Rect => square_in(prev, p, -rot),
             // Troisième point : largeur égale au premier côté (carré).
             ShapeKind::Rect3 if self.pts.len() == 2 => square3(self.pts[0], prev, p),
-            ShapeKind::Circle | ShapeKind::Circle3 | ShapeKind::Marker => p,
+            // Second demi-axe égal au premier (cercle), perpendiculaire depuis le centre.
+            ShapeKind::Ellipse if self.pts.len() == 2 => square3(prev, self.pts[0], p),
+            // Le point mesuré est libre.
+            ShapeKind::PointLine | ShapeKind::Parallel if self.pts.len() == 2 => p,
+            ShapeKind::Circle | ShapeKind::Circle3 | ShapeKind::Marker | ShapeKind::Arc => p,
             _ => snap45(prev, p, rot),
         }
     }
@@ -75,18 +94,18 @@ impl Draft {
             return Step::Continue;
         }
         // Surface : clic sur le premier point = fermer.
-        if self.kind == ShapeKind::Area && self.pts.len() >= 3 && self.pts[0].dist(p) <= tol {
+        if self.would_close(p, tol) {
             return self.finish();
         }
         self.pts.push(p);
-        if self.kind == ShapeKind::Circle3 && self.pts.len() == 3 {
+        if matches!(self.kind, ShapeKind::Circle3 | ShapeKind::Arc) && self.pts.len() == 3 {
             // Trois points alignés : on retire le dernier et on attend un autre clic.
             if meteroscope_core::geometry::circle_from_3_points(self.pts[0], self.pts[1], self.pts[2]).is_none() {
                 self.pts.pop();
                 return Step::Continue;
             }
         }
-        if self.kind.point_count() == Some(self.pts.len()) {
+        if self.point_count() == Some(self.pts.len()) {
             return self.take();
         }
         Step::Continue
@@ -153,7 +172,7 @@ impl Draft {
 
     /// La surface se fermerait si l'on cliquait en `p`.
     pub fn would_close(&self, p: Pt, tol: f64) -> bool {
-        self.kind == ShapeKind::Area && self.pts.len() >= 3 && self.pts[0].dist(p) <= tol
+        self.kind == ShapeKind::Area && self.count.is_none() && self.pts.len() >= 3 && self.pts[0].dist(p) <= tol
     }
 }
 
@@ -363,5 +382,54 @@ mod tests {
         g.release(p(10., 0.), true, TOL);
         g.press(p(0., 20.), TOL);
         assert!(matches!(g.release(p(10., 25.), true, TOL), Step::Done(v) if v.len() == 4));
+    }
+
+    #[test]
+    fn droite_puis_point() {
+        meteroscope_i18n::set_language("fr");
+        for kind in [ShapeKind::PointLine, ShapeKind::Parallel] {
+            let mut d = Draft::new(kind);
+            // Droite glissée, Maj horizontale sur son second point.
+            d.press(p(0., 0.), TOL);
+            assert_eq!(d.constrain(p(30., 2.), true, 0.0), p(30., 0.));
+            assert_eq!(d.release(p(30., 0.), true, TOL), Step::Continue);
+            // Le point mesuré n'est pas contraint.
+            assert_eq!(d.constrain(p(12., 17.), true, 0.0), p(12., 17.));
+            d.press(p(12., 17.), TOL);
+            assert_eq!(d.release(p(12., 17.), false, TOL), Step::Done(vec![p(0., 0.), p(30., 0.), p(12., 17.)]));
+        }
+    }
+
+    #[test]
+    fn ellipse_et_arc() {
+        meteroscope_i18n::set_language("fr");
+        let mut e = Draft::new(ShapeKind::Ellipse);
+        e.press(p(0., 0.), TOL);
+        e.release(p(0., 0.), false, TOL);
+        assert_eq!(e.constrain(p(9., 1.), true, 0.0), p(9., 0.));
+        e.press(p(9., 0.), TOL);
+        e.release(p(9., 0.), false, TOL);
+        // Maj sur le troisième point : cercle, du côté du pointeur.
+        let q = e.constrain(p(3., -4.), true, 0.0);
+        assert!(q.dist(p(0., -9.)) < 1e-9, "{q:?}");
+        e.press(q, TOL);
+        let Step::Done(pts) = e.release(q, false, TOL) else { panic!() };
+        let v = meteroscope_core::Shape::from_points(ShapeKind::Ellipse, &pts)
+            .unwrap()
+            .values(&meteroscope_core::Calibration::default());
+        assert!((v[0].value - 18.0).abs() < 1e-9 && (v[1].value - 18.0).abs() < 1e-9);
+
+        // Arc : un troisième point aligné est refusé, comme pour le cercle 3 points.
+        let mut a = Draft::new(ShapeKind::Arc);
+        for q in [p(0., 0.), p(10., 0.)] {
+            a.press(q, TOL);
+            a.release(q, false, TOL);
+        }
+        assert_eq!(a.constrain(p(20., 3.), true, 0.0), p(20., 3.));
+        a.press(p(20., 0.), TOL);
+        assert_eq!(a.release(p(20., 0.), false, TOL), Step::Continue);
+        assert_eq!(a.pts.len(), 2);
+        a.press(p(20., 5.), TOL);
+        assert!(matches!(a.release(p(20., 5.), false, TOL), Step::Done(v) if v.len() == 3));
     }
 }

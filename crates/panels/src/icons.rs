@@ -71,6 +71,17 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                 Stroke::NONE,
             ));
         }
+        Tool::Perspective => {
+            // Quadrilatère fuyant (pâle) ramené à un rectangle droit.
+            let quad = vec![p(0.30, 0.16), p(0.70, 0.16), p(0.96, 0.84), p(0.04, 0.84)];
+            painter.add(Shape::closed_line(quad, Stroke::new(w * 0.8, light.gamma_multiply(3.0))));
+            let rr = Rect::from_min_max(p(0.20, 0.16), p(0.80, 0.84));
+            painter.rect_filled(rr, 0.0, light);
+            painter.rect_stroke(rr, 0.0, stroke, StrokeKind::Middle);
+            for c in [rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom()] {
+                dot(c);
+            }
+        }
         Tool::Draw(kind) => match kind {
             ShapeKind::Length => {
                 let (a, b) = (p(0.14, 0.80), p(0.86, 0.20));
@@ -153,6 +164,75 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                 painter.add(Shape::convex_polygon(pts.to_vec(), light, stroke));
                 for q in &pts[..3] {
                     dot(*q);
+                }
+            }
+            ShapeKind::Profile => {
+                // Courbe d'intensité en créneau adouci, les deux bords repérés.
+                let curve = [p(0.06, 0.74), p(0.26, 0.74), p(0.38, 0.26), p(0.62, 0.26), p(0.74, 0.74), p(0.94, 0.74)];
+                painter.add(Shape::line(curve.to_vec(), stroke));
+                let thin = Stroke::new(w * 0.7, color);
+                for x in [0.32, 0.68] {
+                    painter.extend(Shape::dashed_line(&[p(x, 0.10), p(x, 0.92)], thin, w * 1.6, w * 1.4));
+                }
+            }
+            ShapeKind::PointLine => {
+                // Droite, point au-dessus, perpendiculaire avec son angle droit.
+                let (a, b) = (p(0.06, 0.80), p(0.94, 0.80));
+                let (q, f) = (p(0.56, 0.16), p(0.56, 0.80));
+                painter.line_segment([a, b], stroke);
+                painter.line_segment([q, f], Stroke::new(w * 0.85, color));
+                let k = 0.15;
+                painter.add(Shape::line(vec![p(0.56 - k, 0.80), p(0.56 - k, 0.80 - k), p(0.56, 0.80 - k)], Stroke::new(w * 0.7, color)));
+                dot(q);
+            }
+            ShapeKind::Parallel => {
+                // Deux droites parallèles inclinées et la cote perpendiculaire entre elles.
+                let d = vec2(0.76, -0.22) * s;
+                let n = vec2(0.22, 0.76).normalized() * 0.46 * s;
+                let a = p(0.06, 0.40);
+                let b = a + n + vec2(0.12, 0.0) * s;
+                painter.line_segment([a, a + d], stroke);
+                painter.line_segment([b, b + d], stroke);
+                let m = a + d * 0.5;
+                let cote = Stroke::new(w * 0.7, color);
+                painter.line_segment([m, m + n], cote);
+                let t = d.normalized() * 0.09 * s;
+                for e in [m, m + n] {
+                    painter.line_segment([e - t, e + t], cote);
+                }
+            }
+            ShapeKind::Ellipse => {
+                // Ellipse inclinée, centre et premier demi-axe.
+                let c = p(0.5, 0.5);
+                let t0 = -0.45f32;
+                let u = vec2(t0.cos(), t0.sin()) * 0.44 * s;
+                let v = vec2(-t0.sin(), t0.cos()) * 0.26 * s;
+                let pts: Vec<Pos2> = (0..32)
+                    .map(|i| {
+                        let t = TAU * i as f32 / 32.0;
+                        c + u * t.cos() + v * t.sin()
+                    })
+                    .collect();
+                painter.add(Shape::convex_polygon(pts, light, stroke));
+                painter.line_segment([c, c + u], Stroke::new(w * 0.7, color));
+                dot(c);
+            }
+            ShapeKind::Arc => {
+                // Arc seul, rayon en pointillés vers le centre.
+                let c = p(0.5, 0.88);
+                let radius = 0.58 * s;
+                let (t0, t1) = (-2.6f32, -0.54f32);
+                let arc: Vec<Pos2> = (0..=16)
+                    .map(|i| {
+                        let t = t0 + (t1 - t0) * i as f32 / 16.0;
+                        c + radius * vec2(t.cos(), t.sin())
+                    })
+                    .collect();
+                let (first, mid, last) = (arc[0], arc[8], arc[16]);
+                painter.extend(Shape::dashed_line(&[mid, c], Stroke::new(w * 0.7, color), w * 1.6, w * 1.4));
+                painter.add(Shape::line(arc, stroke));
+                for q in [first, mid, last] {
+                    dot(q);
                 }
             }
             ShapeKind::Marker => {
