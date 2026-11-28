@@ -397,22 +397,26 @@ impl MeterOscopeApp {
                 self.toggle_camera(&ctx);
             }
             ui.separator();
-            ui.add_enabled_ui(has_image, |ui| {
-                let dirty = if self.is_dirty() { " •" } else { "" };
-                if ui.button(format!("💾  {}{dirty}", tr!("toolbar.save"))).on_hover_text(tr!("toolbar.save_tip")).clicked() {
-                    self.save_project(false);
-                }
-                ui.menu_button(format!("⬇  {}", tr!("toolbar.export")), |ui| {
-                    if ui.button(tr!("toolbar.export_csv")).clicked() {
-                        self.export_csv();
+            // En mode caméra : annuler et zoom servent sur le flux ; enregistrer,
+            // exporter et le menu Image ne concernent que l'image fixe.
+            ui.add_enabled_ui(has_image || self.mode == Mode::Camera, |ui| {
+                ui.add_enabled_ui(has_image, |ui| {
+                    let dirty = if self.is_dirty() { " •" } else { "" };
+                    if ui.button(format!("💾  {}{dirty}", tr!("toolbar.save"))).on_hover_text(tr!("toolbar.save_tip")).clicked() {
+                        self.save_project(false);
                     }
-                    if ui.button(tr!("toolbar.export_image")).clicked() {
-                        self.export_image();
-                    }
-                    if ui.button(tr!("toolbar.copy_table")).clicked() {
-                        ui.ctx().copy_text(io::clipboard_table(&self.doc));
-                        self.info(tr!("msg.table_copied"));
-                    }
+                    ui.menu_button(format!("⬇  {}", tr!("toolbar.export")), |ui| {
+                        if ui.button(tr!("toolbar.export_csv")).clicked() {
+                            self.export_csv();
+                        }
+                        if ui.button(tr!("toolbar.export_image")).clicked() {
+                            self.export_image();
+                        }
+                        if ui.button(tr!("toolbar.copy_table")).clicked() {
+                            ui.ctx().copy_text(io::clipboard_table(&self.doc));
+                            self.info(tr!("msg.table_copied"));
+                        }
+                    });
                 });
                 ui.separator();
                 if ui.add_enabled(self.doc.can_undo(), egui::Button::new("↩")).on_hover_text(tr!("toolbar.undo_tip")).clicked() {
@@ -422,48 +426,50 @@ impl MeterOscopeApp {
                     self.doc.redo();
                 }
                 ui.separator();
-                ui.menu_button(format!("🖼  {}", tr!("toolbar.image")), |ui| {
-                    for (label, t) in [
-                        (format!("⟲  {}", tr!("image.rotate_left")), io::Transform::RotateLeft),
-                        (format!("⟳  {}", tr!("image.rotate_right")), io::Transform::RotateRight),
-                        (format!("⇆  {}", tr!("image.flip_h")), io::Transform::FlipHorizontal),
-                        (format!("⇅  {}", tr!("image.flip_v")), io::Transform::FlipVertical),
-                    ] {
-                        if ui.button(label).clicked() {
-                            self.transform(&ctx, t);
+                ui.add_enabled_ui(has_image, |ui| {
+                    ui.menu_button(format!("🖼  {}", tr!("toolbar.image")), |ui| {
+                        for (label, t) in [
+                            (format!("⟲  {}", tr!("image.rotate_left")), io::Transform::RotateLeft),
+                            (format!("⟳  {}", tr!("image.rotate_right")), io::Transform::RotateRight),
+                            (format!("⇆  {}", tr!("image.flip_h")), io::Transform::FlipHorizontal),
+                            (format!("⇅  {}", tr!("image.flip_v")), io::Transform::FlipVertical),
+                        ] {
+                            if ui.button(label).clicked() {
+                                self.transform(&ctx, t);
+                            }
                         }
-                    }
-                    ui.separator();
-                    if ui.button(format!("📐  {}", tr!("image.straighten"))).on_hover_text(tr!("tool_help.straighten")).clicked() {
-                        self.canvas.set_tool(Tool::Straighten);
-                        ui.close();
-                    }
-                    let reset = ui.add_enabled(self.doc.rotation != 0.0, egui::Button::new(tr!("image.straighten_reset")));
-                    if reset.clicked() {
-                        self.doc.set_rotation(0.0);
-                    }
-                    ui.menu_button(tr!("image.filter"), |ui| {
-                        let mut wanted = self.filter;
-                        ui.radio_value(&mut wanted, None, tr!("filter.gpu")).on_hover_text(tr!("filter.gpu_tip"));
                         ui.separator();
-                        for f in io::RotationFilter::ALL {
-                            let (label, tip) = filter_texts(f);
-                            ui.radio_value(&mut wanted, Some(f), label).on_hover_text(tip);
+                        if ui.button(format!("📐  {}", tr!("image.straighten"))).on_hover_text(tr!("tool_help.straighten")).clicked() {
+                            self.canvas.set_tool(Tool::Straighten);
+                            ui.close();
                         }
-                        self.set_filter(wanted);
+                        let reset = ui.add_enabled(self.doc.rotation != 0.0, egui::Button::new(tr!("image.straighten_reset")));
+                        if reset.clicked() {
+                            self.doc.set_rotation(0.0);
+                        }
+                        ui.menu_button(tr!("image.filter"), |ui| {
+                            let mut wanted = self.filter;
+                            ui.radio_value(&mut wanted, None, tr!("filter.gpu")).on_hover_text(tr!("filter.gpu_tip"));
+                            ui.separator();
+                            for f in io::RotationFilter::ALL {
+                                let (label, tip) = filter_texts(f);
+                                ui.radio_value(&mut wanted, Some(f), label).on_hover_text(tip);
+                            }
+                            self.set_filter(wanted);
+                        });
+                        ui.separator();
+                        let mut changed = false;
+                        changed |= ui.add(egui::Slider::new(&mut self.brightness, -1.0..=1.0).text(tr!("image.brightness"))).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.contrast, -1.0..=1.0).text(tr!("image.contrast"))).changed();
+                        if ui.button(tr!("image.reset")).clicked() {
+                            self.brightness = 0.0;
+                            self.contrast = 0.0;
+                            changed = true;
+                        }
+                        if changed {
+                            self.refresh_texture(&ctx);
+                        }
                     });
-                    ui.separator();
-                    let mut changed = false;
-                    changed |= ui.add(egui::Slider::new(&mut self.brightness, -1.0..=1.0).text(tr!("image.brightness"))).changed();
-                    changed |= ui.add(egui::Slider::new(&mut self.contrast, -1.0..=1.0).text(tr!("image.contrast"))).changed();
-                    if ui.button(tr!("image.reset")).clicked() {
-                        self.brightness = 0.0;
-                        self.contrast = 0.0;
-                        changed = true;
-                    }
-                    if changed {
-                        self.refresh_texture(&ctx);
-                    }
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("1:1").on_hover_text(tr!("zoom.actual_tip")).clicked() {
