@@ -423,4 +423,15 @@ fn aimantation_d_une_poignee() {
     click(&mut h, 101.0, 49.0);
     let Shape::Marker { p: m } = h.state().doc.measurements[2].shape else { panic!() };
     assert!(near(m, Pt::new(101.0, 49.0)), "{m:?}");
+    // Ni quand on déplace un marqueur, même près d'un autre marqueur.
+    let other = h.state_mut().doc.add(Shape::Marker { p: Pt::new(150.0, 80.0) });
+    let moved = h.state().doc.measurements[2].id;
+    h.state_mut().canvas.set_tool(Tool::Select);
+    h.state_mut().doc.selected = Some(moved);
+    h.step();
+    let (p, q) = (scr(&h, 101.0, 49.0), scr(&h, 149.0, 79.0));
+    drag(&mut h, p, q, PointerButton::Primary);
+    let Shape::Marker { p: m } = h.state().doc.get(moved).unwrap().shape else { panic!() };
+    assert!(near(m, Pt::new(149.0, 79.0)), "{m:?}");
+    assert!(matches!(h.state().doc.get(other).unwrap().shape, Shape::Marker { p } if p == Pt::new(150.0, 80.0)));
 }

@@ -138,6 +138,8 @@ pub struct Canvas {
     alt: bool,
     /// Point d'accroche courant (tracé ou poignée), pour le repère et l'aide.
     snap: Option<snap::Snap>,
+    /// La poignée saisie peut s'aimanter (voir [`handle_snaps`]).
+    handle_snaps: bool,
     out: CanvasOutput,
 }
 
@@ -162,6 +164,7 @@ impl Default for Canvas {
             shift: false,
             alt: false,
             snap: None,
+            handle_snaps: false,
             out: CanvasOutput::default(),
         }
     }
@@ -174,6 +177,17 @@ fn draft_kind(tool: Tool) -> Option<ShapeKind> {
         Tool::Calibrate | Tool::Straighten => Some(ShapeKind::Length),
         Tool::Draw(k) => Some(k),
     }
+}
+
+/// La poignée `i` de la mesure `id` peut s'aimanter. Ni la rotation d'un
+/// rectangle (seul l'angle compte), ni un marqueur (deux marqueurs superposés
+/// se compteraient sans se voir).
+fn handle_snaps(doc: &Document, id: u64, i: usize) -> bool {
+    doc.get(id).is_some_and(|m| match m.shape {
+        Shape::Rect { .. } => i != edit::ROTATE_HANDLE,
+        Shape::Marker { .. } => false,
+        _ => true,
+    })
 }
 
 /// Couleur attribuée par `Document::add` à un type de forme.
@@ -326,7 +340,9 @@ impl Canvas {
         };
         // Aimantation : partout où l'on pose un point ou déplace une poignée.
         let snapping = match self.tool {
-            Tool::Select => matches!(self.gesture.as_ref().map(|g| g.kind), Some(GestureKind::Handle(..))),
+            Tool::Select => {
+                self.handle_snaps && matches!(self.gesture.as_ref().map(|g| g.kind), Some(GestureKind::Handle(..)))
+            }
             Tool::Calibrate => n > 0 || self.calib_seg.is_none(),
             Tool::Draw(k) => k != ShapeKind::Marker,
             Tool::Straighten => true,
@@ -631,6 +647,7 @@ impl Canvas {
                             let h = edit::handles(&m.shape, xf.img_len(ROTATE_GAP))[i];
                             grab = (h.x - ip.x, h.y - ip.y);
                         }
+                        self.handle_snaps = handle_snaps(doc, id, i);
                         GestureKind::Handle(id, i)
                     }
                     Some(Hit::Body(id)) => {
@@ -688,10 +705,8 @@ impl Canvas {
                 }
                 GestureKind::Handle(id, i) => {
                     let p = Pt::new(ip.x + g.grab.0, ip.y + g.grab.1);
-                    // La rotation d'un rectangle ne s'aimante pas ; une mesure
-                    // ne s'aimante jamais sur elle-même.
-                    let rotating = doc.get(id).is_some_and(|m| matches!(m.shape, Shape::Rect { .. }) && i == edit::ROTATE_HANDLE);
-                    self.snap = if rotating { None } else { self.find_snap(doc, p, xf, Some(id)) };
+                    // Une mesure ne s'aimante jamais sur elle-même.
+                    self.snap = if handle_snaps(doc, id, i) { self.find_snap(doc, p, xf, Some(id)) } else { None };
                     match doc.get_mut(id) {
                         Some(m) => {
                             let (shift, rot) = (self.shift, self.rotation);
