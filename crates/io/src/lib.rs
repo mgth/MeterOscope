@@ -6,6 +6,7 @@
 
 mod image_io;
 mod perspective;
+mod presets;
 mod project;
 mod render;
 mod rotate;
@@ -21,6 +22,7 @@ use std::path::{Path, PathBuf};
 
 pub use image_io::can_save_extension;
 pub use perspective::warp_perspective;
+pub use presets::{scale_presets_from_json, scale_presets_to_json};
 pub use project::PROJECT_FORMAT_VERSION;
 pub use rotate::{RotationFilter, rotate_image, rotated_dimensions};
 pub use table::format_precise;
