@@ -17,6 +17,8 @@ impl MeterOscopeApp {
         std::mem::swap(&mut self.canvas, &mut self.camera.other_canvas);
         // Les identifiants de mesures se recoupent d'un document à l'autre.
         self.profiles.invalidate();
+        // Une détection en cours appartient à la photo, pas au flux.
+        self.detect.invalidate();
         self.mode = Mode::Camera;
         self.camera.start(ctx);
     }
@@ -27,6 +29,7 @@ impl MeterOscopeApp {
         std::mem::swap(&mut self.doc, &mut self.camera.other_doc);
         std::mem::swap(&mut self.canvas, &mut self.camera.other_canvas);
         self.profiles.invalidate();
+        self.detect.invalidate();
         self.mode = Mode::Image;
     }
 

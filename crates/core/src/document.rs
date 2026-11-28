@@ -1,6 +1,7 @@
 use crate::calibration::{Calibration, Scale};
 use crate::geometry::Pt;
 use crate::measure::{Measurement, Quantity, Shape, ShapeKind, PALETTE};
+use crate::scale_bar::ScaleBarSettings;
 use crate::perspective::{Homography, Perspective, order_quad};
 use crate::stats::Stats;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,7 @@ struct Snapshot {
     measurements: Vec<Measurement>,
     calibration: Calibration,
     rotation: f64,
+    scale_bar: ScaleBarSettings,
     perspective: Option<Perspective>,
 }
 
@@ -35,6 +37,9 @@ pub struct Document {
     /// changent pas : seule la vue pivote.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rotation: f64,
+    /// Barre d'échelle (affichage et coin) ; dessinée seulement si l'échelle est définie.
+    #[serde(default)]
+    pub scale_bar: ScaleBarSettings,
     /// Correction de perspective. Quand elle est présente, l'image de travail
     /// est la photo reprojetée (reconstruite à partir du fichier d'origine,
     /// qui n'est pas modifié) et les coordonnées des mesures sont en pixels
@@ -65,6 +70,7 @@ impl Document {
             measurements: self.measurements.clone(),
             calibration: self.calibration.clone(),
             rotation: self.rotation,
+            scale_bar: self.scale_bar,
             perspective: self.perspective.clone(),
         }
     }
@@ -93,6 +99,7 @@ impl Document {
         self.measurements = s.measurements;
         self.calibration = s.calibration;
         self.rotation = s.rotation;
+        self.scale_bar = s.scale_bar;
         self.perspective = s.perspective;
         if self.selected.is_some_and(|id| self.get(id).is_none()) {
             self.selected = None;
@@ -124,6 +131,16 @@ impl Document {
         }
         self.checkpoint();
         self.rotation = deg;
+        true
+    }
+
+    /// Change les réglages de la barre d'échelle (annulable). Renvoie `false` si rien ne change.
+    pub fn set_scale_bar(&mut self, settings: ScaleBarSettings) -> bool {
+        if settings == self.scale_bar {
+            return false;
+        }
+        self.checkpoint();
+        self.scale_bar = settings;
         true
     }
 
@@ -218,6 +235,29 @@ impl Document {
         id
     }
 
+    /// Ajoute plusieurs mesures d'un coup (noms en série, couleur du type),
+    /// annulables ensemble par un seul Ctrl+Z ; la sélection ne change pas.
+    /// Renvoie leurs ids.
+    pub fn add_many(&mut self, shapes: impl IntoIterator<Item = Shape>) -> Vec<u64> {
+        let mut shapes = shapes.into_iter().peekable();
+        if shapes.peek().is_none() {
+            return vec![];
+        }
+        self.checkpoint();
+        let mut ids = vec![];
+        for shape in shapes {
+            self.next_id += 1;
+            let kind = shape.kind();
+            let n = self.counters.entry(kind).or_insert(0);
+            *n += 1;
+            let color = PALETTE[ShapeKind::ALL.iter().position(|k| *k == kind).unwrap_or(0) % PALETTE.len()];
+            let name = format!("{} {}", kind.label(), n);
+            self.measurements.push(Measurement { id: self.next_id, name, shape, color, visible: true });
+            ids.push(self.next_id);
+        }
+        ids
+    }
+
     pub fn remove(&mut self, id: u64) -> bool {
         if self.get(id).is_none() {
             return false;
@@ -304,6 +344,28 @@ mod tests {
         assert_eq!(d.rotation, -3.5);
         assert!(d.set_rotation(363.5));
         assert_eq!(d.rotation, 3.5);
+    }
+
+    #[test]
+    fn add_many_un_seul_annuler() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = Document::new();
+        let first = d.add(Shape::Area { pts: vec![Pt::new(0., 0.), Pt::new(1., 0.), Pt::new(0., 1.)] });
+        let tri = |x: f64| Shape::Area { pts: vec![Pt::new(x, 0.), Pt::new(x + 2., 0.), Pt::new(x, 2.)] };
+        assert!(d.add_many(std::iter::empty()).is_empty());
+        let ids = d.add_many((0..300).map(|i| tri(i as f64)));
+        assert_eq!((ids.len(), d.measurements.len(), d.selected), (300, 301, Some(first)));
+        assert_eq!(d.get(ids[0]).unwrap().name, "Surface 2");
+        assert_eq!(d.get(ids[299]).unwrap().name, "Surface 301");
+        assert_eq!(d.get(ids[0]).unwrap().color, d.get(first).unwrap().color);
+        assert_eq!(d.summary()[0].3.n, 301);
+        assert!(d.undo());
+        assert_eq!(d.measurements.len(), 1);
+        assert!(d.redo());
+        assert_eq!(d.measurements.len(), 301);
+        // La numérotation continue après la série.
+        let next = d.add(tri(0.));
+        assert_eq!(d.get(next).unwrap().name, "Surface 302");
     }
 
     #[test]
@@ -406,5 +468,33 @@ mod tests {
         assert!((w2 - 2.0 * w).abs() < 1e-9 && (h2 - 2.0 * h).abs() < 1e-9, "{w} × {h} → {w2} × {h2}");
         let Shape::Rect { angle, .. } = shape else { panic!() };
         assert!((angle - 110.0).abs() < 1e-9, "{angle}");
+    }
+
+    #[test]
+    fn scale_bar_settings_undo_and_old_files() {
+        use crate::scale_bar::Corner;
+        meteroscope_i18n::set_language("fr");
+        let mut d = Document::new();
+        assert_eq!(d.scale_bar, ScaleBarSettings { visible: true, corner: Corner::BottomRight });
+        let hidden = ScaleBarSettings { visible: false, ..d.scale_bar };
+        assert!(d.set_scale_bar(hidden) && !d.set_scale_bar(hidden));
+        assert!(d.set_scale_bar(ScaleBarSettings { corner: Corner::TopLeft, ..hidden }));
+        assert!(d.undo());
+        assert_eq!(d.scale_bar, hidden);
+        assert!(d.undo() && !d.can_undo());
+        assert!(d.scale_bar.visible);
+        assert!(d.redo() && d.redo());
+        assert_eq!(d.scale_bar.corner, Corner::TopLeft);
+        // Aller-retour JSON, et ancien document sans le champ : valeurs par défaut.
+        let back: Document = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(back.scale_bar, d.scale_bar);
+        let old: Document =
+            serde_json::from_str(r#"{"measurements":[],"calibration":{"scale":null},"next_id":0,"counters":{}}"#).unwrap();
+        assert_eq!(old.scale_bar, ScaleBarSettings::default());
+        let partial: Document = serde_json::from_str(
+            r#"{"measurements":[],"calibration":{"scale":null},"scale_bar":{"corner":"TopRight"},"next_id":0,"counters":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(partial.scale_bar, ScaleBarSettings { visible: true, corner: Corner::TopRight });
     }
 }

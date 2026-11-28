@@ -48,7 +48,7 @@ struct ExportJob {
     failed: usize,
 }
 
-pub(super) struct SeriesState {
+pub(crate) struct SeriesState {
     model: Series,
     extras: HashMap<u64, Extra>,
     thumbs: Thumbs,
@@ -184,8 +184,12 @@ impl MeterOscopeApp {
             x.pixels = if keep { self.image.take() } else { None };
         }
         self.image = None;
-        // L'image corrigée de la perspective appartenait à l'ancienne photo.
+        // L'image corrigée de la perspective appartenait à l'ancienne photo,
+        // comme une détection en cours et les profils (les identifiants de
+        // mesures se recoupent d'un document à l'autre).
         self.flat = None;
+        self.detect.invalidate();
+        self.profiles.invalidate();
         self.straight = None;
         self.canvas.cancel();
         let Some(entry) = self.series.model.active_entry() else {
@@ -254,7 +258,12 @@ impl MeterOscopeApp {
     /// Installe une série toute faite (projet relu, plusieurs images ouvertes).
     fn series_install(&mut self, ctx: &egui::Context, entries: Vec<Entry>, missing: Vec<bool>, active: usize, shared_scale: bool, project: Option<PathBuf>) {
         self.mode_image();
+        // Ce qui était ouvert reste récupérable par Ctrl+Z, comme pour `set_image`.
+        if let Some(old) = self.take_workspace() {
+            self.history.replaced(old);
+        }
         self.image = None;
+        self.flat = None;
         let s = &mut self.series;
         s.extras.clear();
         s.thumbs.clear();
@@ -408,36 +417,65 @@ impl MeterOscopeApp {
         }
     }
 
-    pub(super) fn can_undo(&self) -> bool {
+    pub(super) fn series_can_undo(&self) -> bool {
         if self.mode == Mode::Camera { self.doc.can_undo() } else { self.series.model.can_undo(&self.doc) }
     }
-    pub(super) fn can_redo(&self) -> bool {
+    pub(super) fn series_can_redo(&self) -> bool {
         if self.mode == Mode::Camera { self.doc.can_redo() } else { self.series.model.can_redo(&self.doc) }
     }
 
     /// Ctrl+Z : la plus récente entre la dernière modification de l'image
-    /// affichée et la dernière opération de série.
-    pub(super) fn undo(&mut self, ctx: &egui::Context) {
+    /// affichée et la dernière opération de série. Faux s'il n'y avait rien
+    /// à annuler (l'appelant passe alors au remplacement d'image).
+    pub(super) fn series_undo(&mut self, ctx: &egui::Context) -> bool {
         // Sur le flux caméra : l'historique est celui du document du flux.
         if self.mode == Mode::Camera {
-            self.doc.undo();
-            return;
+            return self.doc.undo();
         }
         self.series_sync();
-        if self.series.model.undo(&mut self.doc) == Undone::Series {
+        let done = self.series.model.undo(&mut self.doc);
+        if done == Undone::Series {
             self.series_after_op(ctx);
         }
+        done != Undone::Nothing
     }
 
-    pub(super) fn redo(&mut self, ctx: &egui::Context) {
+    pub(super) fn series_redo(&mut self, ctx: &egui::Context) -> bool {
         if self.mode == Mode::Camera {
-            self.doc.redo();
-            return;
+            return self.doc.redo();
         }
         self.series_sync();
-        if self.series.model.redo(&mut self.doc) == Undone::Series {
+        let done = self.series.model.redo(&mut self.doc);
+        if done == Undone::Series {
             self.series_after_op(ctx);
         }
+        done != Undone::Nothing
+    }
+
+    /// Retire la série de l'application avec l'espace de travail (image
+    /// remplacée, voir `history`) ; un export en cours reste suivi ici.
+    pub(super) fn series_take(&mut self) -> SeriesState {
+        let mut taken = std::mem::take(&mut self.series);
+        self.series.export = taken.export.take();
+        self.series.strip_open = taken.strip_open;
+        taken
+    }
+
+    /// Remet une série retirée par `series_take`.
+    pub(super) fn series_put(&mut self, mut series: SeriesState) {
+        series.export = self.series.export.take();
+        self.series = series;
+    }
+
+    /// Empreinte de l'espace de travail pour le rétablissement d'une image
+    /// remplacée : il n'a lieu que si rien n'a changé dans toute la série.
+    pub(super) fn series_key(series: &SeriesState, doc: &Document) -> String {
+        format!("{}|{}", series.model.revision(doc), crate::history::doc_key(doc))
+    }
+
+    /// Révision de toute la série (document affiché compris).
+    pub(super) fn series_revision(&self) -> u64 {
+        self.series.model.revision(self.image_doc())
     }
 
     /// Raccourcis de la série : Ctrl+Maj+O ajoute des images, Page
@@ -1063,6 +1101,37 @@ mod tests {
         app.series_do(&ctx, Act::Go(0));
         assert_eq!(app.doc.measurements.len(), 1);
         assert!(app.doc.get(app.doc.measurements[0].id).is_some() && app.doc.calibration.is_calibrated());
+    }
+
+    /// Remplacer une série par une autre image est annulable : Ctrl+Z rend
+    /// toute la série, Ctrl+Y revient à l'image remplaçante.
+    #[test]
+    fn replaced_series_comes_back_whole() {
+        use meteroscope_core::{Pt, Shape};
+        meteroscope_i18n::set_language("fr");
+        let ctx = egui::Context::default();
+        let mut app = MeterOscopeApp::blank();
+        app.set_image(&ctx, RgbaImage::new(40, 30), None);
+        app.doc.add(Shape::Marker { p: Pt::new(1.0, 1.0) });
+        app.series_capture(&ctx, RgbaImage::new(40, 30));
+        app.series_frame(&ctx);
+        assert_eq!((app.series.model.len(), app.series.model.active()), (2, 1));
+
+        // Collage ou ouverture d'une autre image : la série est remplacée.
+        app.set_image(&ctx, RgbaImage::new(20, 20), None);
+        app.series_frame(&ctx);
+        assert_eq!(app.series.model.len(), 1);
+        assert!(app.can_undo());
+        app.undo(&ctx);
+        assert_eq!((app.series.model.len(), app.series.model.active()), (2, 1));
+        assert_eq!(app.image.as_ref().map(|i| i.width()), Some(40));
+        app.series_do(&ctx, Act::Go(0));
+        assert_eq!(app.doc.measurements.len(), 1);
+        app.series_do(&ctx, Act::Go(1));
+        assert!(app.can_redo());
+        app.redo(&ctx);
+        assert_eq!(app.series.model.len(), 1);
+        assert_eq!(app.image.as_ref().map(|i| i.width()), Some(20));
     }
 
     /// Une capture en première position ne prend pas le nom d'une photo

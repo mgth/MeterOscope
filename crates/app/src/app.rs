@@ -2,17 +2,21 @@
 
 use meteroscope_i18n::tr;
 use crate::camera_view::CameraView;
+use crate::detect_view::DetectView;
 use egui::{Align, Color32, ColorImage, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextureHandle, TextureOptions, Ui};
 use image::RgbaImage;
 use meteroscope_canvas::Canvas;
 use meteroscope_core::{Document, Tool};
 use meteroscope_io as io;
 use meteroscope_panels::{CalibrationDialog, PerspectiveDialog};
+use crate::clipboard::Pasted;
+use crate::history::{ImageHistory, Workspace};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod live;
 mod series;
+pub(crate) use series::SeriesState;
 
 #[derive(PartialEq)]
 enum Mode {
@@ -52,9 +56,14 @@ pub struct MeterOscopeApp {
     scale_presets: meteroscope_core::ScalePresets,
     mode: Mode,
     camera: CameraView,
+    detect: DetectView,
     /// Profils d'intensité : résultats calculés sur l'image, panneau de la courbe.
     profiles: crate::profile_view::ProfileView,
     toast: Option<(String, bool, Instant)>,
+    /// Images remplacées, rétablies par Ctrl+Z.
+    history: ImageHistory<Workspace, String>,
+    /// Collage (Ctrl+V) en attente de confirmation.
+    pending_paste: Option<Pasted>,
     /// Réglages retenus d'un lancement à l'autre (récents, unité, décimales).
     settings: crate::settings::Settings,
 }
@@ -112,8 +121,11 @@ impl MeterOscopeApp {
             scale_presets: crate::prefs::load_scale_presets(),
             mode: Mode::Image,
             camera: CameraView::default(),
+            detect: DetectView::default(),
             profiles: Default::default(),
             toast: None,
+            history: ImageHistory::default(),
+            pending_paste: None,
             settings: crate::settings::Settings::load(),
         }
     }
@@ -240,17 +252,24 @@ impl MeterOscopeApp {
     }
 
     /// Installe une nouvelle image avec un document vierge (qui garde
-    /// l'échelle en cours si l'option est cochée).
+    /// l'échelle en cours si l'option est cochée). L'image précédente reste
+    /// récupérable par Ctrl+Z.
     fn set_image(&mut self, ctx: &egui::Context, img: RgbaImage, path: Option<PathBuf>) {
-        // D'abord rendre à l'image son document, pour ne pas écraser celui du flux.
+        // D'abord rendre à l'image son document, pour ne pas écraser celui du
+        // flux ; l'échelle à garder se lit avant que ce document parte dans
+        // l'historique des images.
         self.mode_image();
+        let calibration = self.scale_presets.next_calibration(&self.doc.calibration);
+        if let Some(old) = self.take_workspace() {
+            self.history.replaced(old);
+        }
         self.image = Some(img);
         self.flat = None;
         self.straight = None;
+        self.detect.invalidate();
         self.image_path = path;
         self.image_modified = false;
         self.project_path = None;
-        let calibration = self.scale_presets.next_calibration(&self.doc.calibration);
         self.doc = Document::new();
         self.series_restart(ctx);
         // Après : la série repart d'un document neuf.
@@ -260,6 +279,87 @@ impl MeterOscopeApp {
         self.canvas.set_tool(Tool::Select);
         self.canvas.fit();
         self.refresh_texture(ctx);
+    }
+
+    /// Retire l'espace de travail courant (l'image reste vide jusqu'à `put_workspace`).
+    fn take_workspace(&mut self) -> Option<Workspace> {
+        Some(Workspace {
+            image: self.image.take()?,
+            image_path: self.image_path.take(),
+            image_modified: self.image_modified,
+            project_path: self.project_path.take(),
+            doc: std::mem::take(&mut self.doc),
+            series: self.series_take(),
+            brightness: self.brightness,
+            contrast: self.contrast,
+        })
+    }
+
+    fn put_workspace(&mut self, ctx: &egui::Context, w: Workspace) {
+        self.image = Some(w.image);
+        self.straight = None;
+        // Une détection en cours appartient à l'image remplacée.
+        self.detect.invalidate();
+        self.image_path = w.image_path;
+        self.image_modified = w.image_modified;
+        self.project_path = w.project_path;
+        self.doc = w.doc;
+        self.series_put(w.series);
+        self.brightness = w.brightness;
+        self.contrast = w.contrast;
+        self.mode_image();
+        // L'image corrigée de la perspective suit l'image rétablie.
+        self.flat = None;
+        self.sync_flat();
+        self.flat_changed = false;
+        self.canvas.set_tool(Tool::Select);
+        self.canvas.fit();
+        self.refresh_texture(ctx);
+    }
+
+    /// L'historique des images ne sert qu'en mode image : en mode caméra,
+    /// `doc` est celui du flux.
+    fn images_undoable(&self) -> bool {
+        self.image.is_some() && self.mode == Mode::Image
+    }
+
+    fn can_undo(&self) -> bool {
+        self.series_can_undo() || (self.images_undoable() && self.history.can_undo())
+    }
+    fn can_redo(&self) -> bool {
+        self.series_can_redo()
+            || (self.images_undoable() && self.history.can_redo_with(self.series_revision(), || Self::series_key(&self.series, &self.doc)))
+    }
+
+    /// Annule dans le document ou la série, puis, leur historique épuisé, le
+    /// remplacement d'image.
+    fn undo(&mut self, ctx: &egui::Context) {
+        if self.series_undo(ctx) || !self.images_undoable() || !self.history.can_undo() {
+            return;
+        }
+        let Some(current) = self.take_workspace() else { return };
+        match self.history.undo(current, |w| Self::series_key(&w.series, &w.doc)) {
+            Ok(previous) => {
+                self.put_workspace(ctx, previous);
+                self.info(tr!("msg.image_restored"));
+            }
+            Err(current) => self.put_workspace(ctx, current),
+        }
+    }
+
+    fn redo(&mut self, ctx: &egui::Context) {
+        if self.series_redo(ctx) || !self.images_undoable() {
+            return;
+        }
+        // Empreinte recalculée : un glisser modifie le document sans changer sa révision.
+        let key = Self::series_key(&self.series, &self.doc);
+        if !self.history.can_redo(&key) {
+            return;
+        }
+        let Some(current) = self.take_workspace() else { return };
+        match self.history.redo(current, &key) {
+            Ok(next) | Err(next) => self.put_workspace(ctx, next),
+        }
     }
 
     fn mode_image(&mut self) {
@@ -377,10 +477,41 @@ impl MeterOscopeApp {
         }
     }
 
+    /// Colle l'image du presse-papiers, traitée comme une capture caméra
+    /// (sans fichier d'origine), ou ouvre le fichier image copié. Avec
+    /// `confirm` (Ctrl+V), des mesures non enregistrées font d'abord demander.
+    fn paste(&mut self, ctx: &egui::Context, fallback: crate::clipboard::Fallback, confirm: bool) {
+        let pasted = crate::clipboard::read(fallback);
+        if confirm && !matches!(pasted, Pasted::Nothing) && self.image.is_some() && self.is_dirty() {
+            self.pending_paste = Some(pasted);
+        } else {
+            self.apply_paste(ctx, pasted);
+        }
+    }
+
+    fn apply_paste(&mut self, ctx: &egui::Context, pasted: Pasted) {
+        match pasted {
+            Pasted::Image(img) => {
+                self.set_image(ctx, img, None);
+                self.info(tr!("msg.image_pasted"));
+            }
+            Pasted::File(p) => self.open_path(ctx, &p),
+            Pasted::Nothing => self.info(tr!("msg.paste_nothing")),
+        }
+    }
+
+    fn copy_image(&mut self, ctx: &egui::Context) {
+        let Some(img) = &self.image else { return };
+        let out = io::render_annotated(&io::adjust(img, self.brightness, self.contrast), &self.doc);
+        ctx.copy_image(ColorImage::from_rgba_unmultiplied([out.width() as usize, out.height() as usize], out.as_raw()));
+        self.info(tr!("msg.image_copied"));
+    }
+
     fn transform(&mut self, ctx: &egui::Context, t: io::Transform) {
         if let Some(img) = &self.image {
             self.image = Some(io::apply_transform(img, &mut self.doc, t));
             self.straight = None;
+            self.detect.invalidate();
             self.image_modified = true;
             self.series_transformed(ctx, t);
             // L'image corrigée suit la photo.
@@ -462,12 +593,34 @@ impl MeterOscopeApp {
         let has_image = self.image.is_some() && self.mode == Mode::Image;
         ui.horizontal(|ui| {
             ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
-            if ui.button(format!("📂  {}", tr!("toolbar.open"))).on_hover_text(tr!("toolbar.open_tip")).clicked() {
-                self.open_dialog(&ctx);
-            }
-            if let Some(p) = crate::settings::recent_menu(ui, &mut self.settings) {
-                self.open_path(&ctx, &p);
-            }
+            // Bouton partagé : « Ouvrir » ouvre un fichier, la flèche propose les autres sources.
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.x = 1.0;
+                if ui.button(format!("📂  {}", tr!("toolbar.open"))).on_hover_text(tr!("toolbar.open_tip")).clicked() {
+                    self.open_dialog(&ctx);
+                }
+                ui.menu_button("⏷", |ui| {
+                    if ui.button(format!("📂  {}", tr!("open.file"))).clicked() {
+                        self.open_dialog(&ctx);
+                    }
+                    if ui.button(format!("📋  {}", tr!("open.paste"))).clicked() {
+                        self.paste(&ctx, crate::clipboard::Fallback::default(), false);
+                    }
+                    if ui.button(format!("📷  {}", tr!("toolbar.camera"))).clicked() {
+                        if self.mode != Mode::Camera {
+                            self.toggle_camera(&ctx);
+                        }
+                        ui.close();
+                    }
+                    // Fichiers récents.
+                    ui.separator();
+                    if let Some(p) = crate::settings::recent_items(ui, &mut self.settings) {
+                        self.open_path(&ctx, &p);
+                    }
+                })
+                .response
+                .on_hover_text(tr!("toolbar.open_more_tip"));
+            });
             if ui.selectable_label(self.mode == Mode::Camera, format!("📷  {}", tr!("toolbar.camera"))).on_hover_text(tr!("toolbar.camera_tip")).clicked() {
                 self.toggle_camera(&ctx);
             }
@@ -486,6 +639,9 @@ impl MeterOscopeApp {
                         }
                         if ui.button(tr!("toolbar.export_image")).clicked() {
                             self.export_image();
+                        }
+                        if ui.button(tr!("toolbar.copy_image")).clicked() {
+                            self.copy_image(&ctx);
                         }
                         if ui.button(tr!("toolbar.copy_table")).clicked() {
                             ui.ctx().copy_text(io::clipboard_table(&self.doc));
@@ -553,9 +709,15 @@ impl MeterOscopeApp {
                         if changed {
                             self.refresh_texture(&ctx);
                         }
+                        ui.separator();
+                        meteroscope_panels::scale_bar_menu(ui, &mut self.doc);
                     });
                 });
                 self.series_menu(ui);
+                let detect = ui.selectable_label(self.detect.is_open(), format!("🔍  {}", tr!("toolbar.detect")));
+                if detect.on_hover_text(tr!("toolbar.detect_tip")).clicked() {
+                    self.detect.toggle();
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("1:1").on_hover_text(tr!("zoom.actual_tip")).clicked() {
                         self.canvas.zoom_actual();
@@ -633,6 +795,10 @@ impl MeterOscopeApp {
             if ui.add(big(&format!("📷  {}", tr!("welcome.camera")))).clicked() {
                 self.toggle_camera(&ctx);
             }
+            ui.add_space(8.0);
+            if ui.add(big(&format!("📋  {}", tr!("welcome.paste")))).on_hover_text(tr!("welcome.paste_tip")).clicked() {
+                self.paste(&ctx, crate::clipboard::Fallback::default(), false);
+            }
             ui.add_space(16.0);
             ui.weak(tr!("welcome.drop"));
             if let Some(p) = crate::settings::welcome_recent(ui, &self.settings) {
@@ -666,6 +832,10 @@ impl eframe::App for MeterOscopeApp {
         self.series_dropped(&ctx);
         self.shortcuts(&ctx);
         self.series_frame(&ctx);
+        let free = !self.calibration.is_open() && self.pending_paste.is_none();
+        if let Some(fallback) = crate::clipboard::paste_requested(&ctx, free) {
+            self.paste(&ctx, fallback, true);
+        }
 
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.add_space(4.0);
@@ -725,6 +895,20 @@ impl eframe::App for MeterOscopeApp {
             }
         }
 
+        // La détection travaille sur l'image de travail (corrigée de la
+        // perspective s'il y a lieu) : à refaire quand celle-ci change.
+        if self.mode == Mode::Image {
+            self.sync_flat();
+            if self.flat_changed {
+                self.detect.invalidate();
+            }
+        }
+        let work = self.flat.as_ref().and_then(|f| f.image.as_ref()).or(self.image.as_ref());
+        let image = work.filter(|_| self.mode == Mode::Image);
+        if let Some((msg, err)) = self.detect.frame(&ctx, image, &mut self.doc, &mut self.canvas) {
+            if err { self.error(msg) } else { self.info(msg) }
+        }
+
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match self.mode {
             Mode::Camera => cursor = self.live_view(ui),
             Mode::Image if self.image.is_none() => self.welcome(ui),
@@ -761,6 +945,14 @@ impl eframe::App for MeterOscopeApp {
             }
         });
         ctx.data_mut(|d| d.insert_temp(cursor_id, cursor));
+
+        if self.pending_paste.is_some()
+            && let Some(ok) = crate::clipboard::confirm_replace(&ctx)
+            && let Some(pasted) = self.pending_paste.take()
+            && ok
+        {
+            self.apply_paste(&ctx, pasted);
+        }
 
         if self.calibration.show(&ctx, &mut self.doc) {
             self.canvas.set_tool(Tool::Select);

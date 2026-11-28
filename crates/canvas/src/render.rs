@@ -10,7 +10,8 @@ use meteroscope_core::geometry::{
     rect_corners,
 };
 use meteroscope_core::measure::format_number;
-use meteroscope_core::{Calibration, Pt, Shape};
+use meteroscope_core::scale_bar::TARGET_FRACTION;
+use meteroscope_core::{Calibration, Corner, Pt, Shape, scale_bar};
 use std::f32::consts::TAU;
 
 /// Contour sombre sous les traits, pour rester lisible sur toute photo.
@@ -264,6 +265,18 @@ pub fn paint_image(p: &Painter, tex: TextureId, img: [usize; 2], xf: Xf, baked: 
             Some(size) => xf.origin + vec2(x as f32 * size.x, y as f32 * size.y) * xf.zoom,
             None => xf.to_screen(Pt::new(x * w, y * h)),
         };
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv: pos2(x as f32, y as f32), color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    p.add(EShape::mesh(mesh));
+}
+
+/// Calque `tex` couvrant le rectangle image `[x0, y0, x1, y1]` (rotation comprise).
+pub fn paint_overlay(p: &Painter, tex: TextureId, r: [f64; 4], xf: Xf) {
+    let mut mesh = egui::Mesh::with_texture(tex);
+    for (x, y) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+        let pos = xf.to_screen(Pt::new(r[0] + x * (r[2] - r[0]), r[1] + y * (r[3] - r[1])));
         mesh.vertices.push(egui::epaint::Vertex { pos, uv: pos2(x as f32, y as f32), color: Color32::WHITE });
     }
     mesh.add_triangle(0, 1, 2);
@@ -548,70 +561,40 @@ pub fn paint_loupe(
     p.rect_stroke(rect.expand(1.0), 0.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Outside);
 }
 
-/// Longueur « ronde » (1, 2 ou 5 × 10ⁿ) la plus proche par défaut de `v`.
-pub fn nice_length(v: f64) -> f64 {
-    if !(v > 0.0 && v.is_finite()) {
-        return 0.0;
-    }
-    let e = 10f64.powf(v.log10().floor());
-    let m = v / e;
-    let k = if m >= 5.0 {
-        5.0
-    } else if m >= 2.0 {
-        2.0
-    } else {
-        1.0
-    };
-    k * e
-}
-
-/// Nombre sans zéros décimaux inutiles (« 0,5 », « 1000 »).
-fn short_number(v: f64) -> String {
-    let s = format_number(v);
-    if s.contains(',') { s.trim_end_matches('0').trim_end_matches(',').to_owned() } else { s }
-}
-
-/// Barre d'échelle en bas à gauche de la vue.
-pub fn paint_scale_bar(p: &Painter, view: Rect, zoom: f32, cal: &Calibration) {
+/// Barre d'échelle dans le coin choisi de `zone` (partie visible de l'image,
+/// à l'écran), recalculée selon le zoom : même règle que l'image exportée
+/// (longueur ronde visant ~17,5 % de la largeur). La vue pivote mais la barre
+/// est dessinée à l'écran, donc toujours horizontale.
+pub fn paint_scale_bar(p: &Painter, zone: Rect, zoom: f32, cal: &Calibration, corner: Corner) {
     let Some(scale) = &cal.scale else { return };
+    if !(zone.is_positive() && zoom > 0.0) {
+        return;
+    }
     let units_per_screen_px = scale.units_per_px / zoom as f64;
-    let len = nice_length(units_per_screen_px * 120.0);
-    let px = (len / units_per_screen_px) as f32;
+    let Some(bar) = scale_bar(units_per_screen_px, &scale.unit, zone.width() as f64 * TARGET_FRACTION) else { return };
+    let px = bar.px as f32;
     if !(px.is_finite() && px > 4.0) {
         return;
     }
-    let text = format!("{} {}", short_number(len), scale.unit);
-    let galley = p.layout_no_wrap(text, FontId::proportional(12.0), Color32::WHITE);
+    let galley = p.layout_no_wrap(bar.label, FontId::proportional(12.0), Color32::WHITE);
     let pad = 6.0;
     let size = vec2(px.max(galley.size().x) + 2.0 * pad, galley.size().y + 14.0 + pad);
-    let bg = Rect::from_min_size(pos2(view.left() + 12.0, view.bottom() - 12.0 - size.y), size);
+    let (x, y) = corner.place((zone.left(), zone.top(), zone.width(), zone.height()), (size.x, size.y), 12.0);
+    let bg = Rect::from_min_size(pos2(x, y), size);
     p.rect_filled(bg, CornerRadius::same(4), Color32::from_black_alpha(150));
     let y = bg.bottom() - pad - 3.0;
-    let x0 = bg.left() + pad;
+    let x0 = bg.center().x - px / 2.0;
     let st = Stroke::new(2.0, Color32::WHITE);
     p.line_segment([pos2(x0, y), pos2(x0 + px, y)], st);
     for x in [x0, x0 + px] {
         p.line_segment([pos2(x, y - 5.0), pos2(x, y + 2.0)], st);
     }
-    p.galley(pos2(x0, bg.top() + pad * 0.5), galley, Color32::WHITE);
+    p.galley(pos2(bg.center().x - galley.size().x / 2.0, bg.top() + pad * 0.5), galley, Color32::WHITE);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn longueurs_rondes() {
-        meteroscope_i18n::set_language("fr");
-        assert_eq!(nice_length(1.3), 1.0);
-        assert_eq!(nice_length(37.0), 20.0);
-        assert_eq!(nice_length(0.07), 0.05);
-        assert_eq!(nice_length(5.0), 5.0);
-        assert_eq!(nice_length(0.0), 0.0);
-        assert_eq!(short_number(1000.0), "1000");
-        assert_eq!(short_number(0.5), "0,5");
-        assert_eq!(short_number(20.0), "20");
-    }
 
     #[test]
     fn textes_etiquettes() {

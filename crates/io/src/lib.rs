@@ -4,6 +4,7 @@
 //! CONTRAT PUBLIC (utilisé par `crates/app`) — ne pas changer les signatures
 //! existantes ; on peut en ajouter.
 
+pub mod detect;
 mod image_io;
 mod perspective;
 mod presets;
