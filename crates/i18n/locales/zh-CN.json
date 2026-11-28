@@ -188,6 +188,7 @@
   "project.open_failed": "无法打开项目“{file}”",
   "project.save_failed": "无法保存项目“{file}”",
   "project.serialize": "项目序列化",
+  "project.several_images": "此项目包含图像系列，当前版本的 MeterOscope 无法打开；请更新 MeterOscope",
   "project.unknown_version": "未知的项目格式版本 {version}（此版本的 MeterOscope 最高可读取版本 {max}）；请更新 MeterOscope",
   "quantity.angle": "角度",
   "quantity.area": "面积",

@@ -188,6 +188,7 @@
   "project.open_failed": "Impossible d'ouvrir le projet « {file} »",
   "project.save_failed": "Impossible d'enregistrer le projet « {file} »",
   "project.serialize": "sérialisation du projet",
+  "project.several_images": "ce projet contient une série d'images, que cette version de MeterOscope ne sait pas ouvrir ; mettez MeterOscope à jour",
   "project.unknown_version": "format de projet version {version} inconnu (cette version de MeterOscope lit jusqu'à la version {max}) ; mettez MeterOscope à jour",
   "quantity.angle": "Angle",
   "quantity.area": "Aire",

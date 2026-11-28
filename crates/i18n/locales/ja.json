@@ -188,6 +188,7 @@
   "project.open_failed": "プロジェクト「{file}」を開けません",
   "project.save_failed": "プロジェクト「{file}」を保存できません",
   "project.serialize": "プロジェクトのシリアライズ",
+  "project.several_images": "このプロジェクトには画像シリーズが含まれており、このバージョンの MeterOscope では開けません。MeterOscope を更新してください",
   "project.unknown_version": "不明なプロジェクト形式バージョン {version} です（この MeterOscope はバージョン {max} まで読み込めます）。MeterOscope を更新してください",
   "quantity.angle": "角度",
   "quantity.area": "面積",
