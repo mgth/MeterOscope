@@ -309,6 +309,26 @@ impl MeterOscopeApp {
         }
     }
 
+    /// Colle l'image du presse-papiers, traitée comme une capture caméra
+    /// (sans fichier d'origine), ou ouvre le fichier image copié.
+    fn paste(&mut self, ctx: &egui::Context, fallback: crate::clipboard::Fallback) {
+        match crate::clipboard::read(fallback) {
+            crate::clipboard::Pasted::Image(img) => {
+                self.set_image(ctx, img, None);
+                self.info(tr!("msg.image_pasted"));
+            }
+            crate::clipboard::Pasted::File(p) => self.open_path(ctx, &p),
+            crate::clipboard::Pasted::Nothing => self.info(tr!("msg.paste_nothing")),
+        }
+    }
+
+    fn copy_image(&mut self, ctx: &egui::Context) {
+        let Some(img) = &self.image else { return };
+        let out = io::render_annotated(&io::adjust(img, self.brightness, self.contrast), &self.doc);
+        ctx.copy_image(ColorImage::from_rgba_unmultiplied([out.width() as usize, out.height() as usize], out.as_raw()));
+        self.info(tr!("msg.image_copied"));
+    }
+
     fn transform(&mut self, ctx: &egui::Context, t: io::Transform) {
         if let Some(img) = &self.image {
             self.image = Some(io::apply_transform(img, &mut self.doc, t));
@@ -409,6 +429,9 @@ impl MeterOscopeApp {
                     }
                     if ui.button(tr!("toolbar.export_image")).clicked() {
                         self.export_image();
+                    }
+                    if ui.button(tr!("toolbar.copy_image")).clicked() {
+                        self.copy_image(&ctx);
                     }
                     if ui.button(tr!("toolbar.copy_table")).clicked() {
                         ui.ctx().copy_text(io::clipboard_table(&self.doc));
@@ -537,6 +560,7 @@ impl MeterOscopeApp {
             }
             ui.add_space(16.0);
             ui.weak(tr!("welcome.drop"));
+            ui.weak(tr!("welcome.paste"));
         });
     }
 }
@@ -561,6 +585,9 @@ impl eframe::App for MeterOscopeApp {
             self.open_path(&ctx, &p);
         }
         self.shortcuts(&ctx);
+        if let Some(fallback) = crate::clipboard::paste_requested(&ctx, !self.calibration.is_open()) {
+            self.paste(&ctx, fallback);
+        }
 
         egui::Panel::top("toolbar").show(ui, |ui| {
             ui.add_space(4.0);

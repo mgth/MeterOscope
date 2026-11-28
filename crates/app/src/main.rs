@@ -3,6 +3,7 @@
 
 mod app;
 mod camera_view;
+mod clipboard;
 mod language;
 mod prefs;
 
