@@ -70,6 +70,8 @@ pub struct MeterOscopeApp {
     perspective: PerspectiveDialog,
     /// Préréglages d'échelle et option « garder l'échelle pour l'image suivante ».
     scale_presets: meteroscope_core::ScalePresets,
+    /// Outil montré par chaque groupe de la palette (préférence enregistrée).
+    group_tools: meteroscope_panels::GroupTools,
     mode: Mode,
     camera: CameraView,
     detect: DetectView,
@@ -151,6 +153,7 @@ impl MeterOscopeApp {
             calibration: CalibrationDialog::default(),
             perspective: PerspectiveDialog::default(),
             scale_presets: crate::prefs::load_scale_presets(),
+            group_tools: crate::prefs::load_group_tools(),
             mode: Mode::Image,
             camera: CameraView::default(),
             detect: DetectView::default(),
@@ -1000,7 +1003,9 @@ impl eframe::App for MeterOscopeApp {
             }
             egui::Panel::left("tools").resizable(false).show(ui, |ui| {
                 let mut tool = self.canvas.tool();
-                meteroscope_panels::tool_palette(ui, &mut tool);
+                if meteroscope_panels::tool_palette(ui, &mut tool, &mut self.group_tools) {
+                    crate::prefs::save_group_tools(&self.group_tools);
+                }
                 if tool != self.canvas.tool() {
                     self.canvas.set_tool(tool);
                 }

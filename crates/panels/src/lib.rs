@@ -23,7 +23,7 @@ pub use scale_bar::{corner_name, scale_bar_menu};
 pub use perspective::{PerspectiveDialog, PerspectiveInput, read_perspective_input};
 pub use profile::{ProfilePanelOutput, edge_method_name, profile_panel};
 pub use palette::{
-    GROUPS, TOOLS, ToolGroup, tool_description, tool_group, tool_name, tool_palette, tool_shortcut, tool_tooltip,
+    GROUPS, GroupTools, TOOLS, ToolGroup, tool_description, tool_group, tool_name, tool_palette, tool_shortcut, tool_tooltip,
 };
 
 /// Actions demandées depuis le panneau des mesures.
