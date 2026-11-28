@@ -311,6 +311,8 @@ impl Canvas {
                 (ShapeKind::LineAngle, 1) => tr!("hint.line_angle.first_end"),
                 (ShapeKind::LineAngle, 2) => tr!("hint.line_angle.second"),
                 (ShapeKind::LineAngle, _) => tr!("hint.line_angle.second_end"),
+                (ShapeKind::Profile, 0) => tr!("hint.profile.first"),
+                (ShapeKind::Profile, _) => tr!("hint.profile.second"),
             },
         };
         s.to_owned()

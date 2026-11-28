@@ -41,6 +41,8 @@ pub struct MeterOscopeApp {
     calibration: CalibrationDialog,
     mode: Mode,
     camera: CameraView,
+    /// Profils d'intensité : résultats calculés sur l'image, panneau de la courbe.
+    profiles: crate::profile_view::ProfileView,
     toast: Option<(String, bool, Instant)>,
 }
 
@@ -73,6 +75,7 @@ impl MeterOscopeApp {
             calibration: CalibrationDialog::default(),
             mode: Mode::Image,
             camera: CameraView::default(),
+            profiles: Default::default(),
             toast: None,
         };
         if let Some(p) = initial {
@@ -120,6 +123,7 @@ impl MeterOscopeApp {
     fn refresh_texture(&mut self, ctx: &egui::Context) {
         let key = self.wanted_key();
         self.texture_key = key;
+        self.profiles.invalidate();
         let Some(img) = &self.image else {
             self.texture = None;
             self.straight = None;
@@ -297,6 +301,16 @@ impl MeterOscopeApp {
         if let Some(p) = self.save_dialog(tr!("dialog.export_csv"), tr!("file.measurements_suffix"), "csv") {
             let r = io::export_csv(&self.doc, &p);
             self.report(r, tr!("msg.csv_exported"));
+        }
+    }
+
+    /// Exporte la courbe du profil d'intensité sélectionné.
+    fn export_profile(&mut self) {
+        let Some((id, analysis)) = self.profiles.selected(&self.doc) else { return };
+        let name = self.doc.get(id).map(|m| m.name.clone()).unwrap_or_default();
+        if let Some(p) = self.save_dialog(tr!("dialog.export_profile"), &format!("-{name}"), "csv") {
+            let r = io::export_profile_csv(&name, analysis, &self.doc, &p);
+            self.report(r, tr!("msg.profile_exported"));
         }
     }
 
@@ -576,6 +590,10 @@ impl eframe::App for MeterOscopeApp {
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui, last_cursor));
 
         if show_tools {
+            // Profils d'intensité : résultats recalculés sur l'image d'origine.
+            if let Some(img) = &self.image {
+                self.profiles.sync(&mut self.doc, img);
+            }
             egui::Panel::left("tools").resizable(false).show(ui, |ui| {
                 let mut tool = self.canvas.tool();
                 meteroscope_panels::tool_palette(ui, &mut tool);
@@ -596,6 +614,13 @@ impl eframe::App for MeterOscopeApp {
                     self.export_csv();
                 }
             });
+            // Courbe du profil sélectionné, sous l'image.
+            if self.profiles.selected(&self.doc).is_some() {
+                let export = egui::Panel::bottom("profile").resizable(true).default_size(210.0).show(ui, |ui| self.profiles.panel(ui, &mut self.doc));
+                if export.inner {
+                    self.export_profile();
+                }
+            }
         }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| match self.mode {

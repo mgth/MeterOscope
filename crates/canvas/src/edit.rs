@@ -106,7 +106,7 @@ pub fn constrain_handle(shape: &Shape, i: usize, p: Pt, shift: bool, rot: f64) -
         return p;
     }
     match shape {
-        Shape::Length { a, b } => snap45(if i == 0 { *b } else { *a }, p, rot),
+        Shape::Length { a, b } | Shape::Profile { a, b, .. } => snap45(if i == 0 { *b } else { *a }, p, rot),
         // L'autre extrémité du même segment.
         Shape::LineAngle { .. } => snap45(shape.points()[i ^ 1], p, rot),
         Shape::Rect { a, b, .. } if i == ROTATE_HANDLE => {
@@ -132,7 +132,7 @@ fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
         v
     };
     match shape {
-        Shape::Length { a, b } => vec![(*a, *b)],
+        Shape::Length { a, b } | Shape::Profile { a, b, .. } => vec![(*a, *b)],
         Shape::Path { pts } => open(pts),
         Shape::Angle { a, vertex, b } => vec![(*a, *vertex), (*vertex, *b)],
         Shape::Area { pts } => closed(pts),

@@ -6,7 +6,7 @@ use egui::{Align2, FontId, Key, Rect, RichText, ScrollArea, Sense, Ui, WidgetInf
 use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
-pub const TOOLS: [Tool; 13] = [
+pub const TOOLS: [Tool; 14] = [
     Tool::Select,
     Tool::Calibrate,
     Tool::Straighten,
@@ -14,6 +14,7 @@ pub const TOOLS: [Tool; 13] = [
     Tool::Draw(ShapeKind::Path),
     Tool::Draw(ShapeKind::Angle),
     Tool::Draw(ShapeKind::LineAngle),
+    Tool::Draw(ShapeKind::Profile),
     Tool::Draw(ShapeKind::Area),
     Tool::Draw(ShapeKind::Rect),
     Tool::Draw(ShapeKind::Rect3),
@@ -63,6 +64,7 @@ pub fn tool_description(tool: Tool) -> &'static str {
             ShapeKind::Marker => tr!("tool_help.marker"),
             ShapeKind::LineAngle => tr!("tool_help.line_angle"),
             ShapeKind::Rect3 => tr!("tool_help.rect3"),
+            ShapeKind::Profile => tr!("tool_help.profile"),
         },
     }
 }
@@ -71,7 +73,8 @@ pub fn tool_description(tool: Tool) -> &'static str {
 ///
 /// S Sélection · E Échelle · H Horizon (redresser) · L Longueur · B ligne
 /// Brisée (chemin) · A Angle · I Inclinaison · P Polygone (surface) ·
-/// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur.
+/// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur ·
+/// W profil d'intensité (« Width », largeur d'un trait).
 pub fn tool_shortcut(tool: Tool) -> Option<Key> {
     Some(match tool {
         Tool::Select => Key::S,
@@ -88,6 +91,7 @@ pub fn tool_shortcut(tool: Tool) -> Option<Key> {
             ShapeKind::Marker => Key::M,
             ShapeKind::LineAngle => Key::I,
             ShapeKind::Rect3 => Key::O,
+            ShapeKind::Profile => Key::W,
         },
     })
 }
@@ -188,7 +192,7 @@ mod tests {
             assert_eq!(k.name().len(), 1, "{k:?} n'est pas une lettre");
             assert!(k.name().chars().all(|c| c.is_ascii_uppercase()));
         }
-        assert_eq!(seen.len(), 13);
+        assert_eq!(seen.len(), 14);
     }
 
     #[test]

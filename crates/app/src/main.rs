@@ -5,6 +5,7 @@ mod app;
 mod camera_view;
 mod language;
 mod prefs;
+mod profile_view;
 
 /// Icône de la fenêtre et de la barre des tâches.
 fn window_icon() -> egui::IconData {

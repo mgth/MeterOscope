@@ -9,11 +9,13 @@ mod format;
 mod icons;
 mod list;
 mod palette;
+mod profile;
 
 pub use calibration::{CalibrationDialog, CalibrationInput, UNITS, read_calibration_input};
 pub use format::{format_significant, parse_number, scale_texts, scale_texts_raw};
 pub use icons::paint_tool_icon;
 pub use list::measurements_panel;
+pub use profile::{ProfilePanelOutput, edge_method_name, profile_panel};
 pub use palette::{TOOLS, tool_description, tool_name, tool_palette, tool_shortcut, tool_tooltip};
 
 /// Actions demandées depuis le panneau des mesures.

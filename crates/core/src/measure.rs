@@ -36,10 +36,13 @@ pub enum ShapeKind {
     /// Rectangle tracé par trois points (un côté, puis la largeur) : outil
     /// de tracé seulement, il produit un [`Shape::Rect`] incliné.
     Rect3,
+    /// Profil d'intensité : largeur entre deux bords détectés au sous-pixel
+    /// le long d'un segment (voir [`crate::profile`]).
+    Profile,
 }
 
 impl ShapeKind {
-    pub const ALL: [ShapeKind; 10] = [
+    pub const ALL: [ShapeKind; 11] = [
         ShapeKind::Length,
         ShapeKind::Path,
         ShapeKind::Angle,
@@ -50,6 +53,7 @@ impl ShapeKind {
         ShapeKind::Marker,
         ShapeKind::LineAngle,
         ShapeKind::Rect3,
+        ShapeKind::Profile,
     ];
 
     /// Type de la mesure produite par ce tracé (Rect3 → Rect).
@@ -73,6 +77,7 @@ impl ShapeKind {
             ShapeKind::Marker => tr!("shape.marker"),
             ShapeKind::LineAngle => tr!("shape.line_angle"),
             ShapeKind::Rect3 => tr!("shape.rect3"),
+            ShapeKind::Profile => tr!("shape.profile"),
         }
     }
 
@@ -80,7 +85,7 @@ impl ShapeKind {
     /// terminé par double-clic / Entrée).
     pub fn point_count(self) -> Option<usize> {
         match self {
-            ShapeKind::Length | ShapeKind::Rect | ShapeKind::Circle => Some(2),
+            ShapeKind::Length | ShapeKind::Rect | ShapeKind::Circle | ShapeKind::Profile => Some(2),
             ShapeKind::Angle | ShapeKind::Circle3 | ShapeKind::Rect3 => Some(3),
             ShapeKind::Marker => Some(1),
             ShapeKind::LineAngle => Some(4),
@@ -138,6 +143,16 @@ pub enum Shape {
     Marker { p: Pt },
     /// Inclinaison entre le segment `a→b` et le segment `c→d`.
     LineAngle { a: Pt, b: Pt, c: Pt, d: Pt },
+    /// Profil d'intensité le long de `a→b`. `result` est un cache : il dépend
+    /// des pixels et c'est l'application qui le recalcule.
+    Profile {
+        a: Pt,
+        b: Pt,
+        #[serde(default)]
+        params: crate::profile::ProfileParams,
+        #[serde(default)]
+        result: Option<crate::profile::ProfileResult>,
+    },
 }
 
 impl Shape {
@@ -161,6 +176,7 @@ impl Shape {
                 let (a, b, angle) = geo::rect_from_3_points(p[0], p[1], p[2]);
                 Shape::Rect { a, b, angle }
             }
+            ShapeKind::Profile => Shape::profile(p[0], p[1]),
         })
     }
 
@@ -175,13 +191,14 @@ impl Shape {
             Shape::Circle3 { .. } => ShapeKind::Circle3,
             Shape::Marker { .. } => ShapeKind::Marker,
             Shape::LineAngle { .. } => ShapeKind::LineAngle,
+            Shape::Profile { .. } => ShapeKind::Profile,
         }
     }
 
     /// Points de contrôle (poignées), dans l'ordre de saisie.
     pub fn points(&self) -> Vec<Pt> {
         match self {
-            Shape::Length { a, b } | Shape::Rect { a, b, .. } => vec![*a, *b],
+            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } => vec![*a, *b],
             Shape::Path { pts } | Shape::Area { pts } => pts.clone(),
             Shape::Angle { a, vertex, b } => vec![*a, *vertex, *b],
             Shape::Circle { center, edge } => vec![*center, *edge],
@@ -194,7 +211,7 @@ impl Shape {
     /// Accès mutable aux points de contrôle, même ordre que [`Shape::points`].
     pub fn points_mut(&mut self) -> Vec<&mut Pt> {
         match self {
-            Shape::Length { a, b } | Shape::Rect { a, b, .. } => vec![a, b],
+            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } => vec![a, b],
             Shape::Path { pts } | Shape::Area { pts } => pts.iter_mut().collect(),
             Shape::Angle { a, vertex, b } => vec![a, vertex, b],
             Shape::Circle { center, edge } => vec![center, edge],
@@ -275,6 +292,8 @@ impl Shape {
                 value: geo::line_angle_deg(*a, *b, *c, *d),
                 unit: "°".to_owned(),
             }],
+            // Sans bords détectés : pas de valeur.
+            Shape::Profile { result, .. } => result.iter().map(|r| len(Quantity::Width, r.width_px())).collect(),
         }
     }
 }

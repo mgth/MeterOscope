@@ -155,6 +155,15 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                     dot(*q);
                 }
             }
+            ShapeKind::Profile => {
+                // Courbe d'intensité en créneau adouci, les deux bords repérés.
+                let curve = [p(0.06, 0.74), p(0.26, 0.74), p(0.38, 0.26), p(0.62, 0.26), p(0.74, 0.74), p(0.94, 0.74)];
+                painter.add(Shape::line(curve.to_vec(), stroke));
+                let thin = Stroke::new(w * 0.7, color);
+                for x in [0.32, 0.68] {
+                    painter.extend(Shape::dashed_line(&[p(x, 0.10), p(x, 0.92)], thin, w * 1.6, w * 1.4));
+                }
+            }
             ShapeKind::Marker => {
                 painter.line_segment([p(0.5, 0.06), p(0.5, 0.94)], stroke);
                 painter.line_segment([p(0.06, 0.5), p(0.94, 0.5)], stroke);
