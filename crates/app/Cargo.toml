@@ -18,9 +18,15 @@ eframe = { workspace = true, features = ["persistence"] }
 image.workspace = true
 rfd.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
 dirs = "6"
 serde.workspace = true
-serde_json.workspace = true
+# Lecture du presse-papiers (image, liste de fichiers) ; déjà tiré par egui-winit.
+arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
+
+# Formats du presse-papiers Windows (PNG ou bitmap) ; déjà tiré par arboard.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_DataExchange"] }
 
 # Ressources Windows (icône de l'exécutable, informations de version).
 [build-dependencies]

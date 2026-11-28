@@ -3,6 +3,8 @@
 
 mod app;
 mod camera_view;
+mod clipboard;
+mod history;
 mod language;
 mod prefs;
 mod profile_view;
