@@ -15,7 +15,9 @@
 //! - outil Sélection : clic pour sélectionner, glisser une poignée ou le corps ;
 //! - outil Redresser : tracer un segment le long d'une ligne qui doit être
 //!   horizontale ou verticale ; la vue pivote (`Document::rotation`), l'image
-//!   et les coordonnées des mesures restent inchangées.
+//!   et les coordonnées des mesures restent inchangées ;
+//! - outil Perspective : cliquer les quatre coins d'un objet rectangulaire ;
+//!   la vue signale le quadrilatère, l'application corrige la perspective.
 
 mod draft;
 mod edit;
@@ -58,6 +60,8 @@ const LOUPE_MAX_ZOOM: f32 = 12.0;
 const CALIB_COLOR: Color32 = Color32::from_rgb(255, 64, 170);
 /// Couleur du segment de redressement.
 const STRAIGHTEN_COLOR: Color32 = Color32::from_rgb(64, 224, 255);
+/// Couleur du quadrilatère de correction de perspective.
+const PERSPECTIVE_COLOR: Color32 = Color32::from_rgb(255, 196, 48);
 
 /// Ce que la vue signale à l'application après une frame.
 #[derive(Clone, Debug, Default)]
@@ -71,6 +75,10 @@ pub struct CanvasOutput {
     pub created: Option<u64>,
     /// La vue vient d'être redressée : nouvelle rotation (degrés).
     pub straightened: Option<f64>,
+    /// L'utilisateur vient de cliquer les quatre coins d'un objet
+    /// rectangulaire avec l'outil Perspective (dans l'ordre des clics) :
+    /// l'application doit corriger la perspective.
+    pub perspective_quad: Option<[Pt; 4]>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -127,6 +135,9 @@ pub struct Canvas {
     draft: Draft,
     /// Dernier segment d'étalonnage tracé (affiché tant que l'outil Échelle est actif).
     calib_seg: Option<(Pt, Pt)>,
+    /// Dernier quadrilatère de perspective cliqué (affiché tant que
+    /// l'application ne l'a pas traité : boîte de dialogue ouverte).
+    persp_quad: Option<[Pt; 4]>,
     gesture: Option<Gesture>,
     last_click: Option<(f64, Pos2)>,
     /// Rectangles des étiquettes de la dernière frame (clic sur une étiquette).
@@ -156,6 +167,7 @@ impl Default for Canvas {
             baked: None,
             draft: Draft::new(ShapeKind::Length),
             calib_seg: None,
+            persp_quad: None,
             gesture: None,
             last_click: None,
             label_rects: Vec::new(),
@@ -175,7 +187,17 @@ fn draft_kind(tool: Tool) -> Option<ShapeKind> {
     match tool {
         Tool::Select => None,
         Tool::Calibrate | Tool::Straighten => Some(ShapeKind::Length),
+        // Quadrilatère : un polygone de quatre points.
+        Tool::Perspective => Some(ShapeKind::Area),
         Tool::Draw(k) => Some(k),
+    }
+}
+
+/// Tracé vierge de l'outil.
+fn new_draft(tool: Tool) -> Draft {
+    match tool {
+        Tool::Perspective => Draft::polygon(4),
+        t => Draft::new(draft_kind(t).unwrap_or(ShapeKind::Length)),
     }
 }
 
@@ -205,7 +227,8 @@ impl Canvas {
     /// Change d'outil (annule un tracé en cours).
     pub fn set_tool(&mut self, tool: Tool) {
         self.tool = tool;
-        self.draft = Draft::new(draft_kind(tool).unwrap_or(ShapeKind::Length));
+        self.draft = new_draft(tool);
+        self.persp_quad = None;
         if self.gesture.as_ref().is_some_and(|g| g.kind == GestureKind::Draw) {
             self.gesture = None;
         }
@@ -288,6 +311,12 @@ impl Canvas {
         self.calib_seg
     }
 
+    /// Oublie le quadrilatère de perspective affiché (correction appliquée
+    /// ou abandonnée par l'application).
+    pub fn clear_perspective_quad(&mut self) {
+        self.persp_quad = None;
+    }
+
     /// Aide contextuelle d'une ligne pour la barre d'état, selon l'outil et
     /// l'avancement du tracé (« Cliquez le premier point », …).
     pub fn hint(&self) -> String {
@@ -310,6 +339,13 @@ impl Canvas {
             Tool::Straighten => match n {
                 0 => tr!("hint.straighten.start"),
                 _ => tr!("hint.straighten.end"),
+            },
+            Tool::Perspective => match (n, self.persp_quad.is_some()) {
+                (0, true) => tr!("hint.perspective.dialog"),
+                (0, false) => tr!("hint.perspective.first"),
+                (1, _) => tr!("hint.perspective.second"),
+                (2, _) => tr!("hint.perspective.third"),
+                _ => tr!("hint.perspective.fourth"),
             },
             Tool::Draw(kind) => match (kind, n) {
                 (ShapeKind::Length, 0) => tr!("hint.length.first"),
@@ -366,6 +402,8 @@ impl Canvas {
             Tool::Calibrate => n > 0 || self.calib_seg.is_none(),
             Tool::Draw(k) => k != ShapeKind::Marker,
             Tool::Straighten => true,
+            // Les coins s'aimantent ; plus rien à poser tant que le dialogue est ouvert.
+            Tool::Perspective => self.persp_quad.is_none(),
         };
         match (snapping, self.snap) {
             (false, _) => s.to_owned(),
@@ -519,6 +557,11 @@ impl Canvas {
             && let Some((a, b)) = self.calib_seg
         {
             self.paint_draft(&painter, xf, &[a, b], Some(&doc.calibration));
+        }
+        if !self.draft.is_active()
+            && let Some(q) = self.persp_quad
+        {
+            self.paint_draft(&painter, xf, &q, None);
         }
         if draw_tool {
             let pts = self.draft.preview(preview_pt);
@@ -679,6 +722,7 @@ impl Canvas {
                 _ => {
                     if !self.draft.is_active() {
                         self.calib_seg = None;
+                        self.persp_quad = None;
                     }
                     let (p, _) = self.draft_point(doc, ip, xf);
                     let step = self.draft.press(p, self.draft_tol(xf));
@@ -792,6 +836,11 @@ impl Canvas {
             {
                 self.out.straightened = Some(doc.rotation);
             }
+        } else if self.tool == Tool::Perspective {
+            if let [a, b, c, d] = pts[..] {
+                self.persp_quad = Some([a, b, c, d]);
+                self.out.perspective_quad = self.persp_quad;
+            }
         } else if self.tool == Tool::Calibrate {
             if let [a, b] = pts[..] {
                 self.calib_seg = Some((a, b));
@@ -868,9 +917,18 @@ impl Canvas {
         let color = match self.tool {
             Tool::Calibrate => CALIB_COLOR,
             Tool::Straighten => STRAIGHTEN_COLOR,
+            Tool::Perspective => PERSPECTIVE_COLOR,
             _ => kind_color(kind),
         };
-        if let (Tool::Straighten, [a, b]) = (self.tool, pts) {
+        if self.tool == Tool::Perspective {
+            // Quadrilatère en cours : contour refermé dès le troisième coin.
+            render::outlined(p, pts.iter().map(|q| xf.to_screen(*q)).collect(), pts.len() >= 3, color, 2.0);
+            if pts.len() == 4 && !self.draft.is_active() {
+                for q in pts {
+                    render::dot(p, xf.to_screen(*q), color);
+                }
+            }
+        } else if let (Tool::Straighten, [a, b]) = (self.tool, pts) {
             // Segment de redressement : on affiche son écart à l'horizontale ou
             // à la verticale de l'écran, c.-à-d. la rotation qui sera appliquée.
             render::segment(p, xf.to_screen(*a), xf.to_screen(*b), color, 2.0);

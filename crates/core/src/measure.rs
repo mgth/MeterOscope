@@ -131,6 +131,9 @@ pub enum Tool {
     /// Tracer un segment qui doit être horizontal ou vertical : l'affichage
     /// de la photo pivote en conséquence (l'image n'est pas modifiée).
     Straighten,
+    /// Cliquer les quatre coins d'un objet rectangulaire photographié de
+    /// biais : la photo est reprojetée pour le redresser (`Document::perspective`).
+    Perspective,
     /// Créer une mesure du type donné.
     Draw(ShapeKind),
 }
@@ -271,6 +274,27 @@ impl Shape {
         for p in self.points_mut() {
             *p = f(*p);
         }
+    }
+
+    /// Reporte la forme dans une image reprojetée par `f` (correction de
+    /// perspective). Les droites restent des droites : longueurs, chemins,
+    /// angles, surfaces et cercles par trois points suivent exactement leurs
+    /// points. Un rectangle garde ses deux coins et s'aligne sur l'image de
+    /// son premier côté ; un cercle garde son centre et son point de bord
+    /// (leur image exacte serait un quadrilatère et une ellipse).
+    pub fn reproject(&mut self, f: impl Fn(Pt) -> Pt) {
+        if let Shape::Rect { a, b, angle } = self {
+            let side = geo::rect_corners(*a, *b, *angle)[1];
+            // Le premier côté part de `a` dans le sens de l'axe du rectangle, ou à l'opposé.
+            let backwards = geo::to_frame(*b, *angle).x < geo::to_frame(*a, *angle).x;
+            let (na, ns) = (f(*a), f(side));
+            (*a, *b) = (na, f(*b));
+            if na.dist(ns) > 0.0 {
+                *angle = geo::normalize_deg(geo::direction_deg(na, ns) + if backwards { 180.0 } else { 0.0 });
+            }
+            return;
+        }
+        self.map_points(f);
     }
 
     /// Oriente un rectangle à `deg` degrés (sans effet sur les autres formes).
