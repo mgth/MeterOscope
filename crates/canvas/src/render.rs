@@ -326,6 +326,33 @@ pub fn paint_rotate_handle(p: &Painter, base: Pos2, h: Pos2, hot: bool) {
     p.circle(h, r, Color32::WHITE, Stroke::new(1.5, Color32::BLACK));
 }
 
+/// Couleur du repère d'aimantation.
+const SNAP_COLOR: Color32 = Color32::from_rgb(255, 220, 60);
+
+/// Repère d'aimantation en `c` (écran), dont la forme dit la nature de
+/// l'accroche : carré pour un point ou un coin, triangle pour un milieu,
+/// cercle pour un centre, croix pour une intersection.
+pub fn paint_snap(p: &Painter, c: Pos2, kind: crate::snap::SnapKind) {
+    use crate::snap::SnapKind;
+    const R: f32 = 6.0;
+    match kind {
+        SnapKind::Point => {
+            let q = [vec2(-R, -R), vec2(R, -R), vec2(R, R), vec2(-R, R)];
+            outlined(p, q.iter().map(|d| c + *d).collect(), true, SNAP_COLOR, 1.5);
+        }
+        SnapKind::Midpoint => {
+            let q = [vec2(0.0, -R * 1.15), vec2(R, R * 0.7), vec2(-R, R * 0.7)];
+            outlined(p, q.iter().map(|d| c + *d).collect(), true, SNAP_COLOR, 1.5);
+        }
+        SnapKind::Center => circle_outlined(p, c, R + 0.75, SNAP_COLOR, 1.5),
+        SnapKind::Intersection => {
+            for d in [vec2(R, R), vec2(R, -R)] {
+                outlined(p, vec![c - d, c + d], false, SNAP_COLOR, 1.5);
+            }
+        }
+    }
+}
+
 /// Poignées carrées blanches ; `hot` : poignée survolée ou saisie.
 pub fn paint_handles(p: &Painter, xf: Xf, pts: &[Pt], hot: Option<usize>) {
     for (i, q) in pts.iter().enumerate() {

@@ -122,7 +122,7 @@ pub fn constrain_handle(shape: &Shape, i: usize, p: Pt, shift: bool, rot: f64) -
 }
 
 /// Segments du contour d'une forme (hors cercles).
-fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
+pub(crate) fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
     let open = |pts: &[Pt]| pts.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>();
     let closed = |pts: &[Pt]| {
         let mut v = open(pts);
