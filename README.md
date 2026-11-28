@@ -35,11 +35,12 @@ JSON, l'anglais sert de référence).
 
 | Touche | Action |
 |---|---|
-| Ctrl+O / Ctrl+Maj+O | Ouvrir / ajouter des images à la série |
-| Ctrl+V | Coller une image ou un fichier |
+| Ctrl+O | Ouvrir : les images s'ajoutent au travail en cours, un projet le remplace |
+| Ctrl+N | Nouveau travail |
+| Ctrl+V | Coller : une image s'ajoute au travail en cours, un projet copié le remplace |
 | Ctrl+S / Ctrl+Maj+S | Enregistrer / enregistrer sous |
 | Ctrl+E | Exporter le CSV |
-| Ctrl+Z / Ctrl+Y (ou Ctrl+Maj+Z) | Annuler / rétablir |
+| Ctrl+Z / Ctrl+Y (ou Ctrl+Maj+Z) | Annuler / rétablir (ajouts d'images et nouveau travail compris) |
 | Ctrl+0 / Ctrl+1 | Ajuster à la fenêtre / taille réelle |
 | Page préc. / Page suiv. | Image précédente / suivante de la série |
 | Échap | Annuler le tracé, revenir à la sélection |

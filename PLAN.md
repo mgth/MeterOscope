@@ -73,7 +73,7 @@ Statistiques par type, et par groupe s'il y en a : n, moyenne, écart-type, min,
 - **Groupes** : groupe facultatif par mesure, liste « par groupe », statistiques par groupe,
   colonne Groupe au CSV ; sélection multiple dans la liste (Ctrl/Maj+clic).
 - **Série d'images** : plusieurs images dans un même projet (format version 2), bande de
-  vignettes, échelle commune, CSV et statistiques consolidés, images annotées de toute la série.
+  vignettes, échelle commune (une image à perspective corrigée garde la sienne), CSV et statistiques consolidés, images annotées de toute la série.
 - **Détection par seuillage** : seuil d'Otsu, objets clairs ou sombres, filtres d'aire, objets
   du bord écartés, trous bouchés ou gardés ; une surface par objet, en un seul pas d'annulation.
 - **Mode caméra** : toutes les mesures sur le flux en direct, pause, réticule gradué, capture
@@ -81,7 +81,9 @@ Statistiques par type, et par groupe s'il y en a : n, moyenne, écart-type, min,
 - **Barre d'échelle** : longueur ronde, coin au choix, identique à l'écran et à l'export.
 - **Exports** : CSV, image annotée PNG (fichier ou presse-papiers), SVG (image intégrée ou
   liée), rapport PDF (image, échelle, tableau, statistiques), tableau copié.
-- **Coller** (Ctrl+V) une image ou un fichier ; remplacer l'image est annulable.
+- **Ouverture unifiée** : ouvrir (Ctrl+O), récents, glisser-déposer, coller (Ctrl+V) et capture
+  caméra ajoutent l'image au travail en cours (la deuxième en fait une série) ; un projet remplace
+  le travail ; « Nouveau travail » (Ctrl+N) repart de zéro. Tout s'annule, sans confirmation.
 - **Réglages retenus** : fichiers récents, dernier dossier, unité, décimales, langue, filtre de
   redressement, épaisseur des traits, outil retenu par groupe de la palette, taille de la fenêtre.
 

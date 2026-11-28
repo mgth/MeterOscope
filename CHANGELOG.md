@@ -30,6 +30,8 @@
 **Organiser les mesures**
 - Série d'images : plusieurs images dans un même projet, bande de vignettes, échelle commune,
   CSV et statistiques de toute la série.
+- Ouvrir ajoute : Ctrl+O, fichiers récents, glisser-déposer, Ctrl+V et capture caméra ajoutent
+  l'image au travail en cours ; un projet le remplace ; « Nouveau travail » (Ctrl+N) repart de zéro.
 - Groupes de mesures, liste et statistiques par groupe ; sélection multiple dans la liste
   (Ctrl+clic, Maj+clic) pour changer groupe, couleur ou visibilité, ou supprimer en une fois.
 - Préréglages d'échelle nommés, et option « garder l'échelle pour l'image suivante ».
@@ -40,7 +42,8 @@
 
 **Fichiers et exports**
 - Coller une image ou un fichier avec Ctrl+V ; copier l'image annotée dans le presse-papiers.
-- Remplacer l'image (ouvrir, coller, capturer) peut s'annuler avec Ctrl+Z.
+- Ajouter une image, ouvrir un projet ou démarrer un nouveau travail s'annule avec Ctrl+Z, sans
+  boîte de confirmation.
 - Exports SVG (image intégrée ou liée) et rapport PDF (image, échelle, tableau, statistiques).
 - Fichiers récents, dernier dossier, unité, nombre de décimales et taille de la fenêtre retenus
   d'un lancement à l'autre.
@@ -57,10 +60,17 @@
 - La détection ne fait plus fermer l'application quand sa zone devient vide.
 - Un fichier de préréglages ou de réglages partiellement abîmé ne fait plus perdre le reste.
 - L'enregistrement d'une série n'écrase jamais une photo existante.
+- Une image à perspective corrigée garde son échelle propre au lieu de la partager avec la série.
+- « Garder l'échelle pour l'image suivante » vaut pour toutes les façons d'ouvrir une image.
+- Tous les dialogues de fichiers partent du dernier dossier utilisé ; les images ajoutées entrent
+  dans les fichiers récents.
+- Caméra : Détecter et Profil, réservés aux images fixes, sont désactivés sur le flux ; Ctrl+Z
+  après une capture ou un changement de résolution fait ce qu'on attend.
 
-Les projets enregistrés par les versions précédentes s'ouvrent toujours. Un projet de plusieurs
-images ou avec correction de perspective utilise la version 2 du format, que les versions 1.1 et
-antérieures refusent.
+Les projets enregistrés par les versions précédentes s'ouvrent toujours. Un projet utilise la
+version 2 du format, que les versions 1.1 et antérieures refusent, dès que celles-ci le liraient de
+travers : plusieurs images, correction de perspective, redressement, rectangle incliné, groupe,
+barre d'échelle réglée ou mesure d'un type nouveau.
 
 ## 1.1.0 — 2026-11-24
 
