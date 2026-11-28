@@ -25,3 +25,18 @@ pub fn save_filter(filter: Option<RotationFilter>) {
     let Some(file) = filter_file() else { return };
     let _ = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&file, filter.map_or(GPU, RotationFilter::id)));
 }
+
+/// Préréglages d'échelle (JSON lisible, à côté des autres préférences).
+fn presets_file() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("meteroscope").join("scale_presets.json"))
+}
+
+pub fn load_scale_presets() -> meteroscope_core::ScalePresets {
+    let saved = presets_file().and_then(|f| std::fs::read_to_string(f).ok());
+    saved.map(|s| meteroscope_io::scale_presets_from_json(&s)).unwrap_or_default()
+}
+
+pub fn save_scale_presets(presets: &meteroscope_core::ScalePresets) {
+    let Some(file) = presets_file() else { return };
+    let _ = file.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&file, meteroscope_io::scale_presets_to_json(presets)));
+}
