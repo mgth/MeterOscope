@@ -8,6 +8,7 @@
 
 use image::RgbaImage;
 use meteroscope_core::Document;
+use std::cell::RefCell;
 use std::path::PathBuf;
 
 /// Nombre d'images remplacées gardées en mémoire.
@@ -36,17 +37,39 @@ pub fn doc_key(doc: &Document) -> String {
 pub struct ImageHistory<W, K> {
     undo: Vec<W>,
     redo: Vec<(W, K)>,
+    /// Empreinte du document courant et révision à laquelle elle a été
+    /// calculée, vidée à chaque changement d'espace de travail.
+    key_cache: RefCell<Option<(u64, K)>>,
 }
 
 impl<W, K> Default for ImageHistory<W, K> {
     fn default() -> Self {
-        Self { undo: Vec::new(), redo: Vec::new() }
+        Self { undo: Vec::new(), redo: Vec::new(), key_cache: RefCell::new(None) }
     }
 }
 
-impl<W, K: PartialEq> ImageHistory<W, K> {
+impl<W, K: PartialEq + Clone> ImageHistory<W, K> {
+    /// Empreinte du document courant, recalculée seulement quand sa révision change.
+    pub fn current_key(&self, revision: u64, key: impl FnOnce() -> K) -> K {
+        let mut cache = self.key_cache.borrow_mut();
+        match &*cache {
+            Some((r, k)) if *r == revision => k.clone(),
+            _ => {
+                let k = key();
+                *cache = Some((revision, k.clone()));
+                k
+            }
+        }
+    }
+
+    /// Comme `can_redo`, sans calculer d'empreinte quand il n'y a rien à rétablir.
+    pub fn can_redo_with(&self, revision: u64, key: impl FnOnce() -> K) -> bool {
+        !self.redo.is_empty() && self.can_redo(&self.current_key(revision, key))
+    }
+
     /// Une nouvelle image remplace `old`, qui devient annulable.
     pub fn replaced(&mut self, old: W) {
+        self.key_cache.take();
         self.undo.push(old);
         if self.undo.len() > LIMIT {
             self.undo.remove(0);
@@ -69,6 +92,7 @@ impl<W, K: PartialEq> ImageHistory<W, K> {
     /// rétabli.
     pub fn undo(&mut self, current: W, key: impl FnOnce(&W) -> K) -> Result<W, W> {
         let Some(previous) = self.undo.pop() else { return Err(current) };
+        self.key_cache.take();
         self.redo.push((current, key(&previous)));
         Ok(previous)
     }
@@ -81,6 +105,7 @@ impl<W, K: PartialEq> ImageHistory<W, K> {
             return Err(current);
         }
         let (next, _) = self.redo.pop().expect("vérifié par can_redo");
+        self.key_cache.take();
         self.undo.push(current);
         Ok(next)
     }
@@ -133,6 +158,26 @@ mod tests {
         let a = h.undo(("b", 2), key).unwrap();
         h.replaced(a);
         assert!(!h.can_redo(&1));
+    }
+
+    #[test]
+    fn empreinte_calculee_une_fois_par_revision() {
+        let mut h = H::default();
+        let calls = std::cell::Cell::new(0);
+        let k = || {
+            calls.set(calls.get() + 1);
+            7
+        };
+        // Pile vide : aucune empreinte calculée.
+        assert!(!h.can_redo_with(1, k));
+        assert_eq!(calls.get(), 0);
+        h.replaced(("a", 7));
+        let _ = h.undo(("b", 2), key).unwrap();
+        assert!(h.can_redo_with(1, k));
+        assert!(h.can_redo_with(1, k));
+        assert_eq!(calls.get(), 1);
+        assert!(h.can_redo_with(2, k));
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]

@@ -242,7 +242,8 @@ impl MeterOscopeApp {
         self.doc.can_undo() || (self.image.is_some() && self.history.can_undo())
     }
     fn can_redo(&self) -> bool {
-        self.doc.can_redo() || (self.image.is_some() && self.history.can_redo(&crate::history::doc_key(&self.doc)))
+        self.doc.can_redo()
+            || (self.image.is_some() && self.history.can_redo_with(self.doc.revision(), || crate::history::doc_key(&self.doc)))
     }
 
     /// Annule dans le document, puis, son historique épuisé, le remplacement d'image.
@@ -264,6 +265,7 @@ impl MeterOscopeApp {
         if self.doc.redo() || self.image.is_none() {
             return;
         }
+        // Empreinte recalculée : un glisser modifie le document sans changer sa révision.
         let key = crate::history::doc_key(&self.doc);
         if !self.history.can_redo(&key) {
             return;

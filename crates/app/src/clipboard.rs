@@ -45,7 +45,7 @@ pub fn paste_requested(ctx: &egui::Context, enabled: bool) -> Option<Fallback> {
             }
             Event::PasteImage(img) => {
                 seen = true;
-                request = Some(Fallback { text: None, image: image_from_rgba(img.width(), img.height(), img.as_raw().to_vec()) });
+                request = Some(Fallback { text: None, image: image_from_rgba(img.width(), img.height(), img.as_raw().to_vec(), cfg!(windows)) });
             }
             // Presse-papiers vide : egui n'a émis aucun `Paste`, seul le
             // relâchement de V arrive encore.
@@ -105,7 +105,7 @@ pub fn read(fallback: Fallback) -> Pasted {
         match slot {
             Some(c) => (
                 c.get().file_list().unwrap_or_default(),
-                c.get().image().ok().and_then(|i| image_from_rgba(i.width, i.height, i.bytes.into_owned())),
+                c.get().image().ok().and_then(|i| image_from_rgba(i.width, i.height, i.bytes.into_owned(), cfg!(windows))),
                 c.get().text().ok(),
             ),
             None => (Vec::new(), None, None),
@@ -140,13 +140,15 @@ pub fn first_openable(paths: &[PathBuf]) -> Option<&Path> {
     })
 }
 
-/// Image RGBA brute (non prémultipliée). Une image entièrement transparente
-/// (bitmap 32 bits de Windows sans canal alpha) est rendue opaque.
-pub fn image_from_rgba(width: usize, height: usize, mut bytes: Vec<u8>) -> Option<RgbaImage> {
+/// Image RGBA brute (non prémultipliée). Avec `no_alpha_fix` (Windows, où un
+/// bitmap 32 bits sans canal alpha arrive entièrement transparent), une
+/// image entièrement transparente est rendue opaque ; ailleurs, l'alpha
+/// d'un PNG est conservé tel quel.
+pub fn image_from_rgba(width: usize, height: usize, mut bytes: Vec<u8>, no_alpha_fix: bool) -> Option<RgbaImage> {
     if width == 0 || height == 0 || bytes.len() != width.checked_mul(height)?.checked_mul(4)? {
         return None;
     }
-    if bytes.as_chunks::<4>().0.iter().all(|px| px[3] == 0) {
+    if no_alpha_fix && bytes.as_chunks::<4>().0.iter().all(|px| px[3] == 0) {
         bytes.as_chunks_mut::<4>().0.iter_mut().for_each(|px| px[3] = 255);
     }
     RgbaImage::from_raw(width.try_into().ok()?, height.try_into().ok()?, bytes)
@@ -217,25 +219,32 @@ mod tests {
 
     #[test]
     fn rgba_brut() {
-        let img = image_from_rgba(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        let img = image_from_rgba(2, 1, vec![1, 2, 3, 4, 5, 6, 7, 8], false).unwrap();
         assert_eq!(img.dimensions(), (2, 1));
         assert_eq!(img.get_pixel(1, 0).0, [5, 6, 7, 8]);
     }
 
     #[test]
     fn rgba_taille_incoherente() {
-        assert!(image_from_rgba(2, 2, vec![0; 12]).is_none());
-        assert!(image_from_rgba(0, 0, vec![]).is_none());
-        assert!(image_from_rgba(usize::MAX, 2, vec![]).is_none());
+        assert!(image_from_rgba(2, 2, vec![0; 12], false).is_none());
+        assert!(image_from_rgba(0, 0, vec![], false).is_none());
+        assert!(image_from_rgba(usize::MAX, 2, vec![], false).is_none());
     }
 
     #[test]
     fn rgba_sans_alpha_devient_opaque() {
-        let img = image_from_rgba(2, 1, vec![10, 20, 30, 0, 40, 50, 60, 0]).unwrap();
+        let img = image_from_rgba(2, 1, vec![10, 20, 30, 0, 40, 50, 60, 0], true).unwrap();
         assert_eq!(img.get_pixel(0, 0).0, [10, 20, 30, 255]);
         // Une transparence partielle est conservée.
-        let img = image_from_rgba(2, 1, vec![10, 20, 30, 0, 40, 50, 60, 128]).unwrap();
+        let img = image_from_rgba(2, 1, vec![10, 20, 30, 0, 40, 50, 60, 128], true).unwrap();
         assert_eq!(img.get_pixel(0, 0).0[3], 0);
+    }
+
+    #[test]
+    fn png_transparent_conserve() {
+        // Hors Windows, une image entièrement transparente reste transparente.
+        let img = image_from_rgba(1, 1, vec![10, 20, 30, 0], false).unwrap();
+        assert_eq!(img.get_pixel(0, 0).0, [10, 20, 30, 0]);
     }
 
     #[cfg(unix)]
@@ -297,7 +306,7 @@ mod tests {
 
     #[test]
     fn ordre_de_preference() {
-        let img = || image_from_rgba(1, 1, vec![1, 2, 3, 255]);
+        let img = || image_from_rgba(1, 1, vec![1, 2, 3, 255], false);
         let files = [p("/a/photo.png")];
         assert_eq!(choose(&files, img(), Some("/a/autre.png")), Pasted::File(p("/a/photo.png")));
         assert_eq!(choose(&[p("/a/x.txt")], img(), None), Pasted::Image(img().unwrap()));
