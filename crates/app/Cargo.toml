@@ -17,6 +17,7 @@ eframe.workspace = true
 image.workspace = true
 rfd.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
 dirs = "6"
 # Lecture du presse-papiers (image, liste de fichiers) ; déjà tiré par egui-winit.
 arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }

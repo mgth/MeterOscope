@@ -2149,6 +2149,7 @@ dependencies = [
  "meteroscope-io",
  "meteroscope-panels",
  "rfd",
+ "serde_json",
  "winresource",
 ]
 

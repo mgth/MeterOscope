@@ -63,6 +63,34 @@ pub fn paste_requested(ctx: &egui::Context, enabled: bool) -> Option<Fallback> {
     request.filter(|_| enabled && !ctx.egui_wants_keyboard_input())
 }
 
+/// Confirmation avant qu'un Ctrl+V remplace une image aux mesures non
+/// enregistrées. `Some(true)` : coller (bouton ou Entrée) ; `Some(false)` :
+/// renoncer (bouton, Échap ou clic hors de la boîte) ; `None` : en attente.
+pub fn confirm_replace(ctx: &egui::Context) -> Option<bool> {
+    use meteroscope_i18n::tr;
+    let mut answer = None;
+    let modal = egui::Modal::new(egui::Id::unique("meteroscope_confirmer_coller")).show(ctx, |ui| {
+        ui.set_width(360.0);
+        ui.heading(tr!("paste.confirm_title"));
+        ui.add_space(6.0);
+        ui.label(tr!("paste.confirm_text"));
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            let ok = ui.button(tr!("paste.confirm_ok"));
+            if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+                answer = Some(true);
+            }
+            if ui.button(tr!("common.cancel")).clicked() {
+                answer = Some(false);
+            }
+        });
+    });
+    if answer.is_none() && modal.should_close() {
+        answer = Some(false);
+    }
+    answer
+}
+
 thread_local! {
     /// Connexion au presse-papiers, ouverte au premier collage.
     static CLIPBOARD: RefCell<Option<arboard::Clipboard>> = const { RefCell::new(None) };
