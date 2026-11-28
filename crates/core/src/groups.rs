@@ -16,7 +16,9 @@ impl Document {
     /// Noms des groupes utilisés, triés, sans doublon (le groupe vide n'en est pas un).
     pub fn groups(&self) -> Vec<String> {
         let mut v: Vec<String> = self.measurements.iter().map(|m| m.group.clone()).filter(|g| !g.is_empty()).collect();
-        v.sort_by_key(|g| g.to_lowercase());
+        // Tri sans casse, départagé par l'orthographe exacte : les doublons
+        // exacts deviennent voisins (« Lot », « lot », « Lot » → deux groupes).
+        v.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()).then_with(|| a.cmp(b)));
         v.dedup();
         v
     }
@@ -146,6 +148,21 @@ mod tests {
         assert_eq!((d.measurements.len(), d.selected), (2, None));
         assert!(d.undo() && d.measurements.len() == 4);
         assert!(!d.remove_many(&[999]));
+    }
+
+    #[test]
+    fn groupes_sans_doublon_meme_non_voisins() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = Document::new();
+        let (a, b, c) = (len(&mut d, 10.), len(&mut d, 20.), len(&mut d, 30.));
+        d.set_group(&[a], "Lot");
+        d.set_group(&[b], "lot");
+        d.set_group(&[c], "Lot");
+        assert_eq!(d.groups(), vec!["Lot", "lot"]);
+        let s = d.summary_by_group();
+        assert_eq!(s.iter().map(|(g, _)| g.as_str()).collect::<Vec<_>>(), vec!["Lot", "lot"]);
+        assert_eq!(s[0].1[0].3.n, 2);
+        assert_eq!(d.grouped_order(), vec![("Lot".into(), vec![a, c]), ("lot".into(), vec![b])]);
     }
 
     #[test]

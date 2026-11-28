@@ -42,6 +42,8 @@ const INK: Rgb = [20, 20, 20];
 const GREY: Rgb = [110, 110, 110];
 const RULE: Rgb = [200, 200, 200];
 const HEAD_BG: Rgb = [235, 237, 240];
+/// Bas de la zone utile d'une page (au-dessus du pied de page).
+const BOTTOM: f32 = PAGE_H - MARGIN - 14.0;
 
 /// Informations de l'en-tête du rapport.
 #[derive(Clone, Debug)]
@@ -104,7 +106,7 @@ impl Layout {
 
     /// Passe à la page suivante si `h` points ne tiennent plus. Renvoie vrai si nouvelle page.
     fn ensure(&mut self, h: f32) -> bool {
-        if self.y + h > PAGE_H - MARGIN - 14.0 {
+        if self.y + h > BOTTOM {
             self.new_page();
             return true;
         }
@@ -167,21 +169,33 @@ fn table(l: &mut Layout, widths: &[f32], header: &[String], rows: &[Vec<String>]
     for row in rows {
         let cells: Vec<Vec<String>> = row.iter().zip(widths).map(|(c, w)| wrap(c, BODY, w - 2.0 * pad)).collect();
         let n = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
-        let h = n as f32 * ROW_H;
-        if l.ensure(h) {
+        // La ligne entière passe à la page suivante si elle n'y tient pas ;
+        // plus haute qu'une page, elle continue sur les suivantes, sous l'en-tête répété.
+        if l.ensure(n as f32 * ROW_H) {
             draw_header(l);
         }
-        let mut x = MARGIN;
-        for (i, (lines, w)) in cells.iter().zip(widths).enumerate() {
-            for (k, s) in lines.iter().enumerate() {
-                let tx = if right[i] { x + w - pad - text_width(s, BODY) } else { x + pad };
-                l.text(tx, l.y + (k as f32 + 1.0) * ROW_H - 3.5, BODY, s.clone(), INK);
+        let mut start = 0;
+        while start < n {
+            let room = ((BOTTOM - l.y) / ROW_H).floor().max(0.0) as usize;
+            if room == 0 {
+                l.new_page();
+                draw_header(l);
+                continue;
             }
-            x += w;
+            let end = (start + room).min(n);
+            let mut x = MARGIN;
+            for (i, (lines, w)) in cells.iter().zip(widths).enumerate() {
+                for (k, s) in lines.iter().enumerate().take(end).skip(start) {
+                    let tx = if right[i] { x + w - pad - text_width(s, BODY) } else { x + pad };
+                    l.text(tx, l.y + ((k - start) as f32 + 1.0) * ROW_H - 3.5, BODY, s.clone(), INK);
+                }
+                x += w;
+            }
+            l.y += (end - start) as f32 * ROW_H;
+            let y = l.y;
+            l.ops().push(Op::Line { x0: MARGIN, y0: y, x1: MARGIN + widths.iter().sum::<f32>(), y1: y, color: RULE });
+            start = end;
         }
-        l.y += h;
-        let y = l.y;
-        l.ops().push(Op::Line { x0: MARGIN, y0: y, x1: MARGIN + widths.iter().sum::<f32>(), y1: y, color: RULE });
     }
 }
 
@@ -282,7 +296,7 @@ pub fn pdf_report(image: &RgbaImage, doc: &Document, filter: RotationFilter, inf
     // Image annotée, ajustée à la largeur et à ce qui reste de la page.
     let annotated = annotated_image(image, doc, filter);
     let (iw, ih) = (annotated.width() as f32, annotated.height() as f32);
-    let max_h = PAGE_H - MARGIN - 14.0 - l.y;
+    let max_h = BOTTOM - l.y;
     let k = (content_w / iw).min(max_h / ih);
     let (w, h) = (iw * k, ih * k);
     let x = MARGIN + (content_w - w) / 2.0;
@@ -453,5 +467,31 @@ mod tests {
         let lines = wrap("Longueur 12,5 mm · Aire 3 mm² · Périmètre 18 mm", BODY, 80.0);
         assert!(lines.len() > 1 && lines.iter().all(|s| text_width(s, BODY) <= 80.0), "{lines:?}");
         assert_eq!(wrap("", BODY, 50.0), vec![String::new()]);
+    }
+
+    #[test]
+    fn ligne_plus_haute_qu_une_page() {
+        meteroscope_i18n::set_language("fr");
+        // Un nom de 150 mots dans une colonne étroite : bien plus qu'une page.
+        let long: String = (0..150).map(|i| format!("mot{i}")).collect::<Vec<_>>().join(" ");
+        let rows = vec![vec!["1".to_string(), long.clone()], vec!["2".to_string(), "fin".to_string()]];
+        let header = vec!["#".to_string(), "Nom".to_string()];
+        let mut l = Layout::new();
+        table(&mut l, &[30.0, 40.0], &header, &rows, &[true, false]);
+        assert!(l.pages.len() >= 3, "{} pages", l.pages.len());
+        let mut texts = vec![];
+        for page in &l.pages {
+            for op in page {
+                if let Op::Text { y, s, .. } = op {
+                    assert!(*y <= BOTTOM, "texte sous le pied de page : {s} à {y}");
+                    texts.push(s.clone());
+                }
+            }
+            // L'en-tête est répété en haut de chaque page.
+            assert!(page.iter().any(|op| matches!(op, Op::Text { s, .. } if s == "Nom")));
+        }
+        let body: Vec<String> = texts.into_iter().filter(|s| s != "#" && s != "Nom" && s != "1" && s != "2").collect();
+        assert_eq!(body.last().map(String::as_str), Some("fin"));
+        assert_eq!(body[..body.len() - 1].join(" "), long, "aucune ligne perdue");
     }
 }
