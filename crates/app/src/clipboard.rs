@@ -45,7 +45,7 @@ pub fn paste_requested(ctx: &egui::Context, enabled: bool) -> Option<Fallback> {
             }
             Event::PasteImage(img) => {
                 seen = true;
-                request = Some(Fallback { text: None, image: image_from_rgba(img.width(), img.height(), img.as_raw().to_vec(), cfg!(windows)) });
+                request = Some(Fallback { text: None, image: image_from_rgba(img.width(), img.height(), img.as_raw().to_vec(), bitmap_without_alpha()) });
             }
             // Presse-papiers vide : egui n'a émis aucun `Paste`, seul le
             // relâchement de V arrive encore.
@@ -105,7 +105,7 @@ pub fn read(fallback: Fallback) -> Pasted {
         match slot {
             Some(c) => (
                 c.get().file_list().unwrap_or_default(),
-                c.get().image().ok().and_then(|i| image_from_rgba(i.width, i.height, i.bytes.into_owned(), cfg!(windows))),
+                c.get().image().ok().and_then(|i| image_from_rgba(i.width, i.height, i.bytes.into_owned(), bitmap_without_alpha())),
                 c.get().text().ok(),
             ),
             None => (Vec::new(), None, None),
@@ -140,10 +140,31 @@ pub fn first_openable(paths: &[PathBuf]) -> Option<&Path> {
     })
 }
 
-/// Image RGBA brute (non prémultipliée). Avec `no_alpha_fix` (Windows, où un
-/// bitmap 32 bits sans canal alpha arrive entièrement transparent), une
-/// image entièrement transparente est rendue opaque ; ailleurs, l'alpha
-/// d'un PNG est conservé tel quel.
+/// L'image du presse-papiers vient-elle d'un bitmap Windows (`CF_DIBV5`), dont
+/// le canal alpha est souvent absent ? arboard lit le format PNG en priorité
+/// et ne se rabat sur le bitmap que s'il n'y a pas de PNG.
+#[cfg(windows)]
+fn bitmap_without_alpha() -> bool {
+    use windows_sys::Win32::System::DataExchange::{IsClipboardFormatAvailable, RegisterClipboardFormatW};
+    let name: Vec<u16> = "PNG\0".encode_utf16().collect();
+    // SAFETY : chaîne UTF-16 terminée par un zéro, vivante pendant l'appel ;
+    // ces deux fonctions n'ouvrent pas le presse-papiers.
+    let png = unsafe {
+        let id = RegisterClipboardFormatW(name.as_ptr());
+        id != 0 && IsClipboardFormatAvailable(id) != 0
+    };
+    !png
+}
+
+/// Hors Windows, l'image arrive en PNG : son alpha est fiable.
+#[cfg(not(windows))]
+fn bitmap_without_alpha() -> bool {
+    false
+}
+
+/// Image RGBA brute (non prémultipliée). Avec `no_alpha_fix` (bitmap Windows
+/// sans canal alpha, qui arrive entièrement transparent), une image
+/// entièrement transparente est rendue opaque ; sinon l'alpha est conservé.
 pub fn image_from_rgba(width: usize, height: usize, mut bytes: Vec<u8>, no_alpha_fix: bool) -> Option<RgbaImage> {
     if width == 0 || height == 0 || bytes.len() != width.checked_mul(height)?.checked_mul(4)? {
         return None;

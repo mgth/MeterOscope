@@ -8,7 +8,7 @@
 
 use image::RgbaImage;
 use meteroscope_core::Document;
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::path::PathBuf;
 
 /// Nombre d'images remplacées gardées en mémoire.
@@ -37,39 +37,39 @@ pub fn doc_key(doc: &Document) -> String {
 pub struct ImageHistory<W, K> {
     undo: Vec<W>,
     redo: Vec<(W, K)>,
-    /// Empreinte du document courant et révision à laquelle elle a été
-    /// calculée, vidée à chaque changement d'espace de travail.
-    key_cache: RefCell<Option<(u64, K)>>,
+    /// Réponse de `can_redo_with` et révision du document pour laquelle elle
+    /// vaut, oubliée à chaque changement de la pile.
+    redo_cache: Cell<Option<(u64, bool)>>,
 }
 
 impl<W, K> Default for ImageHistory<W, K> {
     fn default() -> Self {
-        Self { undo: Vec::new(), redo: Vec::new(), key_cache: RefCell::new(None) }
+        Self { undo: Vec::new(), redo: Vec::new(), redo_cache: Cell::new(None) }
     }
 }
 
-impl<W, K: PartialEq + Clone> ImageHistory<W, K> {
-    /// Empreinte du document courant, recalculée seulement quand sa révision change.
-    pub fn current_key(&self, revision: u64, key: impl FnOnce() -> K) -> K {
-        let mut cache = self.key_cache.borrow_mut();
-        match &*cache {
-            Some((r, k)) if *r == revision => k.clone(),
-            _ => {
-                let k = key();
-                *cache = Some((revision, k.clone()));
-                k
-            }
-        }
-    }
-
-    /// Comme `can_redo`, sans calculer d'empreinte quand il n'y a rien à rétablir.
+impl<W, K: PartialEq> ImageHistory<W, K> {
+    /// Comme `can_redo`, pour l'affichage à chaque image : rien n'est calculé
+    /// quand la pile est vide, et la réponse est gardée tant que la révision
+    /// du document et la pile ne changent pas. Le clic sur Rétablir refait la
+    /// vérification complète avec `can_redo`/`redo`.
     pub fn can_redo_with(&self, revision: u64, key: impl FnOnce() -> K) -> bool {
-        !self.redo.is_empty() && self.can_redo(&self.current_key(revision, key))
+        if self.redo.is_empty() {
+            return false;
+        }
+        if let Some((r, answer)) = self.redo_cache.get()
+            && r == revision
+        {
+            return answer;
+        }
+        let answer = self.can_redo(&key());
+        self.redo_cache.set(Some((revision, answer)));
+        answer
     }
 
     /// Une nouvelle image remplace `old`, qui devient annulable.
     pub fn replaced(&mut self, old: W) {
-        self.key_cache.take();
+        self.redo_cache.take();
         self.undo.push(old);
         if self.undo.len() > LIMIT {
             self.undo.remove(0);
@@ -92,7 +92,7 @@ impl<W, K: PartialEq + Clone> ImageHistory<W, K> {
     /// rétabli.
     pub fn undo(&mut self, current: W, key: impl FnOnce(&W) -> K) -> Result<W, W> {
         let Some(previous) = self.undo.pop() else { return Err(current) };
-        self.key_cache.take();
+        self.redo_cache.take();
         self.redo.push((current, key(&previous)));
         Ok(previous)
     }
@@ -102,10 +102,11 @@ impl<W, K: PartialEq + Clone> ImageHistory<W, K> {
     pub fn redo(&mut self, current: W, current_key: &K) -> Result<W, W> {
         if !self.can_redo(current_key) {
             self.redo.clear();
+            self.redo_cache.take();
             return Err(current);
         }
         let (next, _) = self.redo.pop().expect("vérifié par can_redo");
-        self.key_cache.take();
+        self.redo_cache.take();
         self.undo.push(current);
         Ok(next)
     }
