@@ -15,6 +15,7 @@ mod project;
 mod render;
 mod rotate;
 mod svg;
+mod series;
 mod table;
 mod transform;
 mod upright;
@@ -37,8 +38,12 @@ pub use rotate::{
     Frame, RotationFilter, Straightened, WORK_BUDGET, reduced_size, rotate_image, rotated_dimensions, rotation_work_bytes, straighten,
     straighten_scale,
 };
+pub use series::{
+    SERIES_FORMAT_VERSION, SeriesImage, SeriesProject, export_series_csv, image_dimensions, load_series, save_series, series_clipboard_table,
+    series_csv_string, thumbnail,
+};
 pub use table::format_precise;
-pub use transform::{orient_image, sync_orientation, transform_point};
+pub use transform::{orient_image, orientation_transforms, sync_orientation, transform_point};
 
 /// Extensions d'image acceptées à l'ouverture (minuscules, sans point).
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp", "gif"];

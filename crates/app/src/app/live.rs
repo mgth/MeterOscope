@@ -35,11 +35,17 @@ impl MeterOscopeApp {
 
     /// Fige l'image du flux : elle devient l'image de travail, avec une copie
     /// des mesures et de l'échelle du flux, et la même vue (zoom, outil).
-    fn freeze(&mut self, ctx: &egui::Context, img: RgbaImage) {
+    pub(super) fn freeze(&mut self, ctx: &egui::Context, img: RgbaImage) {
         let doc = self.doc.clone();
         self.leave_camera();
-        self.set_image(ctx, img, None);
+        // La capture rejoint la série ouverte (ou devient la première image).
+        self.series_capture(ctx, img);
+        let shared = self.doc.calibration.clone();
         self.doc = doc;
+        // Un flux sans échelle n'efface pas celle de la série.
+        if !self.doc.calibration.is_calibrated() {
+            self.doc.calibration = shared;
+        }
         // La vue du flux devient celle de l'image ; le flux retrouvera une
         // vue ajustée à son retour.
         std::mem::swap(&mut self.canvas, &mut self.camera.other_canvas);

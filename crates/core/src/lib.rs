@@ -14,6 +14,7 @@ pub mod presets;
 pub mod profile;
 pub mod rescale;
 pub mod scale_bar;
+pub mod series;
 pub mod stats;
 
 pub use calibration::{Calibration, Scale};
@@ -25,4 +26,5 @@ pub use measure::{Measurement, Quantity, Shape, ShapeKind, Tool, Value, PALETTE}
 pub use perspective::{Homography, Perspective};
 pub use presets::{ScalePreset, ScalePresets};
 pub use scale_bar::{Corner, ScaleBar, ScaleBarSettings, scale_bar};
+pub use series::{Series, Undone, series_summary};
 pub use stats::Stats;

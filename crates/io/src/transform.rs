@@ -26,6 +26,22 @@ fn step(t: Transform) -> Orientation {
     }
 }
 
+/// Transformations qui amènent une image dans l'orientation `o`, dans
+/// l'ordre où les appliquer (pour rejouer une orientation sur un fichier relu).
+pub fn orientation_transforms(o: Orientation) -> Vec<Transform> {
+    let mut steps = Vec::new();
+    if o.mirrored() {
+        steps.push(Transform::FlipHorizontal);
+    }
+    match o.quarters() {
+        1 => steps.push(Transform::RotateRight),
+        2 => steps.extend([Transform::RotateRight, Transform::RotateRight]),
+        3 => steps.push(Transform::RotateLeft),
+        _ => {}
+    }
+    steps
+}
+
 /// Image amenée dans l'orientation `o` (miroir horizontal, puis quarts de tour).
 pub fn orient_image(image: &RgbaImage, o: Orientation) -> RgbaImage {
     let flipped;
@@ -296,6 +312,9 @@ mod tests {
                         im = apply_transform(&im, &mut doc, t);
                     }
                     assert_eq!(orient_image(&img, doc.orientation), im, "{a:?} {b:?} {c:?}");
+                    // La même orientation rejouée pas à pas, comme à la relecture d'un fichier.
+                    let replayed = orientation_transforms(doc.orientation).into_iter().fold(img.clone(), |i, t| apply_transform(&i, &mut Document::new(), t));
+                    assert_eq!(replayed, im, "{a:?} {b:?} {c:?}");
                     // Trois annulations d'un coup : un seul passage sur les pixels.
                     let mut applied = doc.orientation;
                     assert!(doc.undo() && doc.undo() && doc.undo());

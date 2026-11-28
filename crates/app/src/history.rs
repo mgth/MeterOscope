@@ -23,7 +23,8 @@ pub struct Workspace {
     pub file_orientation: meteroscope_core::Orientation,
     pub project_path: Option<PathBuf>,
     pub doc: Document,
-    pub saved_revision: u64,
+    /// Série dont l'image fait partie (autres images, vignettes, état enregistré).
+    pub series: crate::app::SeriesState,
     pub brightness: f32,
     pub contrast: f32,
 }

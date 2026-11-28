@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
 /// Identifiant du format, pour reconnaître nos fichiers.
-const FORMAT_ID: &str = "meteroscope";
+pub(crate) const FORMAT_ID: &str = "meteroscope";
 /// Version du format à une image, `document` à la racine. C'est celle qu'on
 /// écrit tant que rien ne l'interdit : les versions antérieures du logiciel
 /// la lisent.
@@ -97,7 +97,7 @@ pub(crate) fn relative_to(target: &Path, base: &Path) -> Option<String> {
 }
 
 /// Écrit `data` de façon atomique (fichier temporaire puis renommage).
-fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
@@ -135,7 +135,7 @@ pub fn save_project(project: &Project, path: &Path) -> Result<()> {
 }
 
 /// Résout le chemin d'image stocké, relativement au dossier du projet.
-fn resolve_image(stored: &str, absolute: Option<&str>, dir: &Path) -> PathBuf {
+pub(crate) fn resolve_image(stored: &str, absolute: Option<&str>, dir: &Path) -> PathBuf {
     let p = Path::new(stored);
     if p.is_absolute() {
         return absolute_clean(p);

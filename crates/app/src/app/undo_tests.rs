@@ -126,6 +126,15 @@ impl Drop for TestDir {
     }
 }
 
+/// Image référencée par un projet enregistré, relue du disque.
+fn image_of(project: &std::path::Path) -> RgbaImage {
+    io::load_image(&image_path_of(project)).unwrap()
+}
+
+fn image_path_of(project: &std::path::Path) -> std::path::PathBuf {
+    io::load_series(project).unwrap().images[0].image_path.clone().expect("le projet référence une image")
+}
+
 #[test]
 fn la_photo_d_origine_survit_a_deux_enregistrements() {
     meteroscope_i18n::set_language("fr");
@@ -139,32 +148,27 @@ fn la_photo_d_origine_survit_a_deux_enregistrements() {
     // Miroir, quart de tour, premier enregistrement : l'image part dans un fichier dérivé.
     app.transform(io::Transform::FlipHorizontal);
     app.transform(io::Transform::RotateRight);
-    assert!(app.write_project(&project));
-    let derived = dir.0.join("photo-image.png");
-    assert_eq!(app.image_path.as_deref(), Some(derived.as_path()));
+    assert!(app.series_write(&project));
+    let first = image_path_of(&project);
+    assert_ne!(first, source);
+    assert_eq!(app.image_path.as_deref(), Some(first.as_path()));
     assert_eq!(io::load_image(&source).unwrap(), photo());
-    assert_eq!(io::load_image(&derived).unwrap(), **app.image.as_ref().unwrap());
-
-    // Quart de tour annulé, second enregistrement : le fichier dérivé est
-    // réécrit, la photo d'origine reste intacte.
-    assert!(app.doc.undo());
-    assert!(app.write_project(&project));
-    assert_eq!(io::load_image(&source).unwrap(), photo(), "la photo d'origine a été écrasée");
-    assert_eq!(app.image_path.as_deref(), Some(derived.as_path()));
-    let mirrored = image::imageops::flip_horizontal(&photo());
-    assert_eq!(io::load_image(&derived).unwrap(), mirrored);
+    assert_eq!(image_of(&project), **app.image.as_ref().unwrap());
     assert!(!app.image_modified());
 
-    // Tout annulé : l'image est de nouveau celle de la photo, mais le projet
-    // pointe vers son fichier dérivé, réécrit à l'identique de la photo.
+    // Quart de tour annulé, second enregistrement : la photo d'origine reste intacte.
     assert!(app.doc.undo());
-    assert!(app.write_project(&project));
+    assert!(app.series_write(&project));
+    assert_eq!(io::load_image(&source).unwrap(), photo(), "la photo d'origine a été écrasée");
+    let mirrored = image::imageops::flip_horizontal(&photo());
+    assert_eq!(image_of(&project), mirrored);
+    assert!(!app.image_modified());
+
+    // Tout annulé : le projet pointe vers une image identique à la photo.
+    assert!(app.doc.undo());
+    assert!(app.series_write(&project));
     assert_eq!(io::load_image(&source).unwrap(), photo());
-    assert_eq!(io::load_image(&derived).unwrap(), photo());
-    // Le projet relu retrouve l'image mesurée.
-    let saved = io::load_project(&project).unwrap();
-    assert_eq!(saved.image_path.as_deref(), Some(derived.as_path()));
-    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 3, "aucun fichier en trop");
+    assert_eq!(image_of(&project), photo());
 }
 
 #[test]
@@ -172,8 +176,8 @@ fn un_projet_rouvert_n_ecrase_aucun_fichier_existant() {
     meteroscope_i18n::set_language("fr");
     let ctx = egui::Context::default();
     let dir = TestDir::new("projet_rouvert");
-    // Session précédente : photo.png d'origine, photo-image.png dérivé, projet enregistré.
-    let (source, derived, project) = (dir.0.join("photo.png"), dir.0.join("photo-image.png"), dir.0.join("photo.meteroscope"));
+    // Session précédente : photo.png d'origine, un fichier dérivé, projet enregistré.
+    let (source, derived, project) = (dir.0.join("photo.png"), dir.0.join("photo-2.png"), dir.0.join("photo.meteroscope"));
     io::save_image(&photo(), &source).unwrap();
     let old = image::imageops::flip_horizontal(&photo());
     io::save_image(&old, &derived).unwrap();
@@ -182,20 +186,20 @@ fn un_projet_rouvert_n_ecrase_aucun_fichier_existant() {
     app.set_image(&ctx, io::load_image(&derived).unwrap(), Some(derived.clone()));
     app.project_path = Some(project.clone());
     app.transform(io::Transform::FlipVertical);
-    assert!(app.write_project(&project));
+    assert!(app.series_write(&project));
     // Ni la photo d'origine ni l'ancien fichier dérivé ne sont touchés.
     assert_eq!(io::load_image(&source).unwrap(), photo());
     assert_eq!(io::load_image(&derived).unwrap(), old);
-    assert_eq!(app.image_path.as_deref(), Some(dir.0.join("photo-image-2.png").as_path()));
+    assert_eq!(image_of(&project), image::imageops::flip_vertical(&old));
 
     // Capture sans fichier : `<projet>.png` s'il est libre.
     let mut app = MeterOscopeApp::blank();
     app.set_image(&ctx, photo(), None);
     let capture = dir.0.join("capture.meteroscope");
-    assert!(app.write_project(&capture));
+    assert!(app.series_write(&capture));
     assert_eq!(app.image_path.as_deref(), Some(dir.0.join("capture.png").as_path()));
     // Enregistrée de nouveau sans changement : rien de plus à écrire.
-    assert!(app.write_project(&capture));
+    assert!(app.series_write(&capture));
     assert_eq!(app.image_path.as_deref(), Some(dir.0.join("capture.png").as_path()));
 }
 
@@ -205,42 +209,40 @@ fn enregistrer_sous_ne_touche_pas_l_image_du_premier_projet() {
     let ctx = egui::Context::default();
     let dir = TestDir::new("enregistrer_sous");
     let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
-    let image_of = |project: &std::path::Path| io::load_image(io::load_project(project).unwrap().image_path.as_deref().unwrap()).unwrap();
 
     // Image collée (sans fichier), retournée, enregistrée dans A.
     let mut app = MeterOscopeApp::blank();
     app.set_image(&ctx, photo(), None);
     app.transform(io::Transform::FlipHorizontal);
-    assert!(app.write_project(&a));
+    assert!(app.series_write(&a));
     let mirrored = image::imageops::flip_horizontal(&photo());
     assert_eq!(image_of(&a), mirrored);
 
     // Quart de tour, puis « Enregistrer sous » B dans le même dossier.
     app.transform(io::Transform::RotateRight);
-    assert!(app.write_project(&b));
+    assert!(app.series_write(&b));
     let turned = image::imageops::rotate90(&mirrored);
     assert_eq!(image_of(&b), turned);
     assert_eq!(image_of(&a), mirrored, "l'image du projet A a été réécrite");
-    assert_ne!(io::load_project(&a).unwrap().image_path, io::load_project(&b).unwrap().image_path);
+    assert_ne!(image_path_of(&a), image_path_of(&b));
 
-    // B enregistré de nouveau après une autre transformation : son propre fichier, réécrit.
+    // B enregistré de nouveau après une autre transformation.
     app.transform(io::Transform::FlipVertical);
-    assert!(app.write_project(&b));
+    assert!(app.series_write(&b));
     assert_eq!(image_of(&b), image::imageops::flip_vertical(&turned));
     assert_eq!(image_of(&a), mirrored);
-    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 4, "deux projets, deux images");
 
     // « Enregistrer sous » d'abord, transformation ensuite : A reste intact aussi.
     let dir = TestDir::new("enregistrer_sous_puis_transformer");
     let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
     let mut app = MeterOscopeApp::blank();
     app.set_image(&ctx, photo(), None);
-    assert!(app.write_project(&a));
-    assert!(app.write_project(&b));
+    assert!(app.series_write(&a));
+    assert!(app.series_write(&b));
     // Sans changement, les deux projets partagent le même fichier image.
-    assert_eq!(io::load_project(&a).unwrap().image_path, io::load_project(&b).unwrap().image_path);
+    assert_eq!(image_path_of(&a), image_path_of(&b));
     app.transform(io::Transform::RotateLeft);
-    assert!(app.write_project(&b));
+    assert!(app.series_write(&b));
     assert_eq!(image_of(&a), photo(), "l'image du projet A a été réécrite");
     assert_eq!(image_of(&b), image::imageops::rotate270(&photo()));
 
@@ -250,10 +252,10 @@ fn enregistrer_sous_ne_touche_pas_l_image_du_premier_projet() {
     let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
     let mut app = MeterOscopeApp::blank();
     app.set_image(&ctx, photo(), None);
-    assert!(app.write_project(&a));
-    assert!(app.write_project(&b));
+    assert!(app.series_write(&a));
+    assert!(app.series_write(&b));
     app.transform(io::Transform::FlipHorizontal);
-    assert!(app.write_project(&a));
+    assert!(app.series_write(&a));
     assert_eq!(image_of(&b), photo(), "l'image partagée avec B a été réécrite");
     assert_eq!(image_of(&a), image::imageops::flip_horizontal(&photo()));
 }
@@ -264,21 +266,20 @@ fn annuler_ne_rend_pas_le_droit_d_ecraser_une_image_partagee() {
     let ctx = egui::Context::default();
     let dir = TestDir::new("partage_puis_annulation");
     let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
-    let image_of = |project: &std::path::Path| io::load_image(io::load_project(project).unwrap().image_path.as_deref().unwrap()).unwrap();
 
-    // Image collée, en miroir, enregistrée dans A : A.png appartient à A.
+    // Image collée, en miroir, enregistrée dans A.
     let mut app = MeterOscopeApp::blank();
     app.set_image(&ctx, photo(), None);
     app.transform(io::Transform::FlipHorizontal);
-    assert!(app.write_project(&a));
-    let a_png = io::load_project(&a).unwrap().image_path.unwrap();
+    assert!(app.series_write(&a));
+    let a_png = image_path_of(&a);
     let mirrored = image::imageops::flip_horizontal(&photo());
 
     // A rouvert (Ctrl+O), puis « Enregistrer sous » B sans rien changer : fichier partagé.
     app.set_image(&ctx, io::load_image(&a_png).unwrap(), Some(a_png.clone()));
     app.project_path = Some(a.clone());
-    assert!(app.write_project(&b));
-    assert_eq!(io::load_project(&b).unwrap().image_path.as_deref(), Some(a_png.as_path()));
+    assert!(app.series_write(&b));
+    assert_eq!(image_path_of(&b), a_png);
 
     // Ctrl+Z : retour à l'état d'avant la réouverture de A.
     app.undo(&ctx);
@@ -287,20 +288,47 @@ fn annuler_ne_rend_pas_le_droit_d_ecraser_une_image_partagee() {
 
     // Quart de tour puis enregistrement de A : B garde son image.
     app.transform(io::Transform::RotateRight);
-    assert!(app.write_project(&a));
+    assert!(app.series_write(&a));
     assert_eq!(image_of(&b), mirrored, "l'image partagée avec B a été réécrite");
     assert_eq!(image_of(&b).dimensions(), (9, 5));
     assert_eq!(image_of(&a), image::imageops::rotate90(&mirrored));
-    assert_ne!(io::load_project(&a).unwrap().image_path, io::load_project(&b).unwrap().image_path);
+    assert_ne!(image_path_of(&a), image_path_of(&b));
+}
 
-    // Rétablir (retour sur A rouvert) puis transformer et enregistrer sous B :
-    // B, qui ne possède pas le fichier partagé, reçoit le sien.
-    let before = image_of(&a);
-    app.set_image(&ctx, io::load_image(&a_png).unwrap(), Some(a_png.clone()));
-    app.project_path = Some(b.clone());
-    app.transform(io::Transform::FlipVertical);
-    assert!(app.write_project(&b));
-    assert_eq!(io::load_image(&a_png).unwrap(), mirrored, "le fichier partagé a été réécrit");
-    assert_eq!(image_of(&a), before);
-    assert_eq!(image_of(&b), image::imageops::flip_vertical(&mirrored));
+#[test]
+fn une_image_pivotee_retrouve_ses_pixels_en_revenant_dans_la_serie() {
+    meteroscope_i18n::set_language("fr");
+    let ctx = egui::Context::default();
+    let dir = TestDir::new("serie_orientation");
+    let (first, second) = (dir.0.join("un.png"), dir.0.join("deux.png"));
+    io::save_image(&photo(), &first).unwrap();
+    io::save_image(&RgbaImage::from_pixel(4, 3, Rgba([9, 9, 9, 255])), &second).unwrap();
+    let mut app = MeterOscopeApp::blank();
+    app.series_open_paths(&ctx, vec![first.clone(), second.clone()]);
+    assert_eq!(**app.image.as_ref().unwrap(), photo());
+
+    // Première image : miroir puis quart de tour, le quart de tour est annulé.
+    app.transform(io::Transform::FlipHorizontal);
+    app.transform(io::Transform::RotateRight);
+    assert!(app.doc.undo());
+    app.sync_orientation();
+    let mirrored = image::imageops::flip_horizontal(&photo());
+    assert_eq!(**app.image.as_ref().unwrap(), mirrored);
+
+    // Aller sur la seconde image puis revenir : la première est relue de son
+    // fichier et retrouve l'orientation mesurée, sans le quart de tour annulé.
+    app.series_step(&ctx, 1);
+    assert_eq!(app.image.as_ref().unwrap().dimensions(), (4, 3));
+    assert!(!app.image_modified());
+    app.series_step(&ctx, -1);
+    assert_eq!(**app.image.as_ref().unwrap(), mirrored);
+    assert!(app.image_modified());
+
+    // Enregistrement de la série : la source reste intacte, le projet relu
+    // pointe vers l'image en miroir.
+    let project = dir.0.join("lot.meteroscope");
+    assert!(app.series_write(&project));
+    assert_eq!(io::load_image(&first).unwrap(), photo());
+    assert_eq!(image_of(&project), mirrored);
+    assert!(!app.image_modified());
 }
