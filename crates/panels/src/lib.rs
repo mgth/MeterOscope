@@ -12,11 +12,13 @@ mod palette;
 mod perspective;
 mod presets;
 mod profile;
+mod scale_bar;
 
 pub use calibration::{CalibrationDialog, CalibrationInput, UNITS, read_calibration_input};
 pub use format::{format_significant, parse_number, scale_texts, scale_texts_raw};
 pub use icons::paint_tool_icon;
 pub use list::{measurements_panel, measurements_panel_with_presets};
+pub use scale_bar::{corner_name, scale_bar_menu};
 pub use perspective::{PerspectiveDialog, PerspectiveInput, read_perspective_input};
 pub use profile::{ProfilePanelOutput, edge_method_name, profile_panel};
 pub use palette::{
