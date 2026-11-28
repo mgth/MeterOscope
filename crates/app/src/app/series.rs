@@ -2,8 +2,8 @@
 //! retrait, bande de vignettes, enregistrement et sorties de toute la série.
 //!
 //! Le reste de l'application continue de travailler sur « l'image
-//! courante » : `app.image`, `app.image_path`, `app.image_modified` et
-//! `app.doc` sont ceux de l'image affichée. Ce module les range et les
+//! courante » : `app.image`, `app.image_path`, son orientation
+//! (`app.applied`, `app.file_orientation`) et `app.doc` sont ceux de l'image affichée. Ce module les range et les
 //! ressort quand on change d'image ([`MeterOscopeApp::series_show`]).
 //! Seule l'image affichée est décodée en mémoire ; les autres sont relues
 //! de leur fichier à l'affichage (les captures sans fichier restent en
@@ -14,11 +14,12 @@ use crate::thumbs::{Thumbs, load_transformed};
 use egui::{Align, Align2, Color32, CornerRadius, FontId, Key, KeyboardShortcut, Modifiers, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui};
 use image::RgbaImage;
 use meteroscope_core::series::Entry;
-use meteroscope_core::{Document, Series, Tool, Undone, series_summary};
+use meteroscope_core::{Document, Orientation, Series, Tool, Undone, series_summary};
 use meteroscope_i18n::tr;
 use meteroscope_io as io;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
 
 /// Hauteur des vignettes de la bande.
@@ -31,11 +32,15 @@ const PLACEHOLDER: (u32, u32) = (1600, 1200);
 struct Extra {
     /// Pixels gardés en mémoire quand aucun fichier ne les contient
     /// (capture, collage) et que l'image n'est pas affichée.
-    pixels: Option<RgbaImage>,
-    /// Rotations et miroirs appliqués depuis la lecture du fichier : rejoués
+    pixels: Option<Arc<RgbaImage>>,
+    /// Orientation des pixels mesurés et celle du fichier (`app.applied` et
+    /// `app.file_orientation` quand l'image est affichée).
+    applied: Orientation,
+    file_orientation: Orientation,
+    /// Rotations et miroirs qui mènent du fichier aux pixels mesurés : rejoués
     /// à la relecture, ce qui évite de garder l'image modifiée en mémoire.
     transforms: Vec<io::Transform>,
-    /// L'image diffère de son fichier (`image_modified` quand elle est affichée).
+    /// L'image diffère de son fichier.
     modified: bool,
     /// Fichier introuvable ou illisible : une image grise le remplace.
     missing: bool,
@@ -60,6 +65,8 @@ pub(crate) struct SeriesState {
     /// Entrée vers laquelle la bande a déjà défilé.
     scrolled: Option<u64>,
     export: Option<ExportJob>,
+    /// Les pixels de l'image affichée ont changé : vignette à refaire.
+    thumb_stale: bool,
 }
 
 impl Default for SeriesState {
@@ -73,6 +80,7 @@ impl Default for SeriesState {
             strip_open: true,
             scrolled: None,
             export: None,
+            thumb_stale: false,
         }
     }
 }
@@ -164,6 +172,12 @@ impl MeterOscopeApp {
         if self.mode == Mode::Image {
             self.series_sync();
         }
+        if std::mem::take(&mut self.series.thumb_stale)
+            && let (Some(id), Some(img)) = (self.series.shown, &self.image)
+            && !self.series.extras.get(&id).is_some_and(|x| x.missing)
+        {
+            self.series.thumbs.set(ctx, id, img);
+        }
         self.series.thumbs.poll(ctx);
         self.series_export_poll();
     }
@@ -178,12 +192,17 @@ impl MeterOscopeApp {
         let old_size = self.image.as_ref().map(|i| i.dimensions());
         if let Some(old) = self.series.shown.take() {
             let x = self.series.extras.entry(old).or_default();
-            x.modified = self.image_modified;
-            // Sans fichier fidèle, les pixels sont le seul exemplaire.
-            let keep = !x.missing && (self.image_path.is_none() || (self.image_modified && x.transforms.is_empty()));
+            x.applied = self.applied;
+            x.file_orientation = self.file_orientation;
+            x.modified = self.applied != self.file_orientation;
+            x.transforms = io::orientation_transforms(self.file_orientation.to(self.applied));
+            // Sans fichier, les pixels sont le seul exemplaire ; une image
+            // pivotée ou retournée se retrouve en rejouant son orientation.
+            let keep = !x.missing && self.image_path.is_none();
             x.pixels = if keep { self.image.take() } else { None };
         }
         self.image = None;
+        self.pixels_changed();
         // L'image corrigée de la perspective appartenait à l'ancienne photo,
         // comme une détection en cours et les profils (les identifiants de
         // mesures se recoupent d'un document à l'autre).
@@ -194,7 +213,8 @@ impl MeterOscopeApp {
         self.canvas.cancel();
         let Some(entry) = self.series.model.active_entry() else {
             self.image_path = None;
-            self.image_modified = false;
+            self.applied = Orientation::IDENTITY;
+            self.file_orientation = Orientation::IDENTITY;
             self.refresh_texture(ctx);
             return;
         };
@@ -203,11 +223,12 @@ impl MeterOscopeApp {
         let mut failure = None;
         let img = match (x.pixels.take(), &path) {
             (Some(px), _) => Some(px),
-            (None, Some(p)) => load_transformed(p, &x.transforms).map_err(|e| failure = Some(format!("{e:#}"))).ok(),
+            (None, Some(p)) => load_transformed(p, &x.transforms).map(Arc::new).map_err(|e| failure = Some(format!("{e:#}"))).ok(),
             (None, None) => None,
         };
         x.missing = img.is_none();
-        self.image_modified = x.modified;
+        self.applied = x.applied;
+        self.file_orientation = x.file_orientation;
         self.image_path = path;
         let img = match img {
             Some(img) => {
@@ -217,12 +238,14 @@ impl MeterOscopeApp {
                 img
             }
             // Image introuvable : les mesures restent visibles sur un fond gris.
-            None => placeholder(size),
+            None => Arc::new(placeholder(size)),
         };
         if old_size != Some(img.dimensions()) {
             self.canvas.fit();
         }
         self.image = Some(img);
+        self.pixels_changed();
+        self.series.thumb_stale = false;
         self.series.shown = Some(id);
         self.mode_image();
         self.refresh_texture(ctx);
@@ -376,17 +399,15 @@ impl MeterOscopeApp {
         let ids = self.series.model.add(vec![(None, Some(img.dimensions()))], &mut self.doc);
         if let Some(id) = ids.first() {
             self.series.thumbs.set(ctx, *id, &img);
-            self.series.extras.entry(*id).or_default().pixels = Some(img);
+            self.series.extras.entry(*id).or_default().pixels = Some(Arc::new(img));
         }
         self.series_after_op(ctx);
     }
 
-    /// Rotation ou miroir appliqué à l'image affichée : appelé par `transform`.
-    pub(super) fn series_transformed(&mut self, ctx: &egui::Context, t: io::Transform) {
-        if let (Some(id), Some(img)) = (self.series.shown, &self.image) {
-            self.series.extras.entry(id).or_default().transforms.push(t);
-            self.series.thumbs.set(ctx, id, img);
-        }
+    /// Les pixels de l'image affichée ont changé (rotation, miroir, ou leur
+    /// annulation) : sa vignette est refaite à la prochaine image d'interface.
+    pub(super) fn series_pixels_changed(&mut self) {
+        self.series.thumb_stale = true;
     }
 
     // ---------- navigation et opérations ----------
@@ -410,7 +431,7 @@ impl MeterOscopeApp {
     }
 
     /// Image précédente (−1) ou suivante (+1).
-    fn series_step(&mut self, ctx: &egui::Context, delta: isize) {
+    pub(super) fn series_step(&mut self, ctx: &egui::Context, delta: isize) {
         let m = &self.series.model;
         if let Some(i) = m.active().checked_add_signed(delta).filter(|i| *i < m.len()) {
             self.series_do(ctx, Act::Go(i));
@@ -501,6 +522,18 @@ impl MeterOscopeApp {
     /// (captures, images pivotées ou retournées) sont d'abord écrites en PNG
     /// à côté du projet, sans écraser l'original.
     pub(super) fn series_save(&mut self, path: &Path) {
+        if self.series_write(path) {
+            self.settings.add_recent(path);
+        }
+    }
+
+    /// Écrit la série dans `path` (images sans fichier fidèle d'abord).
+    /// Aucun fichier existant n'est réécrit : ni les sources, ni l'image
+    /// d'un autre projet, ni un fichier écrit par un enregistrement précédent.
+    /// Renvoie `false` en cas d'échec (déjà signalé).
+    pub(super) fn series_write(&mut self, path: &Path) -> bool {
+        // Un quart de tour ou un miroir annulé : les pixels suivent d'abord.
+        self.sync_orientation();
         self.series_sync();
         let n = self.series.model.len();
         let active = self.series.model.active();
@@ -513,7 +546,7 @@ impl MeterOscopeApp {
             let entry = &self.series.model.entries()[i];
             let (id, entry_path) = (entry.id(), entry.path.clone());
             let x = self.series.extras.entry(id).or_default();
-            let (current, modified) = if i == active { (self.image_path.clone(), self.image_modified) } else { (entry_path, x.modified) };
+            let (current, modified) = if i == active { (self.image_path.clone(), self.applied != self.file_orientation) } else { (entry_path, x.modified) };
             if x.missing || !(current.is_none() || modified) {
                 continue;
             }
@@ -528,9 +561,9 @@ impl MeterOscopeApp {
             reserved.insert(png.clone());
             let loaded;
             let img = if i == active {
-                self.image.as_ref()
+                self.image.as_deref()
             } else if x.pixels.is_some() {
-                x.pixels.as_ref()
+                x.pixels.as_deref()
             } else {
                 loaded = current.as_deref().map(|p| load_transformed(p, &x.transforms));
                 match &loaded {
@@ -548,9 +581,10 @@ impl MeterOscopeApp {
             }
             x.transforms.clear();
             x.modified = false;
+            x.file_orientation = x.applied;
             if i == active {
                 self.image_path = Some(png.clone());
-                self.image_modified = false;
+                self.file_orientation = self.applied;
             } else {
                 // Désormais sur disque : plus besoin de la garder en mémoire.
                 x.pixels = None;
@@ -561,7 +595,7 @@ impl MeterOscopeApp {
         }
         if let Some(e) = failure {
             self.error(format!("{e:#}"));
-            return;
+            return false;
         }
         let m = &self.series.model;
         let project = io::SeriesProject {
@@ -572,11 +606,12 @@ impl MeterOscopeApp {
             active: m.active(),
             shared_scale: m.shared_scale(),
         };
-        if self.report(io::save_series(&project, path), tr!("msg.project_saved")).is_some() {
-            self.series.saved = self.series.model.revision(&self.doc);
-            self.project_path = Some(path.to_owned());
-            self.settings.add_recent(path);
+        if self.report(io::save_series(&project, path), tr!("msg.project_saved")).is_none() {
+            return false;
         }
+        self.series.saved = self.series.model.revision(&self.doc);
+        self.project_path = Some(path.to_owned());
+        true
     }
 
     // ---------- sorties de toute la série ----------
@@ -638,6 +673,7 @@ impl MeterOscopeApp {
             d = d.set_directory(dir);
         }
         let Some(dir) = d.pick_folder() else { return };
+        self.sync_orientation();
         self.series_sync();
         enum Source {
             File(PathBuf, Vec<io::Transform>),
@@ -652,10 +688,15 @@ impl MeterOscopeApp {
             if x.is_some_and(|x| x.missing) {
                 continue;
             }
-            let transforms = x.map(|x| x.transforms.clone()).unwrap_or_default();
-            let unfaithful = i == active && (self.image_path.is_none() || (self.image_modified && transforms.is_empty()));
-            let source = match (&e.path, x.and_then(|x| x.pixels.as_ref())) {
-                _ if unfaithful => self.image.clone().map(Source::Pixels),
+            // L'image affichée : son orientation est celle de l'application.
+            let transforms = if i == active {
+                io::orientation_transforms(self.file_orientation.to(self.applied))
+            } else {
+                x.map(|x| x.transforms.clone()).unwrap_or_default()
+            };
+            let unfaithful = i == active && self.image_path.is_none();
+            let source = match (&e.path, x.and_then(|x| x.pixels.as_deref())) {
+                _ if unfaithful => self.image.as_deref().cloned().map(Source::Pixels),
                 (_, Some(px)) => Some(Source::Pixels(px.clone())),
                 (Some(p), None) => Some(Source::File(p.clone(), transforms)),
                 (None, None) => None,
@@ -688,7 +729,8 @@ impl MeterOscopeApp {
                         None => img,
                     };
                     let base = if brightness != 0.0 || contrast != 0.0 { io::adjust(&img, brightness, contrast) } else { img };
-                    io::save_image(&io::render_annotated(&base, &doc), &out)
+                    // Comme l'export d'une image : redressement compris.
+                    io::save_image(&io::render_view(&base, &doc, filter), &out)
                 });
                 if tx.send((k + 1, total, r.err().map(|e| format!("{e:#}")))).is_err() {
                     break;

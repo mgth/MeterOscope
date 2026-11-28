@@ -2,7 +2,7 @@
 
 use crate::Transform;
 use image::{RgbaImage, imageops};
-use meteroscope_core::{Document, Pt, Shape};
+use meteroscope_core::{Document, Orientation, Pt, Shape};
 
 /// Image du point `p` (coordonnées continues : le pixel (i, j) couvre
 /// [i, i+1] × [j, j+1]) pour une image de taille `w`×`h` *avant* transformation.
@@ -16,43 +16,93 @@ pub fn transform_point(p: Pt, w: f64, h: f64, t: Transform) -> Pt {
     }
 }
 
-pub fn apply_transform(image: &RgbaImage, doc: &mut Document, t: Transform) -> RgbaImage {
-    let out = match t {
-        Transform::RotateRight => imageops::rotate90(image),
-        Transform::RotateLeft => imageops::rotate270(image),
-        Transform::FlipHorizontal => imageops::flip_horizontal(image),
-        Transform::FlipVertical => imageops::flip_vertical(image),
+/// Pas d'orientation correspondant à une transformation.
+fn step(t: Transform) -> Orientation {
+    match t {
+        Transform::RotateRight => Orientation::ROTATE_RIGHT,
+        Transform::RotateLeft => Orientation::ROTATE_LEFT,
+        Transform::FlipHorizontal => Orientation::FLIP_HORIZONTAL,
+        Transform::FlipVertical => Orientation::FLIP_VERTICAL,
+    }
+}
+
+/// Transformations qui amènent une image dans l'orientation `o`, dans
+/// l'ordre où les appliquer (pour rejouer une orientation sur un fichier relu).
+pub fn orientation_transforms(o: Orientation) -> Vec<Transform> {
+    let mut steps = Vec::new();
+    if o.mirrored() {
+        steps.push(Transform::FlipHorizontal);
+    }
+    match o.quarters() {
+        1 => steps.push(Transform::RotateRight),
+        2 => steps.extend([Transform::RotateRight, Transform::RotateRight]),
+        3 => steps.push(Transform::RotateLeft),
+        _ => {}
+    }
+    steps
+}
+
+/// Image amenée dans l'orientation `o` (miroir horizontal, puis quarts de tour).
+pub fn orient_image(image: &RgbaImage, o: Orientation) -> RgbaImage {
+    let flipped;
+    let base = if o.mirrored() {
+        flipped = imageops::flip_horizontal(image);
+        &flipped
+    } else {
+        image
     };
+    match o.quarters() {
+        1 => imageops::rotate90(base),
+        2 => imageops::rotate180(base),
+        3 => imageops::rotate270(base),
+        _ => base.clone(),
+    }
+}
+
+/// Remet les pixels en accord avec le document après une annulation ou un
+/// rétablissement : `applied` est l'orientation dans laquelle se trouve
+/// `image`. Renvoie l'image réorientée, ou `None` si elle l'est déjà.
+pub fn sync_orientation(image: &RgbaImage, applied: &mut Orientation, doc: &Document) -> Option<RgbaImage> {
+    if *applied == doc.orientation {
+        return None;
+    }
+    let out = orient_image(image, applied.to(doc.orientation));
+    *applied = doc.orientation;
+    Some(out)
+}
+
+pub fn apply_transform(image: &RgbaImage, doc: &mut Document, t: Transform) -> RgbaImage {
+    let out = orient_image(image, step(t));
     let (mut w, mut h) = (image.width() as f64, image.height() as f64);
     // Un miroir inverse le sens du redressement (l'image redressée reste droite) ;
     // un quart de tour le conserve.
     let flip = matches!(t, Transform::FlipHorizontal | Transform::FlipVertical);
-    let flip_rotation = flip && doc.rotation != 0.0;
-    if !doc.measurements.is_empty() || flip_rotation || doc.perspective.is_some() {
-        doc.checkpoint();
-        // Perspective corrigée : `image` est la photo d'origine, les mesures
-        // sont dans l'image corrigée. Celle-ci subit la même transformation
-        // si les coins suivent, chacun dans son image.
-        if let Some(p) = &mut doc.perspective {
-            let (cw, ch) = (p.size.0 as f64, p.size.1 as f64);
-            p.src = p.src.map(|q| transform_point(q, w, h, t));
-            p.dst = p.dst.map(|q| transform_point(q, cw, ch, t));
-            if matches!(t, Transform::RotateLeft | Transform::RotateRight) {
-                p.size = (p.size.1, p.size.0);
-            }
-            (w, h) = (cw, ch);
+    // Toujours une étape d'historique, même sans mesure : l'orientation des
+    // pixels en fait partie, et elle doit s'annuler avec le reste.
+    doc.checkpoint();
+    // Perspective corrigée : `image` est la photo d'origine, les mesures
+    // sont dans l'image corrigée. Celle-ci subit la même transformation
+    // si les coins suivent, chacun dans son image.
+    if let Some(p) = &mut doc.perspective {
+        let (cw, ch) = (p.size.0 as f64, p.size.1 as f64);
+        p.src = p.src.map(|q| transform_point(q, w, h, t));
+        p.dst = p.dst.map(|q| transform_point(q, cw, ch, t));
+        if matches!(t, Transform::RotateLeft | Transform::RotateRight) {
+            p.size = (p.size.1, p.size.0);
         }
-        for m in &mut doc.measurements {
-            m.shape.map_points(|p| transform_point(p, w, h, t));
-            // Le miroir inverse aussi l'orientation d'un rectangle.
-            if let (true, Shape::Rect { angle, .. }) = (flip, &mut m.shape) {
-                *angle = -*angle;
-            }
-        }
-        if flip_rotation {
-            doc.rotation = -doc.rotation;
+        (w, h) = (cw, ch);
+    }
+    for m in &mut doc.measurements {
+        m.shape.map_points(|p| transform_point(p, w, h, t));
+        // Le miroir inverse aussi l'orientation d'un rectangle.
+        if let (true, Shape::Rect { angle, .. }) = (flip, &mut m.shape) {
+            *angle = -*angle;
         }
     }
+    if flip {
+        doc.rotation = -doc.rotation;
+    }
+    doc.orientation = doc.orientation.then(step(t));
     out
 }
 
@@ -196,6 +246,83 @@ mod tests {
         // Le miroir s'annule comme le reste.
         assert!(doc.undo());
         assert_eq!(doc.rotation, 4.0);
+    }
+
+    /// Ce que fait l'application autour d'une transformation : les pixels
+    /// suivent le document à chaque annulation et rétablissement.
+    #[test]
+    fn undo_and_redo_bring_pixels_measurements_and_angle_back_together() {
+        meteroscope_i18n::set_language("fr");
+        // Photo sans symétrie, redressée de 6°, avec un repère sur un pixel unique.
+        let mut img0 = test_image(9, 5);
+        img0.put_pixel(7, 1, Rgba([1, 2, 3, 4]));
+        let marker = |doc: &Document| {
+            let Shape::Marker { p } = doc.measurements[0].shape else { panic!() };
+            (p.x.floor() as u32, p.y.floor() as u32)
+        };
+        for with_marker in [true, false] {
+            for t in [Transform::FlipHorizontal, Transform::FlipVertical, Transform::RotateLeft, Transform::RotateRight] {
+                let mut doc = Document::new();
+                doc.set_rotation(6.0);
+                if with_marker {
+                    doc.add(Shape::Marker { p: Pt::new(7.5, 1.5) });
+                }
+                let before = doc.clone();
+
+                let mut img = apply_transform(&img0, &mut doc, t);
+                let mut applied = doc.orientation;
+                let after = (img.clone(), doc.measurements.clone(), doc.rotation);
+                assert_ne!(img, img0, "{t:?}");
+                let flip = matches!(t, Transform::FlipHorizontal | Transform::FlipVertical);
+                assert_eq!(doc.rotation, if flip { -6.0 } else { 6.0 });
+
+                // Annuler : une seule étape ramène tout, pixels compris.
+                assert!(doc.undo(), "{t:?}");
+                img = sync_orientation(&img, &mut applied, &doc).expect("pixels à remettre");
+                assert_eq!(img, img0, "{t:?}");
+                assert_eq!((doc.rotation, &doc.measurements), (6.0, &before.measurements));
+                if with_marker {
+                    let (x, y) = marker(&doc);
+                    assert_eq!(*img.get_pixel(x, y), Rgba([1, 2, 3, 4]));
+                }
+                assert!(sync_orientation(&img, &mut applied, &doc).is_none());
+
+                // Rétablir : retour exact à l'état transformé.
+                assert!(doc.redo());
+                img = sync_orientation(&img, &mut applied, &doc).expect("pixels à remettre");
+                assert_eq!((img.clone(), doc.measurements.clone(), doc.rotation), after, "{t:?}");
+                if with_marker {
+                    let (x, y) = marker(&doc);
+                    assert_eq!(*img.get_pixel(x, y), Rgba([1, 2, 3, 4]));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn orientations_compose_like_the_pixels() {
+        let img = test_image(7, 4);
+        let steps = [Transform::RotateLeft, Transform::RotateRight, Transform::FlipHorizontal, Transform::FlipVertical];
+        for a in steps {
+            for b in steps {
+                for c in steps {
+                    let mut doc = Document::new();
+                    let mut im = img.clone();
+                    for t in [a, b, c] {
+                        im = apply_transform(&im, &mut doc, t);
+                    }
+                    assert_eq!(orient_image(&img, doc.orientation), im, "{a:?} {b:?} {c:?}");
+                    // La même orientation rejouée pas à pas, comme à la relecture d'un fichier.
+                    let replayed = orientation_transforms(doc.orientation).into_iter().fold(img.clone(), |i, t| apply_transform(&i, &mut Document::new(), t));
+                    assert_eq!(replayed, im, "{a:?} {b:?} {c:?}");
+                    // Trois annulations d'un coup : un seul passage sur les pixels.
+                    let mut applied = doc.orientation;
+                    assert!(doc.undo() && doc.undo() && doc.undo());
+                    let back = sync_orientation(&im, &mut applied, &doc).unwrap_or(im);
+                    assert_eq!(back, img, "{a:?} {b:?} {c:?}");
+                }
+            }
+        }
     }
 
     #[test]

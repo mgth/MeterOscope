@@ -5,7 +5,8 @@
 //!   le point de relâchement devient le point suivant (presser-glisser-relâcher) ;
 //! - les points suivants sont posés au relâchement d'un clic (clic puis clic) ;
 //! - un point trop proche du précédent est ignoré (évite les doublons d'un double-clic) ;
-//! - Inclinaison : deux segments, chacun tracé comme une longueur ;
+//! - Inclinaison : deux segments, chacun tracé comme une longueur ; le second
+//!   peut partir de l'extrémité du premier (sommet commun) ;
 //! - Perspective : quatre coins, chacun posé par un clic ;
 //! - Distance point-droite, écart entre parallèles : la droite se trace comme
 //!   une longueur, puis un clic pour le point ;
@@ -90,7 +91,9 @@ impl Draft {
 
     /// Ajoute un point s'il n'est pas un doublon ; termine si le compte est atteint.
     fn push(&mut self, p: Pt, tol: f64) -> Step {
-        if self.pts.last().is_some_and(|q| q.dist(p) <= tol) {
+        // Le doublon se juge entre les deux extrémités d'un même segment : le
+        // second segment d'une inclinaison peut partir du bout du premier.
+        if !self.starts_segment() && self.pts.last().is_some_and(|q| q.dist(p) <= tol) {
             return Step::Continue;
         }
         // Surface : clic sur le premier point = fermer.
@@ -382,6 +385,43 @@ mod tests {
         g.release(p(10., 0.), true, TOL);
         g.press(p(0., 20.), TOL);
         assert!(matches!(g.release(p(10., 25.), true, TOL), Step::Done(v) if v.len() == 4));
+    }
+
+    #[test]
+    fn inclinaison_sommet_commun() {
+        meteroscope_i18n::set_language("fr");
+        // A→B glissé, puis B→C glissé depuis B : l'angle ABC est terminé au relâchement.
+        let mut d = Draft::new(ShapeKind::LineAngle);
+        d.press(p(0., 0.), TOL);
+        d.release(p(10., 0.), true, TOL);
+        assert_eq!(d.press(p(10., 0.), TOL), Step::Continue);
+        assert_eq!(d.pts.len(), 3);
+        assert_eq!(d.release(p(10., 20.), true, TOL), Step::Done(vec![p(0., 0.), p(10., 0.), p(10., 0.), p(10., 20.)]));
+        // Départ dans la tolérance de clic de B, second segment en clic puis clic.
+        let mut d = Draft::new(ShapeKind::LineAngle);
+        d.press(p(0., 0.), TOL);
+        d.release(p(10., 0.), true, TOL);
+        d.press(p(10.5, 0.5), TOL);
+        d.release(p(10.5, 0.5), false, TOL);
+        d.press(p(30., 30.), TOL);
+        assert!(matches!(d.release(p(30., 30.), false, TOL), Step::Done(v) if v.len() == 4 && v[2] == p(10.5, 0.5)));
+        // Les deux extrémités d'un même segment restent distinctes : un
+        // relâchement sur le début du second segment n'ajoute rien.
+        let mut d = Draft::new(ShapeKind::LineAngle);
+        d.press(p(0., 0.), TOL);
+        d.release(p(10., 0.), true, TOL);
+        d.press(p(10., 0.), TOL);
+        assert_eq!(d.release(p(10.5, 0.), true, TOL), Step::Continue);
+        assert_eq!(d.pts.len(), 3);
+        // Ailleurs, le doublon d'un double-clic est toujours écarté.
+        let mut l = Draft::new(ShapeKind::Path);
+        l.press(p(0., 0.), TOL);
+        l.release(p(0., 0.), false, TOL);
+        l.press(p(10., 0.), TOL);
+        l.release(p(10., 0.), false, TOL);
+        l.press(p(10., 0.), TOL);
+        l.release(p(10., 0.), false, TOL);
+        assert_eq!(l.pts.len(), 2);
     }
 
     #[test]

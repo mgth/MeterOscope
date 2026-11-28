@@ -16,9 +16,11 @@ const LIMIT: usize = 4;
 
 /// Tout ce qui accompagne une image de travail.
 pub struct Workspace {
-    pub image: RgbaImage,
+    pub image: std::sync::Arc<RgbaImage>,
     pub image_path: Option<PathBuf>,
-    pub image_modified: bool,
+    /// Orientation des pixels de `image`, et celle du fichier `image_path`.
+    pub applied: meteroscope_core::Orientation,
+    pub file_orientation: meteroscope_core::Orientation,
     pub project_path: Option<PathBuf>,
     pub doc: Document,
     /// Série dont l'image fait partie (autres images, vignettes, état enregistré).

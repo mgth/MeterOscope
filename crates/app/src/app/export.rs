@@ -11,6 +11,7 @@ impl MeterOscopeApp {
     /// repère des mesures ; la photo brute ne peut donc être liée que sans
     /// correction de perspective.
     pub(super) fn export_svg(&mut self, linked: bool) {
+        self.sync_orientation();
         self.sync_flat();
         if self.work_image().is_none() {
             return;
@@ -30,6 +31,7 @@ impl MeterOscopeApp {
 
     /// Rapport PDF (A4).
     pub(super) fn export_pdf(&mut self) {
+        self.sync_orientation();
         self.sync_flat();
         if self.work_image().is_none() {
             return;
@@ -58,7 +60,7 @@ impl MeterOscopeApp {
     /// Le fichier de la photo représente exactement le fond des mesures :
     /// enregistrée telle quelle et sans correction de perspective.
     fn can_link_svg(&self) -> bool {
-        self.image_path.is_some() && !self.image_modified && self.doc.perspective.is_none()
+        self.image_path.is_some() && !self.image_modified() && self.doc.perspective.is_none()
     }
 
     /// Entrées SVG et PDF du menu d'export.

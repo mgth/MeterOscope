@@ -1,6 +1,7 @@
 use crate::calibration::{Calibration, Scale};
 use crate::geometry::Pt;
 use crate::measure::{Measurement, Quantity, Shape, ShapeKind, PALETTE};
+use crate::orientation::Orientation;
 use crate::scale_bar::ScaleBarSettings;
 use crate::perspective::{Homography, Perspective, order_quad};
 use crate::stats::Stats;
@@ -18,6 +19,7 @@ struct Snapshot {
     measurements: Vec<Measurement>,
     calibration: Calibration,
     rotation: f64,
+    orientation: Orientation,
     scale_bar: ScaleBarSettings,
     perspective: Option<Perspective>,
 }
@@ -37,6 +39,12 @@ pub struct Document {
     /// changent pas : seule la vue pivote.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rotation: f64,
+    /// Quarts de tour et miroirs appliqués à l'image depuis son chargement.
+    /// Annulable comme le reste : l'application remet ses pixels dans cette
+    /// orientation après une annulation. Non enregistrée, puisque le projet
+    /// référence un fichier image déjà dans l'orientation mesurée.
+    #[serde(skip)]
+    pub orientation: Orientation,
     /// Barre d'échelle (affichage et coin) ; dessinée seulement si l'échelle est définie.
     #[serde(default)]
     pub scale_bar: ScaleBarSettings,
@@ -70,6 +78,7 @@ impl Document {
             measurements: self.measurements.clone(),
             calibration: self.calibration.clone(),
             rotation: self.rotation,
+            orientation: self.orientation,
             scale_bar: self.scale_bar,
             perspective: self.perspective.clone(),
         }
@@ -99,6 +108,7 @@ impl Document {
         self.measurements = s.measurements;
         self.calibration = s.calibration;
         self.rotation = s.rotation;
+        self.orientation = s.orientation;
         self.scale_bar = s.scale_bar;
         self.perspective = s.perspective;
         if self.selected.is_some_and(|id| self.get(id).is_none()) {
