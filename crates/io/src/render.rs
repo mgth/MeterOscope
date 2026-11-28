@@ -5,6 +5,7 @@
 
 use ab_glyph::{Font, FontRef, OutlineCurve};
 use image::RgbaImage;
+use crate::rotate::Frame;
 use meteroscope_core::{Document, Pt, Shape};
 use std::f32::consts::PI;
 use std::sync::OnceLock;
@@ -553,6 +554,13 @@ fn composite(dst: &mut RgbaImage, overlay: &Pixmap) {
 }
 
 pub fn render_annotated(image: &RgbaImage, doc: &Document) -> RgbaImage {
+    render_annotated_in(image, doc, None)
+}
+
+/// Dessine les mesures de `doc` sur `image`. Avec `frame`, `image` est la
+/// photo redressée : les formes y sont reportées, les valeurs restent celles
+/// des mesures d'origine.
+pub fn render_annotated_in(image: &RgbaImage, doc: &Document, frame: Option<&Frame>) -> RgbaImage {
     let mut out = image.clone();
     let Some(mut p) = Painter::new(image.width(), image.height()) else { return out };
     let mut marker_no = 0;
@@ -564,10 +572,21 @@ pub fn render_annotated(image: &RgbaImage, doc: &Document) -> RgbaImage {
             continue;
         }
         let main = m.shape.values(&doc.calibration).first().map(|v| v.text());
-        p.draw(&m.shape, m.color, main, marker_no);
+        match frame {
+            Some(f) => {
+                let mut shape = m.shape.clone();
+                shape.map_points(|q| f.map(q));
+                // Les côtés d'un rectangle tournent avec la photo.
+                if let Shape::Rect { angle, .. } = &mut shape {
+                    *angle += f.deg;
+                }
+                p.draw(&shape, m.color, main, marker_no);
+            }
+            None => p.draw(&m.shape, m.color, main, marker_no),
+        }
     }
     if let Some(s) = &doc.calibration.scale {
-        p.scale_bar(s.units_per_px, &s.unit);
+        p.scale_bar(s.units_per_px / frame.map_or(1.0, |f| f.scale), &s.unit);
     }
     composite(&mut out, &p.pm);
     out

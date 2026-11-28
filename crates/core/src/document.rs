@@ -1,5 +1,6 @@
 use crate::calibration::Calibration;
 use crate::measure::{Measurement, Quantity, Shape, ShapeKind, PALETTE};
+use crate::orientation::Orientation;
 use crate::stats::Stats;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -15,6 +16,7 @@ struct Snapshot {
     measurements: Vec<Measurement>,
     calibration: Calibration,
     rotation: f64,
+    orientation: Orientation,
 }
 
 /// L'ensemble des mesures posées sur une image, avec étalonnage,
@@ -32,6 +34,12 @@ pub struct Document {
     /// changent pas : seule la vue pivote.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rotation: f64,
+    /// Quarts de tour et miroirs appliqués à l'image depuis son chargement.
+    /// Annulable comme le reste : l'application remet ses pixels dans cette
+    /// orientation après une annulation. Non enregistrée, puisque le projet
+    /// référence un fichier image déjà dans l'orientation mesurée.
+    #[serde(skip)]
+    pub orientation: Orientation,
     /// Identifiant de la mesure sélectionnée.
     #[serde(skip)]
     pub selected: Option<u64>,
@@ -56,6 +64,7 @@ impl Document {
             measurements: self.measurements.clone(),
             calibration: self.calibration.clone(),
             rotation: self.rotation,
+            orientation: self.orientation,
         }
     }
 
@@ -83,6 +92,7 @@ impl Document {
         self.measurements = s.measurements;
         self.calibration = s.calibration;
         self.rotation = s.rotation;
+        self.orientation = s.orientation;
         if self.selected.is_some_and(|id| self.get(id).is_none()) {
             self.selected = None;
         }

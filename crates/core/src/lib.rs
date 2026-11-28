@@ -7,10 +7,12 @@ pub mod calibration;
 pub mod document;
 pub mod geometry;
 pub mod measure;
+pub mod orientation;
 pub mod stats;
 
 pub use calibration::{Calibration, Scale};
 pub use document::Document;
 pub use geometry::Pt;
+pub use orientation::Orientation;
 pub use measure::{Measurement, Quantity, Shape, ShapeKind, Tool, Value, PALETTE};
 pub use stats::Stats;

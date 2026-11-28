@@ -251,3 +251,34 @@ fn render_demo() {
         save_image(&out, &Path::new(&out_dir).join(format!("demo-{w}.png"))).unwrap();
     }
 }
+
+#[test]
+fn exported_image_follows_the_straightened_view() {
+    meteroscope_i18n::set_language("fr");
+    let img = RgbaImage::from_pixel(200, 100, Rgba([90, 90, 90, 255]));
+    let mut doc = Document::new();
+    // Segment penché de 30° dans la photo, que le redressement met à l'horizontale.
+    let (s, c) = 30f64.to_radians().sin_cos();
+    let (a, b) = (Pt::new(100.0 - 60.0 * c, 50.0 + 60.0 * s), Pt::new(100.0 + 60.0 * c, 50.0 - 60.0 * s));
+    doc.add(Shape::Length { a, b });
+    doc.set_rotation(30.0);
+    let filter = RotationFilter::Lanczos3;
+    let plain = rotate_image(&img, 30.0, filter);
+    let out = render_view(&img, &doc, filter);
+    assert_eq!(out.dimensions(), rotated_dimensions(200, 100, 30.0));
+    // Le trait suit la rangée centrale de l'image exportée, d'un bout à l'autre.
+    let changed = |x: u32, y: u32| out.get_pixel(x, y) != plain.get_pixel(x, y);
+    let (cx, cy) = (out.width() / 2, out.height() / 2);
+    for dx in [-55i32, -30, 30, 55] {
+        let x = (cx as i32 + dx) as u32;
+        assert!(changed(x, cy) || changed(x, cy - 1), "trait absent en x = {x}");
+        // Rien à l'emplacement que le trait aurait dans la photo non redressée
+        // (vers les extrémités, loin de l'étiquette posée au milieu).
+        let (ox, oy) = (cx as f64 + dx as f64 * c, cy as f64 - dx as f64 * s);
+        assert!(dx.abs() < 50 || !changed(ox as u32, oy as u32), "trait non redressé en ({ox:.0}, {oy:.0})");
+    }
+    // Sans redressement : l'export habituel.
+    let mut flat = Document::new();
+    flat.add(Shape::Length { a, b });
+    assert_eq!(render_view(&img, &flat, filter), render_annotated(&img, &flat));
+}

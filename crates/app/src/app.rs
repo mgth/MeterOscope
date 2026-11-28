@@ -5,10 +5,11 @@ use crate::camera_view::CameraView;
 use egui::{Align, Color32, ColorImage, Key, KeyboardShortcut, Layout, Modifiers, RichText, TextureHandle, TextureOptions, Ui};
 use image::RgbaImage;
 use meteroscope_canvas::Canvas;
-use meteroscope_core::{Document, Tool};
+use meteroscope_core::{Document, Orientation, Tool};
 use meteroscope_io as io;
 use meteroscope_panels::CalibrationDialog;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 #[derive(PartialEq)]
@@ -19,19 +20,30 @@ enum Mode {
 
 pub struct MeterOscopeApp {
     doc: Document,
-    /// Image d'origine (pleine résolution, non réglée).
-    image: Option<RgbaImage>,
+    /// Image d'origine (pleine résolution, non réglée). Partagée avec le fil
+    /// qui calcule le redressement.
+    image: Option<Arc<RgbaImage>>,
+    /// Incrémenté chaque fois que les pixels de `image` changent.
+    image_gen: u64,
+    /// Orientation (quarts de tour, miroirs) dans laquelle se trouvent les
+    /// pixels de `image` ; celle du document fait foi après une annulation.
+    applied: Orientation,
+    /// Orientation de l'image telle qu'elle est dans le fichier `image_path`.
+    file_orientation: Orientation,
     texture: Option<TextureHandle>,
     /// Filtre de redressement (`None` : rotation par la carte graphique).
     filter: Option<io::RotationFilter>,
-    /// Rotation et filtre pour lesquels `texture` a été construite.
-    texture_key: (f64, Option<io::RotationFilter>),
+    /// Ce que contient `texture` : génération de l'image, et rotation et
+    /// filtre si elle est redressée (`NO_KEY` : droite, pivotée à l'affichage).
+    texture_state: (u64, TexKey),
     /// Image redressée (avant luminosité/contraste), gardée tant que l'image,
     /// l'angle et le filtre ne changent pas.
     straight: Option<Straight>,
+    /// Redressement en cours de calcul hors du fil d'interface.
+    job: Option<Job>,
+    /// Calcul qui a échoué : on ne le relance pas, l'aperçu GPU reste.
+    failed: Option<(u64, TexKey)>,
     image_path: Option<PathBuf>,
-    /// L'image en mémoire diffère du fichier `image_path` (pivotée, retournée).
-    image_modified: bool,
     project_path: Option<PathBuf>,
     /// Révision du document au dernier enregistrement.
     saved_revision: u64,
@@ -44,11 +56,23 @@ pub struct MeterOscopeApp {
     toast: Option<(String, bool, Instant)>,
 }
 
+/// Rotation et filtre d'une texture redressée.
+type TexKey = (f64, Option<io::RotationFilter>);
+/// Texture non redressée.
+const NO_KEY: TexKey = (0.0, None);
+
 struct Straight {
-    key: (f64, Option<io::RotationFilter>),
+    key: TexKey,
+    generation: u64,
     image: RgbaImage,
     /// Taille de l'image redressée, en pixels de l'image d'origine.
     size: egui::Vec2,
+}
+
+struct Job {
+    key: TexKey,
+    generation: u64,
+    rx: mpsc::Receiver<io::Straightened>,
 }
 
 const CTRL: Modifiers = Modifiers::COMMAND;
@@ -59,12 +83,16 @@ impl MeterOscopeApp {
         let mut app = Self {
             doc: Document::new(),
             image: None,
+            image_gen: 0,
+            applied: Orientation::IDENTITY,
+            file_orientation: Orientation::IDENTITY,
             texture: None,
             filter: crate::prefs::load_filter(),
-            texture_key: (0.0, None),
+            texture_state: (0, NO_KEY),
             straight: None,
+            job: None,
+            failed: None,
             image_path: None,
-            image_modified: false,
             project_path: None,
             saved_revision: 0,
             brightness: 0.0,
@@ -108,56 +136,130 @@ impl MeterOscopeApp {
 
     /// Rotation et filtre dont dépend la texture : sans filtre, la texture
     /// reste droite et c'est l'affichage qui la fait pivoter.
-    fn wanted_key(&self) -> (f64, Option<io::RotationFilter>) {
+    fn wanted_key(&self) -> TexKey {
         match self.filter {
             Some(f) if self.doc.rotation != 0.0 => (self.doc.rotation, Some(f)),
-            _ => (0.0, None),
+            _ => NO_KEY,
+        }
+    }
+
+    /// L'image redressée demandée est prête.
+    fn have_straight(&self) -> bool {
+        let key = self.wanted_key();
+        self.straight.as_ref().is_some_and(|s| s.key == key && s.generation == self.image_gen)
+    }
+
+    /// Ce que la texture devrait contenir avec ce qui est disponible.
+    fn target_state(&self) -> (u64, TexKey) {
+        (self.image_gen, if self.have_straight() { self.wanted_key() } else { NO_KEY })
+    }
+
+    /// Un redressement est à calculer et aucun calcul n'occupe le fil de travail.
+    fn should_start_job(&self) -> bool {
+        let key = self.wanted_key();
+        self.image.is_some() && key.1.is_some() && !self.have_straight() && self.job.is_none() && self.failed != Some((self.image_gen, key))
+    }
+
+    /// La texture n'est pas (encore) celle qu'il faut.
+    fn texture_pending(&self) -> bool {
+        self.target_state() != self.texture_state || self.should_start_job()
+    }
+
+    /// Les pixels de `image` viennent de changer.
+    fn pixels_changed(&mut self) {
+        self.image_gen += 1;
+        self.straight = None;
+    }
+
+    /// Remet les pixels dans l'orientation du document : un quart de tour ou
+    /// un miroir annulé (ou rétabli) revient avec les mesures et l'angle.
+    fn sync_orientation(&mut self) {
+        let Some(img) = &self.image else { return };
+        if let Some(out) = io::sync_orientation(img, &mut self.applied, &self.doc) {
+            self.image = Some(Arc::new(out));
+            self.pixels_changed();
+            self.canvas.fit();
+        }
+    }
+
+    /// L'image en mémoire diffère du fichier `image_path` (pivotée, retournée).
+    fn image_modified(&self) -> bool {
+        self.applied != self.file_orientation
+    }
+
+    /// Lance le calcul de l'image redressée hors du fil d'interface.
+    fn start_job(&mut self, ctx: &egui::Context) {
+        let key = self.wanted_key();
+        let (Some(img), (deg, Some(filter))) = (&self.image, key) else { return };
+        let max = ctx.input(|i| i.max_texture_side).max(1024) as u32;
+        let (tx, rx) = mpsc::channel();
+        let (img, ctx) = (Arc::clone(img), ctx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(io::straighten(&img, deg, filter, max, io::WORK_BUDGET));
+            ctx.request_repaint();
+        });
+        self.job = Some(Job { key, generation: self.image_gen, rx });
+    }
+
+    /// Tient la texture à jour sans bloquer l'interface : le redressement
+    /// filtré se calcule en arrière-plan, et en attendant c'est la carte
+    /// graphique qui fait pivoter la photo. Le résultat n'est retenu que si
+    /// l'image, l'angle et le filtre sont toujours ceux de la demande.
+    fn update_texture(&mut self, ctx: &egui::Context) {
+        if let Some(job) = &self.job {
+            match job.rx.try_recv() {
+                Ok(s) => {
+                    let job = self.job.take().unwrap();
+                    if job.generation == self.image_gen && job.key == self.wanted_key() {
+                        let size = egui::vec2(s.image.width() as f32, s.image.height() as f32) / s.frame.scale as f32;
+                        self.straight = Some(Straight { key: job.key, generation: job.generation, image: s.image, size });
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let job = self.job.take().unwrap();
+                    self.failed = Some((job.generation, job.key));
+                }
+            }
+        }
+        // Un seul calcul à la fois : une demande périmée se termine d'abord.
+        if self.should_start_job() {
+            self.start_job(ctx);
+        }
+        if self.target_state() != self.texture_state {
+            self.refresh_texture(ctx);
         }
     }
 
     /// (Re)construit la texture affichée à partir de l'image, du redressement
-    /// et des réglages.
+    /// disponible et des réglages.
     fn refresh_texture(&mut self, ctx: &egui::Context) {
-        let key = self.wanted_key();
-        self.texture_key = key;
+        self.texture_state = self.target_state();
         let Some(img) = &self.image else {
             self.texture = None;
             self.straight = None;
             self.canvas.set_baked(None);
             return;
         };
-        // Les très grandes photos dépassent la taille de texture du GPU :
-        // on affiche une version réduite, les mesures restent en pixels réels.
-        let max = ctx.input(|i| i.max_texture_side).max(1024) as u32;
-        let reduce = |side: u32| -> Option<RgbaImage> {
-            (side > max).then(|| {
-                let s = max as f32 / side as f32;
-                let (w, h) = ((img.width() as f32 * s) as u32, (img.height() as f32 * s) as u32);
-                image::imageops::resize(img, w.max(1), h.max(1), image::imageops::FilterType::Triangle)
-            })
-        };
+        let img: &RgbaImage = img;
         let reduced;
-        let base = match key {
-            (deg, Some(filter)) => {
-                if self.straight.as_ref().is_none_or(|s| s.key != key) {
-                    // La boîte de l'image pivotée doit elle aussi tenir dans une texture.
-                    let (bw, bh) = io::rotated_dimensions(img.width(), img.height(), deg);
-                    let small = reduce(bw.max(bh));
-                    let source = small.as_ref().unwrap_or(img);
-                    let scale = source.width() as f32 / img.width() as f32;
-                    let image = io::rotate_image(source, deg, filter);
-                    let size = egui::vec2(image.width() as f32, image.height() as f32) / scale;
-                    self.straight = Some(Straight { key, image, size });
-                }
-                let s = self.straight.as_ref().unwrap();
+        let base = match &self.straight {
+            Some(s) if self.texture_state.1 != NO_KEY => {
                 self.canvas.set_baked(Some(s.size));
                 &s.image
             }
             _ => {
-                self.straight = None;
                 self.canvas.set_baked(None);
-                reduced = reduce(img.width().max(img.height()));
-                reduced.as_ref().unwrap_or(img)
+                // Les très grandes photos dépassent la taille de texture du GPU :
+                // on affiche une version réduite, les mesures restent en pixels réels.
+                let max = ctx.input(|i| i.max_texture_side).max(1024) as f64;
+                let (w, h, k) = io::reduced_size(img.width(), img.height(), max / img.width().max(img.height()) as f64);
+                if k < 1.0 {
+                    reduced = image::imageops::resize(img, w, h, image::imageops::FilterType::Triangle);
+                    &reduced
+                } else {
+                    img
+                }
             }
         };
         let adjusted;
@@ -181,19 +283,21 @@ impl MeterOscopeApp {
 
     /// Installe une nouvelle image avec un document vierge.
     fn set_image(&mut self, ctx: &egui::Context, img: RgbaImage, path: Option<PathBuf>) {
-        self.image = Some(img);
-        self.straight = None;
+        self.image = Some(Arc::new(img));
+        self.pixels_changed();
         self.image_path = path;
-        self.image_modified = false;
         self.project_path = None;
         self.doc = Document::new();
+        self.applied = Orientation::IDENTITY;
+        self.file_orientation = Orientation::IDENTITY;
         self.saved_revision = 0;
         self.brightness = 0.0;
         self.contrast = 0.0;
         self.mode_image();
         self.canvas.set_tool(Tool::Select);
         self.canvas.fit();
-        self.refresh_texture(ctx);
+        // La texture se construit à la prochaine frame de la vue image.
+        ctx.request_repaint();
     }
 
     fn mode_image(&mut self) {
@@ -221,6 +325,9 @@ impl MeterOscopeApp {
                 self.set_image(ctx, img, project.image_path.clone());
             }
             self.doc = project.document;
+            // Le fichier image du projet est déjà dans l'orientation mesurée.
+            self.applied = self.doc.orientation;
+            self.file_orientation = self.doc.orientation;
             self.saved_revision = self.doc.revision();
             self.project_path = Some(path.to_owned());
         } else if let Some(img) = self.report(io::load_image(path), "") {
@@ -262,6 +369,7 @@ impl MeterOscopeApp {
     /// Enregistre le projet (mesures). Une capture caméra sans fichier est
     /// d'abord enregistrée en PNG à côté du projet.
     fn save_project(&mut self, save_as: bool) {
+        self.sync_orientation();
         if self.image.is_none() {
             return;
         }
@@ -274,9 +382,9 @@ impl MeterOscopeApp {
         };
         // Capture caméra ou image pivotée/retournée : le projet doit pointer
         // vers un fichier identique à l'image mesurée, sans écraser l'original.
-        if self.image_path.is_none() || self.image_modified {
+        if self.image_path.is_none() || self.image_modified() {
             let mut png = path.with_extension("png");
-            if self.image_modified && self.image_path.as_deref() == Some(png.as_path()) {
+            if self.image_modified() && self.image_path.as_deref() == Some(png.as_path()) {
                 png = path.with_file_name(format!("{}-image.png", self.default_stem()));
             }
             let r = io::save_image(self.image.as_ref().unwrap(), &png);
@@ -284,7 +392,7 @@ impl MeterOscopeApp {
                 return;
             }
             self.image_path = Some(png);
-            self.image_modified = false;
+            self.file_orientation = self.applied;
         }
         let project = io::Project { image_path: self.image_path.clone(), document: self.doc.clone() };
         if self.report(io::save_project(&project, &path), tr!("msg.project_saved")).is_some() {
@@ -300,22 +408,28 @@ impl MeterOscopeApp {
         }
     }
 
+    /// Exporte l'image annotée telle que la vue la montre, redressement compris
+    /// (avec le filtre choisi, ou celui par défaut si l'affichage pivote par
+    /// la carte graphique).
     fn export_image(&mut self) {
+        self.sync_orientation();
         let Some(img) = &self.image else { return };
         if let Some(p) = self.save_dialog(tr!("dialog.export_image"), tr!("file.measurements_suffix"), "png") {
             let base = io::adjust(img, self.brightness, self.contrast);
-            let r = io::save_image(&io::render_annotated(&base, &self.doc), &p);
+            let r = io::save_image(&io::render_view(&base, &self.doc, self.filter.unwrap_or_default()), &p);
             self.report(r, tr!("msg.image_exported"));
         }
     }
 
-    fn transform(&mut self, ctx: &egui::Context, t: io::Transform) {
+    /// Quart de tour ou miroir : pixels, mesures et redressement changent
+    /// ensemble, en une seule étape d'historique.
+    fn transform(&mut self, t: io::Transform) {
+        self.sync_orientation();
         if let Some(img) = &self.image {
-            self.image = Some(io::apply_transform(img, &mut self.doc, t));
-            self.straight = None;
-            self.image_modified = true;
+            self.image = Some(Arc::new(io::apply_transform(img, &mut self.doc, t)));
+            self.applied = self.doc.orientation;
+            self.pixels_changed();
             self.canvas.fit();
-            self.refresh_texture(ctx);
         }
     }
 
@@ -431,7 +545,7 @@ impl MeterOscopeApp {
                         (format!("⇅  {}", tr!("image.flip_v")), io::Transform::FlipVertical),
                     ] {
                         if ui.button(label).clicked() {
-                            self.transform(&ctx, t);
+                            self.transform(t);
                         }
                     }
                     ui.separator();
@@ -607,14 +721,14 @@ impl eframe::App for MeterOscopeApp {
             }
             Mode::Image if self.image.is_none() => self.welcome(ui),
             Mode::Image => {
-                // Redressement ou filtre changé (outil, annulation, projet ouvert…).
-                if self.wanted_key() != self.texture_key {
-                    self.refresh_texture(&ctx);
-                }
+                // Quart de tour ou miroir annulé, redressement ou filtre changé
+                // (outil, annulation, projet ouvert…).
+                self.sync_orientation();
+                self.update_texture(&ctx);
                 let size = self.image.as_ref().map(|i| [i.width() as usize, i.height() as usize]).unwrap();
                 let out = self.canvas.show(ui, &mut self.doc, self.texture.as_ref().map(|t| (t, size)));
                 cursor = out.cursor;
-                if self.wanted_key() != self.texture_key {
+                if self.texture_pending() {
                     ctx.request_repaint();
                 }
                 if let Some((a, b)) = out.calibration_segment {

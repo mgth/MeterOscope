@@ -20,9 +20,12 @@ use std::path::{Path, PathBuf};
 
 pub use image_io::can_save_extension;
 pub use project::PROJECT_FORMAT_VERSION;
-pub use rotate::{RotationFilter, rotate_image, rotated_dimensions};
+pub use rotate::{
+    Frame, RotationFilter, Straightened, WORK_BUDGET, reduced_size, rotate_image, rotated_dimensions, rotation_work_bytes, straighten,
+    straighten_scale,
+};
 pub use table::format_precise;
-pub use transform::transform_point;
+pub use transform::{orient_image, sync_orientation, transform_point};
 
 /// Extensions d'image acceptées à l'ouverture (minuscules, sans point).
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp", "gif"];
@@ -80,6 +83,18 @@ pub fn render_annotated(image: &RgbaImage, doc: &Document) -> RgbaImage {
     render::render_annotated(image, doc)
 }
 
+/// Image annotée telle que la vue la montre : la photo est redressée de
+/// `doc.rotation` avec `filter` et les mesures y sont reportées (une ligne
+/// redressée à l'horizontale l'est aussi dans le fichier exporté). Sans
+/// redressement, identique à [`render_annotated`].
+pub fn render_view(image: &RgbaImage, doc: &Document, filter: RotationFilter) -> RgbaImage {
+    if doc.rotation == 0.0 {
+        return render::render_annotated(image, doc);
+    }
+    let s = rotate::straighten(image, doc.rotation, filter, u32::MAX, WORK_BUDGET);
+    render::render_annotated_in(&s.image, doc, Some(&s.frame))
+}
+
 /// Transformations géométriques de l'image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transform {
@@ -90,7 +105,9 @@ pub enum Transform {
 }
 
 /// Applique la transformation à l'image ET aux points des mesures du document
-/// (avec `checkpoint`), pour que les mesures restent en place.
+/// (avec `checkpoint`), pour que les mesures restent en place. L'orientation
+/// du document suit : après une annulation, [`sync_orientation`] remet les
+/// pixels en accord avec lui.
 pub fn apply_transform(image: &RgbaImage, doc: &mut Document, t: Transform) -> RgbaImage {
     transform::apply_transform(image, doc, t)
 }

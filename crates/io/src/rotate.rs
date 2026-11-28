@@ -14,6 +14,7 @@
 //! englobante dont le coin haut-gauche est l'origine.
 
 use image::{RgbaImage, imageops};
+use meteroscope_core::Pt;
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -348,6 +349,16 @@ fn bspline_prefilter(buf: &mut [Px], w: usize, h: usize) {
                     sum += zn * p[c];
                     zn *= POLE;
                 }
+                if w < HORIZON {
+                    // Ligne courte : les termes réfléchis par le bord opposé
+                    // comptent encore. Somme exacte sur une période du signal
+                    // en miroir (2w − 2 échantillons), puis série géométrique.
+                    for p in line[1..w - 1].iter().rev() {
+                        sum += zn * p[c];
+                        zn *= POLE;
+                    }
+                    sum /= 1.0 - zn;
+                }
                 line[0][c] = sum * 6.0;
                 for k in 1..w {
                     line[k][c] = line[k][c] * 6.0 + POLE * line[k - 1][c];
@@ -372,9 +383,23 @@ fn bspline_prefilter(buf: &mut [Px], w: usize, h: usize) {
             }
             zn *= POLE;
         }
+        // Colonne courte : même amorce exacte que pour les lignes.
+        let mut gain = 6.0;
+        if h < HORIZON {
+            for k in (1..h - 1).rev() {
+                let (first, rest) = buf.split_at_mut(w);
+                for (a, b) in first.iter_mut().zip(&rest[(k - 1) * w..k * w]) {
+                    for c in 0..4 {
+                        a[c] += zn * b[c];
+                    }
+                }
+                zn *= POLE;
+            }
+            gain /= 1.0 - zn;
+        }
         for a in &mut buf[..w] {
             for v in a {
-                *v *= 6.0;
+                *v *= gain;
             }
         }
         for y in 1..h {
@@ -452,6 +477,11 @@ fn shift_line(src: &[Px], shift: f64, out: &mut [Px]) {
     }
 }
 
+/// Largeur de l'image après le premier cisaillement.
+fn shear_width(g: &Geo) -> usize {
+    (g.w as f64 + (g.theta / 2.0).tan().abs() * g.h as f64).ceil() as usize
+}
+
 /// Rotation de Paeth : R(θ) = Cx(a) · Cy(b) · Cx(a), avec a = −tan(θ/2) et
 /// b = sin θ. Chaque cisaillement ne fait que translater des lignes (ou des
 /// colonnes) d'une fraction de pixel : trois interpolations 1D.
@@ -462,7 +492,7 @@ fn rotate_shear(src: Vec<Px>, g: &Geo) -> RgbaImage {
     let (wf, hf) = (w as f64, h as f64);
 
     // 1. Cisaillement horizontal : image w1 × h, centrée.
-    let w1 = (wf + a.abs() * hf).ceil() as usize;
+    let w1 = shear_width(g);
     let w1f = w1 as f64;
     let mut s1 = vec![[0f32; 4]; w1 * h];
     par_lines(&mut s1, w1, |j, out| {
@@ -507,6 +537,140 @@ pub fn rotated_dimensions(w: u32, h: u32, deg: f64) -> (u32, u32) {
     }
     let g = Geo::new(w as usize, h as usize, rest);
     (g.ow as u32, g.oh as u32)
+}
+
+/// Octets de travail au plus fort de [`rotate_image`] pour une image `w` × `h`
+/// (tampons en lumière linéaire, images intermédiaires et image produite),
+/// sans rien allouer. Les trois cisaillements passent par une image
+/// intermédiaire bien plus grande que la source sur un panorama très penché.
+pub fn rotation_work_bytes(w: u32, h: u32, deg: f64, filter: RotationFilter) -> u64 {
+    const PX: u64 = size_of::<Px>() as u64;
+    let (quarters, rest) = split_angle(deg);
+    let (w, h) = if quarters % 2 == 1 { (h, w) } else { (w, h) };
+    let pixels = w as u64 * h as u64;
+    let turned = if quarters != 0 { 4 * pixels } else { 0 };
+    if rest == 0.0 || pixels == 0 {
+        return turned;
+    }
+    let g = Geo::new(w as usize, h as usize, rest);
+    let out = 4 * g.ow as u64 * g.oh as u64;
+    let src = PX * pixels;
+    let peak = match filter {
+        RotationFilter::Bicubic | RotationFilter::Lanczos3 => src + out,
+        // Copie des échantillons gardée pour les bornes.
+        RotationFilter::BSpline => 2 * src + out,
+        RotationFilter::Shear => {
+            let w1 = shear_width(&g) as u64;
+            let (s1, s2) = (PX * w1 * h as u64, PX * w1 * g.oh as u64);
+            (src + s1).max(s1 + s2).max(s2 + out)
+        }
+    };
+    peak.max(turned + src)
+}
+
+/// Budget de travail par défaut du redressement : large pour une photo de
+/// 24 Mpx avec le filtre le plus gourmand, loin de ce qui ferme l'application
+/// sur une machine peu dotée.
+pub const WORK_BUDGET: u64 = 1536 << 20;
+
+/// Taille d'une image `w` × `h` réduite d'un facteur `s` ≤ 1, et le facteur
+/// réellement obtenu. Le grand côté fixe le facteur ; le petit côté est
+/// arrondi au plus près de ce facteur, pour que les deux axes gardent la même
+/// échelle à une fraction de pixel réduit près (un facteur pris sur le petit
+/// côté d'un scan étroit décalerait le grand de plusieurs centaines de pixels).
+pub fn reduced_size(w: u32, h: u32, s: f64) -> (u32, u32, f64) {
+    if s.is_nan() || s >= 1.0 || w == 0 || h == 0 {
+        return (w, h, 1.0);
+    }
+    let long = w.max(h);
+    let reduced = ((long as f64 * s).floor() as u32).clamp(1, long);
+    let k = reduced as f64 / long as f64;
+    let side = |v: u32| ((v as f64 * k).round() as u32).max(1);
+    (side(w), side(h), k)
+}
+
+/// Plus grand facteur de réduction (≤ 1) pour lequel l'image redressée tient
+/// dans une texture de côté `max_side` et son calcul dans `budget` octets.
+pub fn straighten_scale(w: u32, h: u32, deg: f64, filter: RotationFilter, max_side: u32, budget: u64) -> f64 {
+    let fits = |s: f64| {
+        let (rw, rh, _) = reduced_size(w, h, s);
+        let (ow, oh) = rotated_dimensions(rw, rh, deg);
+        ow.max(oh) <= max_side.max(1) && rotation_work_bytes(rw, rh, deg, filter) <= budget
+    };
+    if w == 0 || h == 0 || fits(1.0) {
+        return 1.0;
+    }
+    let (bw, bh) = rotated_dimensions(w, h, deg);
+    let by_side = max_side.max(1) as f64 / bw.max(bh) as f64;
+    let by_memory = (budget as f64 / rotation_work_bytes(w, h, deg, filter).max(1) as f64).sqrt();
+    let mut s = by_side.min(by_memory).min(1.0);
+    while !fits(s) && s > 1e-4 {
+        s *= 0.98;
+    }
+    s
+}
+
+/// Repère d'une image produite par [`straighten`] : où tombe un point de
+/// l'image d'origine. Même formule que l'affichage (`Xf::rotated` du canevas),
+/// q = k·R·(p − centre) + boîte/2.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    cos: f64,
+    sin: f64,
+    center: (f64, f64),
+    half: (f64, f64),
+    /// Pixels de l'image redressée par pixel de l'image d'origine (≤ 1).
+    pub scale: f64,
+    /// Angle du redressement, en degrés.
+    pub deg: f64,
+}
+
+impl Frame {
+    fn new(size: (u32, u32), reduced: (u32, u32), scale: f64, deg: f64) -> Self {
+        let (sin, cos) = deg.to_radians().sin_cos();
+        let (rw, rh) = (reduced.0 as f64, reduced.1 as f64);
+        Self {
+            cos,
+            sin,
+            center: (size.0 as f64 / 2.0, size.1 as f64 / 2.0),
+            half: ((cos.abs() * rw + sin.abs() * rh) / 2.0, (sin.abs() * rw + cos.abs() * rh) / 2.0),
+            scale,
+            deg,
+        }
+    }
+
+    /// Position, dans l'image redressée, du point `p` de l'image d'origine.
+    pub fn map(&self, p: Pt) -> Pt {
+        let (dx, dy) = (p.x - self.center.0, p.y - self.center.1);
+        Pt::new(
+            self.scale * (self.cos * dx - self.sin * dy) + self.half.0,
+            self.scale * (self.sin * dx + self.cos * dy) + self.half.1,
+        )
+    }
+}
+
+/// Image redressée et son repère.
+pub struct Straightened {
+    pub image: RgbaImage,
+    pub frame: Frame,
+}
+
+/// Redresse `image` de `deg` degrés pour l'affichage ou l'export : comme
+/// [`rotate_image`], mais l'image est d'abord réduite si le résultat ne
+/// tiendrait pas dans une texture de côté `max_side` ou si le calcul
+/// demanderait plus de `budget` octets.
+pub fn straighten(image: &RgbaImage, deg: f64, filter: RotationFilter, max_side: u32, budget: u64) -> Straightened {
+    let (w, h) = image.dimensions();
+    let s = straighten_scale(w, h, deg, filter, max_side, budget);
+    let (rw, rh, k) = reduced_size(w, h, s);
+    let small;
+    let source = if k < 1.0 {
+        small = imageops::resize(image, rw, rh, imageops::FilterType::Triangle);
+        &small
+    } else {
+        image
+    };
+    Straightened { image: rotate_image(source, deg, filter), frame: Frame::new((w, h), (rw, rh), k, deg) }
 }
 
 /// Décompose un angle en quarts de tour (0 à 3) et un reste dans [-45°, 45°].
@@ -736,5 +900,144 @@ mod tests {
         }
         let empty = RgbaImage::new(0, 0);
         assert_eq!(rotate_image(&empty, 12.0, RotationFilter::Shear).dimensions(), (0, 0));
+    }
+
+    #[test]
+    fn bspline_interpolates_short_lines_exactly() {
+        // Préfiltre puis noyau aux positions entières : on doit retrouver les
+        // échantillons, y compris quand la ligne est plus courte que l'amorce.
+        for (w, h) in [(1usize, 1usize), (2, 1), (1, 2), (2, 2), (2, 40), (40, 2), (3, 5), (7, 4), (31, 33), (40, 40)] {
+            let samples: Vec<Px> = (0..w * h).map(|i| [((i * 37 + 11) % 17) as f32 / 16.0, (i % 2) as f32, ((i / w) % 2) as f32, 1.0]).collect();
+            let mut coef = samples.clone();
+            bspline_prefilter(&mut coef, w, h);
+            let k = bspline(0.0);
+            for y in 0..h {
+                for x in 0..w {
+                    for c in 0..4 {
+                        let mut v = 0.0;
+                        for (ky, wy) in k.iter().enumerate() {
+                            for (kx, wx) in k.iter().enumerate() {
+                                let (sx, sy) = (mirror(x as isize + kx as isize - 1, w), mirror(y as isize + ky as isize - 1, h));
+                                v += wx * wy * coef[sy * w + sx][c];
+                            }
+                        }
+                        assert!((v - samples[y * w + x][c]).abs() < 2e-5, "{w}×{h} ({x}, {y}) : {v} ≠ {}", samples[y * w + x][c]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bspline_keeps_a_two_pixel_wide_image() {
+        // Colonne gauche noire, colonne droite blanche : une rotation infime
+        // ne doit rien changer (l'amorce tronquée donnait 38 au lieu de 0).
+        let img = RgbaImage::from_fn(2, 40, |x, _| if x == 0 { Rgba([0, 0, 0, 255]) } else { Rgba([255, 255, 255, 255]) });
+        let out = rotate_image(&img, 0.000_001, RotationFilter::BSpline);
+        assert_eq!(out.dimensions(), (2, 40));
+        for y in [1, 20, 38] {
+            assert_eq!((out.get_pixel(0, y).0, out.get_pixel(1, y).0), ([0, 0, 0, 255], [255, 255, 255, 255]), "ligne {y}");
+        }
+        let tall = RgbaImage::from_fn(40, 2, |_, y| if y == 0 { Rgba([0, 0, 0, 255]) } else { Rgba([255, 255, 255, 255]) });
+        let out = rotate_image(&tall, 0.000_001, RotationFilter::BSpline);
+        assert_eq!((out.get_pixel(20, 0).0, out.get_pixel(20, 1).0), ([0, 0, 0, 255], [255, 255, 255, 255]));
+    }
+
+    #[test]
+    fn shear_budget_is_known_without_allocating() {
+        // Panorama de 16 000 × 100 px à 44° : 6 Mio de source, mais 2,67 Gio
+        // pour l'image intermédiaire du deuxième cisaillement.
+        let (w, h, deg) = (16_000u32, 100u32, 44.0);
+        let shear = rotation_work_bytes(w, h, deg, RotationFilter::Shear);
+        assert_eq!(rotated_dimensions(w, h, deg), (11_579, 11_187));
+        assert!(shear >= 16_041 * 11_187 * 16, "{shear}");
+        assert!(shear < 4 << 30);
+        // Les filtres directs n'ont besoin que de la source et de la sortie.
+        let direct = rotation_work_bytes(w, h, deg, RotationFilter::Lanczos3);
+        assert_eq!(direct, 16_000 * 100 * 16 + 11_579 * 11_187 * 4);
+        assert_eq!(rotation_work_bytes(w, h, deg, RotationFilter::BSpline), direct + 16_000 * 100 * 16);
+        assert_eq!(rotation_work_bytes(w, h, 0.0, RotationFilter::Shear), 0);
+        assert_eq!(rotation_work_bytes(w, h, 90.0, RotationFilter::Shear), 16_000 * 100 * 4);
+
+        // Dans le budget : pleine résolution pour les filtres directs, réduite
+        // juste ce qu'il faut pour les cisaillements.
+        let side = 16_384;
+        assert_eq!(straighten_scale(w, h, deg, RotationFilter::Lanczos3, side, WORK_BUDGET), 1.0);
+        let s = straighten_scale(w, h, deg, RotationFilter::Shear, side, WORK_BUDGET);
+        assert!(s < 1.0 && s > 0.6, "{s}");
+        let (rw, rh, _) = reduced_size(w, h, s);
+        let used = rotation_work_bytes(rw, rh, deg, RotationFilter::Shear);
+        assert!(used <= WORK_BUDGET && used > WORK_BUDGET / 10 * 8, "{used}");
+        // Une photo de 24 Mpx reste entière avec tous les filtres.
+        for f in RotationFilter::ALL {
+            assert_eq!(straighten_scale(6000, 4000, 6.0, f, side, WORK_BUDGET), 1.0, "{f:?}");
+        }
+        // Limite de texture seule.
+        let s = straighten_scale(6000, 4000, 6.0, RotationFilter::Bicubic, 4096, WORK_BUDGET);
+        let (rw, rh, _) = reduced_size(6000, 4000, s);
+        let (ow, oh) = rotated_dimensions(rw, rh, 6.0);
+        assert!(ow <= 4096 && oh <= 4096 && ow > 4000, "{ow} × {oh}");
+    }
+
+    #[test]
+    fn reduced_size_keeps_one_scale_on_both_axes() {
+        assert_eq!(reduced_size(101, 16_000, 1.0), (101, 16_000, 1.0));
+        assert_eq!(reduced_size(101, 16_000, 2.0), (101, 16_000, 1.0));
+        for (w, h, s) in [(101u32, 16_000u32, 0.5145), (16_000, 101, 0.5145), (3, 9000, 0.1), (4000, 3000, 0.37), (1, 5000, 0.3)] {
+            let (rw, rh, k) = reduced_size(w, h, s);
+            assert!(k <= s && k > s - 1.0 / w.max(h) as f64, "{w}×{h} : {k}");
+            // Chaque axe à moins d'un demi-pixel réduit de l'échelle commune.
+            assert!((rw as f64 - w as f64 * k).abs() <= 0.5 || rw == 1, "{w}×{h} → {rw}");
+            assert!((rh as f64 - h as f64 * k).abs() <= 0.5 || rh == 1, "{w}×{h} → {rh}");
+        }
+    }
+
+    #[test]
+    fn marks_stay_under_measurements_on_a_reduced_narrow_scan() {
+        // Scan étroit de 101 × 16 000 px redressé de 6° pour un GPU limité à
+        // 8 192 px : un repère près du haut et un près du bas doivent tomber
+        // là où le canevas dessine les mesures, soit, dans la texture étalée
+        // sur (taille / échelle), en k·(R·(p − c) + boîte/2).
+        let (w, h, deg) = (101u32, 16_000u32, 6.0f64);
+        let marks = [(40.0, 300.0), (60.0, 15_700.0)];
+        let t = tables();
+        let img = RgbaImage::from_fn(w, h, |x, y| {
+            let v = marks
+                .iter()
+                .map(|(cx, cy)| {
+                    let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
+                    (-(dx * dx + dy * dy) / (2.0 * 6.0 * 6.0)).exp()
+                })
+                .fold(0.0, f64::max);
+            let v = t.encode(v as f32);
+            Rgba([v, v, v, 255])
+        });
+        let out = straighten(&img, deg, RotationFilter::Lanczos3, 8192, WORK_BUDGET);
+        let k = out.frame.scale;
+        assert!(k < 0.52 && out.image.width().max(out.image.height()) <= 8192, "{k}");
+        let (s, c) = deg.to_radians().sin_cos();
+        let (bw, bh) = (c.abs() * w as f64 + s.abs() * h as f64, s.abs() * w as f64 + c.abs() * h as f64);
+        let half = out.image.height() / 2;
+        for (n, (px, py)) in marks.into_iter().enumerate() {
+            let (dx, dy) = (px - w as f64 / 2.0, py - h as f64 / 2.0);
+            let (ex, ey) = (k * (c * dx - s * dy + bw / 2.0), k * (s * dx + c * dy + bh / 2.0));
+            // Barycentre du repère, cherché dans sa moitié de l'image.
+            let (mut sx, mut sy, mut sm) = (0.0, 0.0, 0.0);
+            let rows = if n == 0 { 0..half } else { half..out.image.height() };
+            for y in rows {
+                for x in 0..out.image.width() {
+                    let p = out.image.get_pixel(x, y);
+                    let m = t.to_linear[p[0] as usize] as f64 * p[3] as f64;
+                    sx += m * (x as f64 + 0.5);
+                    sy += m * (y as f64 + 0.5);
+                    sm += m;
+                }
+            }
+            let (gx, gy) = (sx / sm, sy / sm);
+            assert!((gx - ex).abs() < 0.5 && (gy - ey).abs() < 0.5, "repère {n} : ({gx:.2}, {gy:.2}) ≠ ({ex:.2}, {ey:.2})");
+            // Le repère du module donne la même position.
+            let q = out.frame.map(Pt::new(px, py));
+            assert!((q.x - ex).abs() < 0.5 && (q.y - ey).abs() < 0.5);
+        }
     }
 }
