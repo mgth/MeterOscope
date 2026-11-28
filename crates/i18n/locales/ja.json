@@ -405,7 +405,7 @@
   "toolbar.export_pdf_tip": "A4 ページ：注釈付き画像、スケール、測定値、統計",
   "toolbar.export_svg": "注釈付き画像（SVG）…",
   "toolbar.export_svg_linked": "画像をリンクした SVG…",
-  "toolbar.export_svg_linked_off": "変更なしでファイルに保存された画像のみ",
+  "toolbar.export_svg_linked_off": "変更なしでファイルに保存され、遠近補正していない画像のみ",
   "toolbar.export_svg_linked_tip": "ディスク上の写真を参照する軽いファイル（明るさ・コントラストの調整は反映されません）",
   "toolbar.export_svg_tip": "写真の上にベクター形式の測定（写真はファイルに埋め込み）。Inkscape や Illustrator で編集できます",
   "toolbar.image": "画像",

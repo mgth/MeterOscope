@@ -405,7 +405,7 @@
   "toolbar.export_pdf_tip": "Páginas A4: imagem anotada, escala, medidas e estatísticas",
   "toolbar.export_svg": "Imagem anotada em SVG…",
   "toolbar.export_svg_linked": "SVG com a imagem vinculada…",
-  "toolbar.export_svg_linked_off": "Só para uma imagem salva sem alterações em um arquivo",
+  "toolbar.export_svg_linked_off": "Só para uma imagem salva sem alterações em um arquivo, sem correção de perspectiva",
   "toolbar.export_svg_linked_tip": "Arquivo leve que aponta para a foto no disco (sem os ajustes de brilho e contraste)",
   "toolbar.export_svg_tip": "Medidas vetoriais sobre a foto, incorporada ao arquivo: editáveis no Inkscape ou Illustrator",
   "toolbar.image": "Imagem",

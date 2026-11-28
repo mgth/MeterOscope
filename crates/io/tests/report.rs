@@ -157,3 +157,30 @@ fn svg_nouvelles_formes() {
         meteroscope_io::render_annotated(&img, &doc).save(std::path::Path::new(&dir).join("nouvelles-formes.png")).unwrap();
     }
 }
+
+/// Après une correction de perspective, les mesures sont dans le repère de
+/// l'image corrigée : c'est elle qui sert de fond (comme l'application le fait
+/// avec son image de travail), pas la photo brute.
+#[test]
+fn exports_apres_correction_de_perspective() {
+    meteroscope_i18n::set_language("fr");
+    let img = photo(800, 600);
+    let mut doc = Document::new();
+    let quad = [Pt::new(150., 120.), Pt::new(620., 180.), Pt::new(560., 470.), Pt::new(90., 380.)];
+    assert!(doc.correct_perspective(quad, img.dimensions(), Some((200.0, 100.0, "mm"))));
+    let flat = warp_perspective(&img, doc.perspective.as_ref().unwrap(), RotationFilter::Bicubic).unwrap();
+    let (w, h) = flat.dimensions();
+    assert_ne!((w, h), (800, 600));
+    // Une mesure près du coin opposé de l'image corrigée.
+    doc.add(Shape::Length { a: Pt::new(w as f64 - 60.0, h as f64 - 20.0), b: Pt::new(w as f64 - 10.0, h as f64 - 20.0) });
+
+    let svg = svg_string(&flat, &doc, &SvgBackground::Embedded).unwrap();
+    let x = roxmltree::Document::parse(&svg).unwrap();
+    assert_eq!(x.root_element().attribute("viewBox"), Some(format!("0 0 {w} {h}").as_str()));
+    let image = x.descendants().find(|n| n.has_tag_name("image")).unwrap();
+    assert_eq!((image.attribute("width"), image.attribute("height")), (Some(w.to_string().as_str()), Some(h.to_string().as_str())));
+
+    let info = ReportInfo { title: "Rapport".into(), image_name: "biais.png".into(), date: today() };
+    let pdf = pdf_report(&flat, &doc, RotationFilter::Bicubic, &info).unwrap();
+    assert!(pdf.starts_with(b"%PDF-1."));
+}

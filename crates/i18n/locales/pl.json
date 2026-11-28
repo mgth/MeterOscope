@@ -405,7 +405,7 @@
   "toolbar.export_pdf_tip": "Strony A4: obraz z adnotacjami, skala, pomiary i statystyki",
   "toolbar.export_svg": "Obraz z adnotacjami jako SVG…",
   "toolbar.export_svg_linked": "SVG z połączonym obrazem…",
-  "toolbar.export_svg_linked_off": "Tylko dla obrazu zapisanego bez zmian w pliku",
+  "toolbar.export_svg_linked_off": "Tylko dla obrazu zapisanego bez zmian w pliku, bez korekcji perspektywy",
   "toolbar.export_svg_linked_tip": "Mały plik odwołujący się do zdjęcia na dysku (bez ustawień jasności i kontrastu)",
   "toolbar.export_svg_tip": "Wektorowe pomiary na zdjęciu osadzonym w pliku: do edycji w Inkscape lub Illustratorze",
   "toolbar.image": "Obraz",

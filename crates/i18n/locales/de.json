@@ -405,7 +405,7 @@
   "toolbar.export_pdf_tip": "A4-Seiten: beschriftetes Bild, Maßstab, Messungen und Statistik",
   "toolbar.export_svg": "Beschriftetes Bild als SVG…",
   "toolbar.export_svg_linked": "SVG mit verknüpftem Bild…",
-  "toolbar.export_svg_linked_off": "Nur für ein unverändert in einer Datei gespeichertes Bild",
+  "toolbar.export_svg_linked_off": "Nur für ein unverändert in einer Datei gespeichertes Bild ohne Perspektivkorrektur",
   "toolbar.export_svg_linked_tip": "Kleine Datei, die auf das Foto auf der Festplatte verweist (ohne Helligkeit- und Kontrasteinstellungen)",
   "toolbar.export_svg_tip": "Vektorielle Messungen über dem Foto, das in die Datei eingebettet ist: in Inkscape oder Illustrator bearbeitbar",
   "toolbar.image": "Bild",

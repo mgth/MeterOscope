@@ -405,7 +405,7 @@
   "toolbar.export_pdf_tip": "A4 pages: annotated image, scale, measurements and statistics",
   "toolbar.export_svg": "Annotated image as SVG…",
   "toolbar.export_svg_linked": "SVG with linked image…",
-  "toolbar.export_svg_linked_off": "Only for an image saved unchanged in a file",
+  "toolbar.export_svg_linked_off": "Only for an image saved unchanged in a file, without perspective correction",
   "toolbar.export_svg_linked_tip": "Small file that refers to the photo on disk (brightness and contrast settings are not applied to it)",
   "toolbar.export_svg_tip": "Vector measurements over the photo, embedded in the file: edit them in Inkscape or Illustrator",
   "toolbar.image": "Image",

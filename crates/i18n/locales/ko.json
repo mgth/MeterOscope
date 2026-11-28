@@ -405,7 +405,7 @@
   "toolbar.export_pdf_tip": "A4 페이지: 주석 이미지, 축척, 측정값, 통계",
   "toolbar.export_svg": "주석 이미지(SVG)…",
   "toolbar.export_svg_linked": "이미지를 연결한 SVG…",
-  "toolbar.export_svg_linked_off": "변경 없이 파일로 저장된 이미지에만 해당",
+  "toolbar.export_svg_linked_off": "변경 없이 파일로 저장되고 원근 보정을 하지 않은 이미지에만 해당",
   "toolbar.export_svg_linked_tip": "디스크의 사진을 참조하는 가벼운 파일(밝기·대비 설정은 적용되지 않음)",
   "toolbar.export_svg_tip": "사진 위의 벡터 측정(사진은 파일에 포함). Inkscape나 Illustrator에서 편집할 수 있습니다",
   "toolbar.image": "이미지",

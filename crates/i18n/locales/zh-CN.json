@@ -405,7 +405,7 @@
   "toolbar.export_pdf_tip": "A4 页面：标注图像、比例尺、测量结果和统计",
   "toolbar.export_svg": "标注图像（SVG）…",
   "toolbar.export_svg_linked": "链接图像的 SVG…",
-  "toolbar.export_svg_linked_off": "仅适用于原样保存在文件中的图像",
+  "toolbar.export_svg_linked_off": "仅适用于原样保存在文件中且未做透视校正的图像",
   "toolbar.export_svg_linked_tip": "引用磁盘上照片的小文件（不包含亮度和对比度调整）",
   "toolbar.export_svg_tip": "照片上的矢量测量（照片嵌入文件），可在 Inkscape 或 Illustrator 中编辑",
   "toolbar.image": "图像",
