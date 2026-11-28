@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 
 mod live;
 mod export;
+mod series;
+pub(crate) use series::SeriesState;
 
 #[derive(PartialEq)]
 enum Mode {
@@ -44,8 +46,8 @@ pub struct MeterOscopeApp {
     /// L'image en mémoire diffère du fichier `image_path` (pivotée, retournée).
     image_modified: bool,
     project_path: Option<PathBuf>,
-    /// Révision du document au dernier enregistrement.
-    saved_revision: u64,
+    /// Série d'images du projet ; `doc` et `image` sont ceux de l'image affichée.
+    series: series::SeriesState,
     brightness: f32,
     contrast: f32,
     canvas: Canvas,
@@ -111,7 +113,7 @@ impl MeterOscopeApp {
             image_path: None,
             image_modified: false,
             project_path: None,
-            saved_revision: 0,
+            series: series::SeriesState::default(),
             brightness: 0.0,
             contrast: 0.0,
             canvas: Canvas::default(),
@@ -270,8 +272,9 @@ impl MeterOscopeApp {
         self.image_modified = false;
         self.project_path = None;
         self.doc = Document::new();
+        self.series_restart(ctx);
+        // Après : la série repart d'un document neuf.
         self.doc.calibration = calibration;
-        self.saved_revision = 0;
         self.brightness = 0.0;
         self.contrast = 0.0;
         self.canvas.set_tool(Tool::Select);
@@ -287,7 +290,7 @@ impl MeterOscopeApp {
             image_modified: self.image_modified,
             project_path: self.project_path.take(),
             doc: std::mem::take(&mut self.doc),
-            saved_revision: self.saved_revision,
+            series: self.series_take(),
             brightness: self.brightness,
             contrast: self.contrast,
         })
@@ -302,7 +305,7 @@ impl MeterOscopeApp {
         self.image_modified = w.image_modified;
         self.project_path = w.project_path;
         self.doc = w.doc;
-        self.saved_revision = w.saved_revision;
+        self.series_put(w.series);
         self.brightness = w.brightness;
         self.contrast = w.contrast;
         self.mode_image();
@@ -322,20 +325,21 @@ impl MeterOscopeApp {
     }
 
     fn can_undo(&self) -> bool {
-        self.doc.can_undo() || (self.images_undoable() && self.history.can_undo())
+        self.series_can_undo() || (self.images_undoable() && self.history.can_undo())
     }
     fn can_redo(&self) -> bool {
-        self.doc.can_redo()
-            || (self.images_undoable() && self.history.can_redo_with(self.doc.revision(), || crate::history::doc_key(&self.doc)))
+        self.series_can_redo()
+            || (self.images_undoable() && self.history.can_redo_with(self.series_revision(), || Self::series_key(&self.series, &self.doc)))
     }
 
-    /// Annule dans le document, puis, son historique épuisé, le remplacement d'image.
+    /// Annule dans le document ou la série, puis, leur historique épuisé, le
+    /// remplacement d'image.
     fn undo(&mut self, ctx: &egui::Context) {
-        if self.doc.undo() || !self.images_undoable() || !self.history.can_undo() {
+        if self.series_undo(ctx) || !self.images_undoable() || !self.history.can_undo() {
             return;
         }
         let Some(current) = self.take_workspace() else { return };
-        match self.history.undo(current, |w| crate::history::doc_key(&w.doc)) {
+        match self.history.undo(current, |w| Self::series_key(&w.series, &w.doc)) {
             Ok(previous) => {
                 self.put_workspace(ctx, previous);
                 self.info(tr!("msg.image_restored"));
@@ -345,11 +349,11 @@ impl MeterOscopeApp {
     }
 
     fn redo(&mut self, ctx: &egui::Context) {
-        if self.doc.redo() || !self.images_undoable() {
+        if self.series_redo(ctx) || !self.images_undoable() {
             return;
         }
         // Empreinte recalculée : un glisser modifie le document sans changer sa révision.
-        let key = crate::history::doc_key(&self.doc);
+        let key = Self::series_key(&self.series, &self.doc);
         if !self.history.can_redo(&key) {
             return;
         }
@@ -368,8 +372,7 @@ impl MeterOscopeApp {
     /// L'image fixe a des modifications non enregistrées (en mode caméra, son
     /// document est mis de côté : les mesures du flux ne comptent pas).
     fn is_dirty(&self) -> bool {
-        let doc = if self.mode == Mode::Camera { &self.camera.other_doc } else { &self.doc };
-        doc.revision() != self.saved_revision
+        self.series_dirty()
     }
 
     // ---------- fichiers ----------
@@ -377,20 +380,7 @@ impl MeterOscopeApp {
     fn open_path(&mut self, ctx: &egui::Context, path: &Path) {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         if ext == io::PROJECT_EXTENSION {
-            let Some(project) = self.report(io::load_project(path), "") else { return };
-            self.mode_image();
-            let img = match &project.image_path {
-                Some(p) => self.report(io::load_image(p), ""),
-                None => None,
-            };
-            if let Some(img) = img {
-                self.set_image(ctx, img, project.image_path.clone());
-            }
-            self.doc = project.document;
-            self.detect.invalidate();
-            self.saved_revision = self.doc.revision();
-            self.project_path = Some(path.to_owned());
-            self.settings.add_recent(path);
+            self.series_open_project(ctx, path);
         } else if let Some(img) = self.report(io::load_image(path), "") {
             self.set_image(ctx, img, Some(path.to_owned()));
             self.settings.add_recent(path);
@@ -408,9 +398,9 @@ impl MeterOscopeApp {
             .set_title(tr!("dialog.open_title"))
             .add_filter(tr!("dialog.filter_images"), &all)
             .add_filter(tr!("dialog.filter_all"), &["*"])
-            .pick_file();
-        if let Some(p) = picked {
-            self.open_path(ctx, &p);
+            .pick_files();
+        if let Some(paths) = picked {
+            self.series_open_paths(ctx, paths);
         }
     }
 
@@ -450,26 +440,9 @@ impl MeterOscopeApp {
                 None => return,
             },
         };
-        // Capture caméra ou image pivotée/retournée : le projet doit pointer
-        // vers un fichier identique à l'image mesurée, sans écraser l'original.
-        if self.image_path.is_none() || self.image_modified {
-            let mut png = path.with_extension("png");
-            if self.image_modified && self.image_path.as_deref() == Some(png.as_path()) {
-                png = path.with_file_name(format!("{}-image.png", self.default_stem()));
-            }
-            let r = io::save_image(self.image.as_ref().unwrap(), &png);
-            if self.report(r, "").is_none() {
-                return;
-            }
-            self.image_path = Some(png);
-            self.image_modified = false;
-        }
-        let project = io::Project { image_path: self.image_path.clone(), document: self.doc.clone() };
-        if self.report(io::save_project(&project, &path), tr!("msg.project_saved")).is_some() {
-            self.saved_revision = self.doc.revision();
-            self.settings.add_recent(&path);
-            self.project_path = Some(path);
-        }
+        // Les images sans fichier fidèle (captures, images pivotées) sont
+        // écrites en PNG à côté du projet par la série.
+        self.series_save(&path);
     }
 
     fn export_csv(&mut self) {
@@ -541,6 +514,7 @@ impl MeterOscopeApp {
             self.straight = None;
             self.detect.invalidate();
             self.image_modified = true;
+            self.series_transformed(ctx, t);
             // L'image corrigée suit la photo.
             self.sync_flat();
             self.flat_changed = false;
@@ -577,6 +551,7 @@ impl MeterOscopeApp {
         } else if hit(CTRL, Key::Z) {
             self.undo(ctx);
         }
+        self.series_shortcuts(ctx);
         if hit(CTRL, Key::Num0) {
             self.canvas.fit();
         }
@@ -675,6 +650,7 @@ impl MeterOscopeApp {
                             ui.ctx().copy_text(io::clipboard_table(&self.doc));
                             self.info(tr!("msg.table_copied"));
                         }
+                        self.series_export_menu(ui);
                     });
                 });
                 ui.separator();
@@ -740,6 +716,7 @@ impl MeterOscopeApp {
                         meteroscope_panels::scale_bar_menu(ui, &mut self.doc);
                     });
                 });
+                self.series_menu(ui);
                 let detect = ui.selectable_label(self.detect.is_open(), format!("🔍  {}", tr!("toolbar.detect")));
                 if detect.on_hover_text(tr!("toolbar.detect_tip")).clicked() {
                     self.detect.toggle();
@@ -854,11 +831,10 @@ impl eframe::App for MeterOscopeApp {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        // Fichier glissé-déposé.
-        if let Some(p) = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_owned())) {
-            self.open_path(&ctx, &p);
-        }
+        // Fichiers glissés-déposés (un projet s'ouvre, des images s'ajoutent à la série).
+        self.series_dropped(&ctx);
         self.shortcuts(&ctx);
+        self.series_frame(&ctx);
         let free = !self.calibration.is_open() && self.pending_paste.is_none();
         if let Some(fallback) = crate::clipboard::paste_requested(&ctx, free) {
             self.paste(&ctx, fallback, true);
@@ -876,6 +852,7 @@ impl eframe::App for MeterOscopeApp {
         let cursor_id = egui::Id::unique("meteroscope_cursor");
         let last_cursor: Option<meteroscope_core::Pt> = ctx.data(|d| d.get_temp(cursor_id)).flatten();
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui, last_cursor));
+        self.series_strip(ui);
 
         if show_tools {
             // Profils d'intensité : résultats recalculés sur l'image d'origine,
@@ -896,6 +873,7 @@ impl eframe::App for MeterOscopeApp {
                 }
             });
             egui::Panel::right("measurements").default_size(300.0).show(ui, |ui| {
+                self.series_stats(ui);
                 let out = meteroscope_panels::measurements_panel_with_presets(ui, &mut self.doc, &mut self.scale_presets);
                 if out.presets_changed {
                     crate::prefs::save_scale_presets(&self.scale_presets);

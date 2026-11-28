@@ -15,6 +15,7 @@ mod project;
 mod render;
 mod rotate;
 mod svg;
+mod series;
 mod table;
 mod transform;
 mod upright;
@@ -33,6 +34,10 @@ pub use profile::{measure_profile, profile_csv_string};
 pub use pdf::{ReportInfo, today};
 pub use svg::SvgBackground;
 pub use project::PROJECT_FORMAT_VERSION;
+pub use series::{
+    SERIES_FORMAT_VERSION, SeriesImage, SeriesProject, export_series_csv, image_dimensions, load_series, save_series, series_clipboard_table,
+    series_csv_string, thumbnail,
+};
 pub use rotate::{RotationFilter, rotate_image, rotated_dimensions};
 pub use table::format_precise;
 pub use transform::transform_point;

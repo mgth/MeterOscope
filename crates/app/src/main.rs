@@ -11,6 +11,7 @@ mod prefs;
 mod profile_view;
 mod reticle;
 mod settings;
+mod thumbs;
 
 /// Icône de la fenêtre et de la barre des tâches.
 fn window_icon() -> egui::IconData {
