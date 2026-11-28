@@ -859,6 +859,8 @@ impl MeterOscopeApp {
                         if changed {
                             self.refresh_texture(&ctx);
                         }
+                        ui.separator();
+                        meteroscope_panels::scale_bar_menu(ui, &mut self.doc);
                     });
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

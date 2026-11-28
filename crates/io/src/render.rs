@@ -7,7 +7,8 @@ use ab_glyph::{Font, FontRef, OutlineCurve};
 use image::RgbaImage;
 use crate::rotate::Frame;
 use meteroscope_core::geometry as geo;
-use meteroscope_core::{Document, Pt, Shape};
+use meteroscope_core::scale_bar::TARGET_FRACTION;
+use meteroscope_core::{Corner, Document, Pt, Shape};
 use std::f32::consts::PI;
 use std::sync::OnceLock;
 use tiny_skia::{FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
@@ -591,26 +592,18 @@ impl Painter {
         }
     }
 
-    /// Barre d'échelle en bas à droite.
-    fn scale_bar(&mut self, units_per_px: f64, unit: &str) {
-        if !(units_per_px > 0.0 && units_per_px.is_finite()) {
-            return;
-        }
-        let target = 0.2 * self.w as f64 * units_per_px;
-        let base = 10f64.powf(target.log10().floor());
-        let m = target / base;
-        let nice = base * if m >= 5.0 { 5.0 } else if m >= 2.0 { 2.0 } else { 1.0 };
-        let len = (nice / units_per_px) as f32;
-        let text = format!("{} {unit}", crate::table::format_precise(nice));
+    /// Barre d'échelle dans le coin choisi : longueur ronde visant ~17,5 %
+    /// de la largeur de l'image, sur fond sombre pour rester lisible.
+    fn scale_bar(&mut self, units_per_px: f64, unit: &str, corner: Corner) {
+        let Some(bar) = meteroscope_core::scale_bar(units_per_px, unit, self.w as f64 * TARGET_FRACTION) else { return };
+        let len = bar.px as f32;
         let size = self.text;
         let pad = size * 0.5;
         let bar_h = self.line * 1.6;
-        let tw = self.text_width(&text, size);
+        let tw = self.text_width(&bar.label, size);
         let bw = len.max(tw) + 2.0 * pad;
         let bh = size * 1.1 + bar_h + 2.5 * pad;
-        let margin = self.text;
-        let x0 = (self.w - bw - margin).max(0.0);
-        let y0 = (self.h - bh - margin).max(0.0);
+        let (x0, y0) = corner.place((0.0, 0.0, self.w, self.h), (bw, bh), self.text);
         if let Some(r) = rounded_rect(x0, y0, bw, bh, pad * 0.6) {
             self.fill(&r, LABEL_BG);
         }
@@ -626,7 +619,7 @@ impl Painter {
             }
         }
         let baseline = by - pad * 0.9;
-        if let Some(p) = self.text_path(&text, x0 + (bw - tw) / 2.0, baseline, size) {
+        if let Some(p) = self.text_path(&bar.label, x0 + (bw - tw) / 2.0, baseline, size) {
             self.fill(&p, WHITE);
             self.stroke(&p, WHITE, size * 0.035);
         }
@@ -738,8 +731,13 @@ pub fn render_annotated_in(image: &RgbaImage, doc: &Document, frame: Option<&Fra
             None => p.draw(&m.shape, m.color, main, marker_no),
         }
     }
-    if let Some(s) = &doc.calibration.scale {
-        p.scale_bar(s.units_per_px / frame.map_or(1.0, |f| f.scale), &s.unit);
+    // La barre est horizontale dans l'image écrite : la photo telle quelle, ou
+    // redressée (`frame`), dont les pixels valent alors `1 / échelle` pixels
+    // d'origine.
+    if let Some(s) = &doc.calibration.scale
+        && doc.scale_bar.visible
+    {
+        p.scale_bar(s.units_per_px / frame.map_or(1.0, |f| f.scale), &s.unit, doc.scale_bar.corner);
     }
     composite(&mut out, &p.pm);
     out
