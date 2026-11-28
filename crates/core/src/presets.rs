@@ -5,7 +5,7 @@
 //! Le modèle est pur ; la lecture et l'écriture du fichier JSON se font dans
 //! `meteroscope-io`, le fichier lui-même dans le dossier de configuration.
 
-use crate::calibration::{Calibration, Scale};
+use crate::calibration::Scale;
 use serde::{Deserialize, Serialize};
 
 /// Une échelle enregistrée sous un nom.
@@ -18,8 +18,10 @@ pub struct ScalePreset {
 /// Liste des préréglages et option de conservation de l'échelle.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScalePresets {
-    /// Garder l'échelle courante quand on ouvre une nouvelle image ou qu'on
-    /// capture depuis la caméra (un projet reprend toujours la sienne).
+    /// Garder l'échelle en cours pour l'image suivante : celle qui ne suit
+    /// pas l'échelle commune de la série, ou la première d'un nouveau travail
+    /// (un projet reprend toujours la sienne). Appliquée par
+    /// [`crate::Series::add_with`], seul endroit où une image reçoit son échelle.
     #[serde(default)]
     pub keep_scale: bool,
     #[serde(default)]
@@ -85,12 +87,6 @@ impl ScalePresets {
         self.presets.iter().find(|p| same_scale(&p.scale, scale))
     }
 
-    /// Étalonnage d'une nouvelle image : celui en cours si l'option « garder
-    /// l'échelle » est cochée, sinon aucun.
-    pub fn next_calibration(&self, current: &Calibration) -> Calibration {
-        if self.keep_scale { current.clone() } else { Calibration::default() }
-    }
-
     /// Écarte les entrées inutilisables (fichier modifié à la main) : nom
     /// vide, échelle invalide, doublons de nom (le premier est gardé).
     pub fn sanitize(&mut self) {
@@ -153,16 +149,6 @@ mod tests {
         assert_eq!(p.matching(&mm(0.1 + 1e-14)).map(|x| x.name.as_str()), Some("a"));
         assert_eq!(p.matching(&Scale { units_per_px: 0.1, unit: "cm".into() }).map(|x| x.name.as_str()), Some("b"));
         assert!(p.matching(&mm(0.1001)).is_none());
-    }
-
-    #[test]
-    fn garder_l_echelle_pour_l_image_suivante() {
-        let mut current = Calibration::default();
-        current.set_from_reference(100.0, 5.0, "mm");
-        let mut p = ScalePresets::default();
-        assert!(!p.next_calibration(&current).is_calibrated());
-        p.keep_scale = true;
-        assert_eq!(p.next_calibration(&current), current);
     }
 
     #[test]

@@ -25,6 +25,15 @@
 //! l'image active (par n'importe quel moyen) est repéré par
 //! [`Series::observe`], qui la propage ; l'annulation d'un document lié ne
 //! ressuscite jamais une ancienne échelle (elle appartient à la série).
+//!
+//! Une image à perspective corrigée a toujours son échelle propre : ses
+//! pixels ne sont plus ceux de la photo, l'échelle commune n'y vaut rien et
+//! la sienne ne vaut rien ailleurs. Elle ne reçoit ni ne propage rien tant
+//! que la correction est là, et retrouve l'échelle commune quand on la retire.
+//!
+//! « Garder l'échelle pour l'image suivante » passe aussi par ici
+//! ([`Series::carried`], [`Series::add_with`]) : une image ajoutée qui suit
+//! l'échelle commune la reçoit ; sinon elle reçoit l'échelle gardée.
 
 use crate::calibration::Calibration;
 use crate::document::Document;
@@ -38,6 +47,10 @@ const UNDO_LIMIT: usize = 200;
 
 /// Image à ajouter : fichier (ou `None` pour une capture) et dimensions connues.
 pub type NewImage = (Option<PathBuf>, Option<(u32, u32)>);
+
+/// Image à ajouter avec, le cas échéant, un document déjà rempli (capture
+/// du flux caméra, qui emporte ses mesures et son échelle).
+pub type NewEntry = (Option<PathBuf>, Option<(u32, u32)>, Option<Document>);
 
 /// Une image de la série.
 #[derive(Clone, Debug)]
@@ -57,13 +70,16 @@ pub struct Entry {
     redo_marks: Vec<u64>,
     /// Révision du document déjà prise en compte par [`Series::observe`].
     seen: u64,
+    /// Le document avait une correction de perspective à la dernière
+    /// observation (pour repérer qu'elle vient d'être retirée).
+    corrected: bool,
 }
 
 impl Entry {
     /// Entrée telle que relue d'un projet.
     pub fn new(path: Option<PathBuf>, size: Option<(u32, u32)>, linked: bool, doc: Document) -> Self {
-        let seen = doc.revision();
-        Self { id: 0, path, size, linked, doc, undo_marks: vec![], redo_marks: vec![], seen }
+        let (seen, corrected) = (doc.revision(), doc.perspective.is_some());
+        Self { id: 0, path, size, linked, doc, undo_marks: vec![], redo_marks: vec![], seen, corrected }
     }
 
     /// Identifiant stable de l'entrée (ne change pas quand on réordonne).
@@ -152,8 +168,8 @@ impl Series {
         }
         s.entries = entries;
         s.active = active.min(s.entries.len().saturating_sub(1));
-        // L'échelle commune est celle de la première entrée liée.
-        if let Some(e) = s.entries.iter().find(|e| e.linked) {
+        // L'échelle commune est celle de la première entrée qui la suit.
+        if let Some(e) = s.entries.iter().find(|e| e.linked && e.doc.perspective.is_none()) {
             s.shared = e.doc.calibration.clone();
         }
         *doc = Document::new();
@@ -190,6 +206,26 @@ impl Series {
     }
     pub fn shared_scale(&self) -> bool {
         self.shared_scale
+    }
+
+    /// L'image `index` a son échelle propre : détachée de l'échelle commune,
+    /// ou à perspective corrigée. `doc` est le document de l'entrée active.
+    pub fn own_scale(&self, index: usize, doc: &Document) -> bool {
+        self.docs(doc).nth(index).is_some_and(|(e, d)| !e.linked || d.perspective.is_some())
+    }
+
+    /// Échelle qu'une nouvelle image peut reprendre de l'image affichée
+    /// (« garder l'échelle pour l'image suivante »). Celle d'une image à
+    /// perspective corrigée ne vaut que pour elle : on reprend alors
+    /// l'échelle commune qu'elle suivrait sans la correction.
+    pub fn carried(&self, doc: &Document) -> Calibration {
+        if doc.perspective.is_none() {
+            doc.calibration.clone()
+        } else if self.shared_scale && self.active_entry().is_some_and(|e| e.linked) {
+            self.shared.clone()
+        } else {
+            Calibration::default()
+        }
     }
 
     /// Les entrées avec leur document ; `doc` est celui de l'entrée active.
@@ -268,20 +304,47 @@ impl Series {
     /// ajoutée si la série est vide) suit l'échelle commune ; sinon elle
     /// garde une échelle propre.
     pub fn add(&mut self, images: Vec<NewImage>, doc: &mut Document) -> Vec<u64> {
+        self.add_with(images.into_iter().map(|(path, size)| (path, size, None)).collect(), None, doc)
+    }
+
+    /// Comme [`Series::add`], avec les deux compléments de l'ouverture :
+    ///
+    /// - `kept` (option « garder l'échelle pour l'image suivante ») :
+    ///   étalonnage donné aux images qui ne reçoivent pas l'échelle commune
+    ///   (autres dimensions, échelle commune coupée), et échelle commune de
+    ///   départ si la série est vide ;
+    /// - un document déjà rempli (capture du flux) : s'il est étalonné
+    ///   autrement que la série, l'image garde cette échelle pour elle au
+    ///   lieu de l'imposer aux autres ; s'il ne l'est pas, il est traité
+    ///   comme un document vierge.
+    pub fn add_with(&mut self, images: Vec<NewEntry>, kept: Option<Calibration>, doc: &mut Document) -> Vec<u64> {
         if images.is_empty() {
             return vec![];
         }
         self.observe(doc);
         let was_empty = self.entries.is_empty();
         let reference = self.active_entry().map_or(images[0].1, |e| e.size);
+        if was_empty && self.shared_scale {
+            // La première image fixe l'échelle commune : la sienne si elle en
+            // apporte une, sinon celle qu'on garde.
+            self.shared = match images[0].2.as_ref().map(|d| &d.calibration).filter(|c| c.is_calibrated()) {
+                Some(own) => own.clone(),
+                None => kept.clone().unwrap_or_default(),
+            };
+        }
         let ids = self.with_all(doc, |s| {
             let first = s.entries.len();
             let mut ids = vec![];
-            for (path, size) in images {
-                let linked = size.is_none() || reference.is_none() || size == reference;
-                let mut d = Document::new();
-                if linked && s.shared_scale {
+            for (path, size, given) in images {
+                let mut linked = size.is_none() || reference.is_none() || size == reference;
+                let mut d = given.unwrap_or_default();
+                let follows = linked && s.shared_scale && d.perspective.is_none();
+                if d.calibration.is_calibrated() {
+                    linked &= !follows || d.calibration == s.shared;
+                } else if follows {
                     d.calibration = s.shared.clone();
+                } else if let Some(k) = &kept {
+                    d.calibration = k.clone();
                 }
                 s.next_id += 1;
                 ids.push(s.next_id);
@@ -328,7 +391,10 @@ impl Series {
         let before = self.scale_state(doc);
         self.shared_scale = on;
         if on {
-            self.shared = doc.calibration.clone();
+            // L'échelle d'une image à perspective corrigée ne vaut que pour elle.
+            if doc.perspective.is_none() {
+                self.shared = doc.calibration.clone();
+            }
             if let Some(e) = self.entries.get_mut(self.active) {
                 e.linked = true;
             }
@@ -354,14 +420,15 @@ impl Series {
         true
     }
 
-    /// Copie l'échelle commune dans tous les documents liés.
+    /// Copie l'échelle commune dans tous les documents qui la suivent
+    /// (liés, sans correction de perspective).
     fn spread(&mut self, doc: &mut Document) {
         if !self.shared_scale {
             return;
         }
         for (i, e) in self.entries.iter_mut().enumerate() {
-            if e.linked {
-                let d = if i == self.active { &mut *doc } else { &mut e.doc };
+            let d = if i == self.active { &mut *doc } else { &mut e.doc };
+            if e.linked && d.perspective.is_none() {
                 d.calibration = self.shared.clone();
             }
         }
@@ -422,6 +489,7 @@ impl Series {
                         from.pop();
                         to.push(mark);
                         e.seen = e.doc.revision();
+                        e.corrected = e.doc.perspective.is_some();
                     }
                 }
                 self.shared_scale = state.shared_scale;
@@ -467,7 +535,19 @@ impl Series {
             e.seen = rev;
             mark = (steps == 1).then_some((e.id, self.clock));
         }
-        if !self.shared_scale || !e.linked || doc.calibration == self.shared {
+        // Une image à perspective corrigée a son échelle propre : rien à
+        // propager. Quand la correction vient d'être retirée, c'est l'image
+        // qui retrouve l'échelle commune, pas l'inverse.
+        let corrected = doc.perspective.is_some();
+        let was_corrected = std::mem::replace(&mut e.corrected, corrected);
+        if !self.shared_scale || !e.linked || corrected {
+            return;
+        }
+        if was_corrected {
+            doc.calibration = self.shared.clone();
+            return;
+        }
+        if doc.calibration == self.shared {
             return;
         }
         if single {
@@ -551,9 +631,11 @@ impl Series {
         let mark = from.pop().unwrap_or(0);
         to.push(mark);
         e.seen = doc.revision();
+        e.corrected = doc.perspective.is_some();
         // L'échelle commune appartient à la série : l'historique d'un
-        // document lié ne la change pas.
-        if e.linked && !single && let Some(shared) = shared {
+        // document lié ne la change pas (sauf correction de perspective, qui
+        // a son échelle propre).
+        if e.linked && !e.corrected && !single && let Some(shared) = shared {
             doc.calibration = shared;
         }
     }
@@ -773,6 +855,55 @@ mod tests {
         assert_eq!(scales(&s, &doc), [Some(0.7), Some(0.1), Some(0.7), Some(0.5)]);
         assert_eq!(s.undo(&mut doc), Undone::Series);
         assert_eq!(scales(&s, &doc), [Some(0.7), Some(0.1), Some(0.3), Some(0.5)]);
+    }
+
+    /// Corriger la perspective d'une image liée lui donne une échelle propre :
+    /// celle des autres images ne bouge pas, ni à la correction, ni à son
+    /// retrait, ni à leur annulation.
+    #[test]
+    fn perspective_ne_touche_pas_l_echelle_des_autres() {
+        let (mut s, mut doc) = three();
+        calibrate(&mut doc, 10.0);
+        s.observe(&mut doc);
+        let quad = [Pt::new(150., 120.), Pt::new(620., 180.), Pt::new(560., 470.), Pt::new(90., 380.)];
+        // Avec les dimensions réelles : l'échelle de l'image corrigée est la sienne.
+        assert!(doc.correct_perspective(quad, (4000, 3000), Some((297.0, 210.0, "mm"))));
+        s.observe(&mut doc);
+        let own = scales(&s, &doc)[0];
+        assert!(own.is_some() && own != Some(0.1));
+        assert_eq!(scales(&s, &doc)[1..], [Some(0.1); 2]);
+        // Échelle redéfinie sur l'image corrigée : toujours pour elle seule.
+        calibrate(&mut doc, 40.0);
+        s.observe(&mut doc);
+        assert_eq!(scales(&s, &doc), [Some(0.4), Some(0.1), Some(0.1)]);
+        // Correction retirée : l'image retrouve l'échelle commune.
+        assert!(doc.set_perspective(None, None));
+        s.observe(&mut doc);
+        assert_eq!(scales(&s, &doc), [Some(0.1); 3]);
+        // Annulations : la correction revient avec son échelle, puis repart.
+        assert_eq!(s.undo(&mut doc), Undone::Document);
+        assert!(doc.perspective.is_some());
+        assert_eq!(scales(&s, &doc), [Some(0.4), Some(0.1), Some(0.1)]);
+        assert_eq!(s.undo(&mut doc), Undone::Document);
+        assert_eq!(s.undo(&mut doc), Undone::Document);
+        assert!(doc.perspective.is_none());
+        assert_eq!(scales(&s, &doc), [Some(0.1); 3]);
+        assert_eq!(s.redo(&mut doc), Undone::Document);
+        assert_eq!((scales(&s, &doc)[0], &scales(&s, &doc)[1..]), (own, &[Some(0.1); 2][..]));
+
+        // Sans dimensions réelles : l'image corrigée repasse en pixels, seule.
+        let (mut s, mut doc) = three();
+        calibrate(&mut doc, 10.0);
+        s.observe(&mut doc);
+        s.activate(1, &mut doc);
+        assert!(doc.correct_perspective(quad, (4000, 3000), None));
+        s.observe(&mut doc);
+        assert_eq!(scales(&s, &doc), [Some(0.1), None, Some(0.1)]);
+        // L'échelle commune redéfinie ailleurs ne l'atteint pas.
+        s.activate(2, &mut doc);
+        calibrate(&mut doc, 20.0);
+        s.observe(&mut doc);
+        assert_eq!(scales(&s, &doc), [Some(0.2), None, Some(0.2)]);
     }
 
     #[test]

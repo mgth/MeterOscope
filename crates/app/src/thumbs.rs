@@ -66,14 +66,6 @@ impl Default for Thumbs {
 }
 
 impl Thumbs {
-    /// Oublie tout (nouvelle série).
-    pub fn clear(&mut self) {
-        self.generation.fetch_add(1, Ordering::Relaxed);
-        self.textures.clear();
-        self.pending.clear();
-        self.failed.clear();
-    }
-
     pub fn get(&self, id: u64) -> Option<&TextureHandle> {
         self.textures.get(&id)
     }

@@ -1,22 +1,25 @@
-//! Annulation du remplacement d'image (ouvrir, coller, capturer, déposer).
+//! Annulation du remplacement de tout le travail (projet ouvert, nouveau
+//! travail).
 //!
-//! L'historique du document ne couvre que les mesures d'une même image.
-//! Quand une nouvelle image remplace la précédente, l'espace de travail
-//! précédent (image, mesures, chemins, réglages) est gardé ici : une fois
-//! l'historique du nouveau document épuisé, Ctrl+Z le rétablit, et Ctrl+Y
-//! revient à l'image remplaçante tant que le document rétabli n'a pas changé.
+//! Ouvrir, coller, déposer ou capturer une image l'ajoute à la série, ce que
+//! l'historique de la série sait annuler. Seuls un projet ouvert et « Nouveau
+//! travail » remplacent tout : l'espace de travail précédent (images,
+//! mesures, chemins, réglages) est alors gardé ici. Une fois l'historique du
+//! nouveau travail épuisé, Ctrl+Z le rétablit, et Ctrl+Y revient au
+//! remplaçant tant que le travail rétabli n'a pas changé.
 
 use image::RgbaImage;
 use meteroscope_core::Document;
 use std::cell::Cell;
 use std::path::PathBuf;
 
-/// Nombre d'images remplacées gardées en mémoire.
+/// Nombre de travaux remplacés gardés en mémoire.
 const LIMIT: usize = 4;
 
 /// Tout ce qui accompagne une image de travail.
 pub struct Workspace {
-    pub image: std::sync::Arc<RgbaImage>,
+    /// `None` : rien d'ouvert (état d'après « Nouveau travail »).
+    pub image: Option<std::sync::Arc<RgbaImage>>,
     pub image_path: Option<PathBuf>,
     /// Orientation des pixels de `image`, et celle du fichier `image_path`.
     pub applied: meteroscope_core::Orientation,

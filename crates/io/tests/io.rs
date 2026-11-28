@@ -427,7 +427,9 @@ fn export_scale_bar_corner_length_and_settings() {
     save_project(&Project { image_path: None, document: d.clone() }, &path).unwrap();
     assert_eq!(load_project(&path).unwrap().document.scale_bar, settings);
     let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    json["document"].as_object_mut().unwrap().remove("scale_bar");
+    // Réglages hors défaut : version 2, que la 1.1.0 refuse au lieu de les perdre.
+    assert_eq!(json["version"], 2);
+    json["images"][0]["document"].as_object_mut().unwrap().remove("scale_bar");
     std::fs::write(&path, json.to_string()).unwrap();
     assert_eq!(load_project(&path).unwrap().document.scale_bar, ScaleBarSettings::default());
 }

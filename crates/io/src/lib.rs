@@ -33,15 +33,12 @@ pub use presets::{scale_presets_from_json, scale_presets_to_json};
 pub use profile::{measure_profile, profile_csv_string};
 pub use pdf::{ReportInfo, today};
 pub use svg::SvgBackground;
-pub use project::PROJECT_FORMAT_VERSION;
+pub use project::{PROJECT_FORMAT_VERSION, SERIES_FORMAT_VERSION, SeriesImage, SeriesProject, load_series, save_series};
 pub use rotate::{
     Frame, RotationFilter, Straightened, WORK_BUDGET, reduced_size, rotate_image, rotated_dimensions, rotation_work_bytes, straighten,
     straighten_scale,
 };
-pub use series::{
-    SERIES_FORMAT_VERSION, SeriesImage, SeriesProject, export_series_csv, image_dimensions, load_series, save_series, series_clipboard_table,
-    series_csv_string, thumbnail,
-};
+pub use series::{export_series_csv, image_dimensions, series_clipboard_table, series_csv_string, thumbnail};
 pub use table::format_precise;
 pub use transform::{orient_image, orientation_transforms, sync_orientation, transform_point};
 

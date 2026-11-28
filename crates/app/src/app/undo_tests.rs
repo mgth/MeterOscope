@@ -24,7 +24,7 @@ fn annuler_un_miroir_ramene_pixels_mesures_et_angle() {
     let ctx = egui::Context::default();
     for t in [io::Transform::FlipHorizontal, io::Transform::FlipVertical, io::Transform::RotateLeft, io::Transform::RotateRight] {
         let mut app = MeterOscopeApp::blank();
-        app.set_image(&ctx, photo(), None);
+        app.add_image(&ctx, photo(), None);
         app.doc.set_rotation(6.0);
         app.doc.add(Shape::Marker { p: Pt::new(7.5, 1.5) });
         let measurements = app.doc.measurements.clone();
@@ -61,7 +61,7 @@ fn le_document_du_flux_ne_reoriente_pas_la_photo() {
     meteroscope_i18n::set_language("fr");
     let ctx = egui::Context::default();
     let mut app = MeterOscopeApp::blank();
-    app.set_image(&ctx, photo(), None);
+    app.add_image(&ctx, photo(), None);
     app.transform(io::Transform::RotateRight);
     let turned = app.image.clone();
     // Mode caméra : `doc` est celui du flux, jamais pivoté.
@@ -83,7 +83,7 @@ fn annuler_un_miroir_avec_une_perspective_corrigee() {
     let ctx = egui::Context::default();
     let mut app = MeterOscopeApp::blank();
     let img = RgbaImage::from_fn(60, 40, |x, y| Rgba([(x * 4) as u8, (y * 6) as u8, ((x * y) % 251) as u8, 255]));
-    app.set_image(&ctx, img, None);
+    app.add_image(&ctx, img, None);
     let quad = [Pt::new(8.0, 6.0), Pt::new(50.0, 9.0), Pt::new(54.0, 33.0), Pt::new(5.0, 30.0)];
     let p = meteroscope_core::Perspective::from_quad(quad, (60, 40), None).expect("quadrilatère valide");
     assert!(app.doc.set_perspective(Some(p.clone()), None));
@@ -143,7 +143,7 @@ fn la_photo_d_origine_survit_a_deux_enregistrements() {
     let (source, project) = (dir.0.join("photo.png"), dir.0.join("photo.meteroscope"));
     io::save_image(&photo(), &source).unwrap();
     let mut app = MeterOscopeApp::blank();
-    app.set_image(&ctx, io::load_image(&source).unwrap(), Some(source.clone()));
+    app.add_image(&ctx, io::load_image(&source).unwrap(), Some(source.clone()));
 
     // Miroir, quart de tour, premier enregistrement : l'image part dans un fichier dérivé.
     app.transform(io::Transform::FlipHorizontal);
@@ -183,7 +183,7 @@ fn un_projet_rouvert_n_ecrase_aucun_fichier_existant() {
     io::save_image(&old, &derived).unwrap();
     // Nouvelle session : le projet est rouvert sur son fichier dérivé, puis l'image est retournée.
     let mut app = MeterOscopeApp::blank();
-    app.set_image(&ctx, io::load_image(&derived).unwrap(), Some(derived.clone()));
+    app.add_image(&ctx, io::load_image(&derived).unwrap(), Some(derived.clone()));
     app.project_path = Some(project.clone());
     app.transform(io::Transform::FlipVertical);
     assert!(app.series_write(&project));
@@ -194,7 +194,7 @@ fn un_projet_rouvert_n_ecrase_aucun_fichier_existant() {
 
     // Capture sans fichier : `<projet>.png` s'il est libre.
     let mut app = MeterOscopeApp::blank();
-    app.set_image(&ctx, photo(), None);
+    app.add_image(&ctx, photo(), None);
     let capture = dir.0.join("capture.meteroscope");
     assert!(app.series_write(&capture));
     assert_eq!(app.image_path.as_deref(), Some(dir.0.join("capture.png").as_path()));
@@ -212,7 +212,7 @@ fn enregistrer_sous_ne_touche_pas_l_image_du_premier_projet() {
 
     // Image collée (sans fichier), retournée, enregistrée dans A.
     let mut app = MeterOscopeApp::blank();
-    app.set_image(&ctx, photo(), None);
+    app.add_image(&ctx, photo(), None);
     app.transform(io::Transform::FlipHorizontal);
     assert!(app.series_write(&a));
     let mirrored = image::imageops::flip_horizontal(&photo());
@@ -236,7 +236,7 @@ fn enregistrer_sous_ne_touche_pas_l_image_du_premier_projet() {
     let dir = TestDir::new("enregistrer_sous_puis_transformer");
     let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
     let mut app = MeterOscopeApp::blank();
-    app.set_image(&ctx, photo(), None);
+    app.add_image(&ctx, photo(), None);
     assert!(app.series_write(&a));
     assert!(app.series_write(&b));
     // Sans changement, les deux projets partagent le même fichier image.
@@ -251,7 +251,7 @@ fn enregistrer_sous_ne_touche_pas_l_image_du_premier_projet() {
     let dir = TestDir::new("fichier_partage");
     let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
     let mut app = MeterOscopeApp::blank();
-    app.set_image(&ctx, photo(), None);
+    app.add_image(&ctx, photo(), None);
     assert!(app.series_write(&a));
     assert!(app.series_write(&b));
     app.transform(io::Transform::FlipHorizontal);
@@ -269,15 +269,15 @@ fn annuler_ne_rend_pas_le_droit_d_ecraser_une_image_partagee() {
 
     // Image collée, en miroir, enregistrée dans A.
     let mut app = MeterOscopeApp::blank();
-    app.set_image(&ctx, photo(), None);
+    app.add_image(&ctx, photo(), None);
     app.transform(io::Transform::FlipHorizontal);
     assert!(app.series_write(&a));
     let a_png = image_path_of(&a);
     let mirrored = image::imageops::flip_horizontal(&photo());
 
     // A rouvert (Ctrl+O), puis « Enregistrer sous » B sans rien changer : fichier partagé.
-    app.set_image(&ctx, io::load_image(&a_png).unwrap(), Some(a_png.clone()));
-    app.project_path = Some(a.clone());
+    app.open_paths(&ctx, vec![a.clone()]);
+    assert_eq!(app.image_path.as_deref(), Some(a_png.as_path()));
     assert!(app.series_write(&b));
     assert_eq!(image_path_of(&b), a_png);
 
@@ -304,7 +304,7 @@ fn une_image_pivotee_retrouve_ses_pixels_en_revenant_dans_la_serie() {
     io::save_image(&photo(), &first).unwrap();
     io::save_image(&RgbaImage::from_pixel(4, 3, Rgba([9, 9, 9, 255])), &second).unwrap();
     let mut app = MeterOscopeApp::blank();
-    app.series_open_paths(&ctx, vec![first.clone(), second.clone()]);
+    app.open_paths(&ctx, vec![first.clone(), second.clone()]);
     assert_eq!(**app.image.as_ref().unwrap(), photo());
 
     // Première image : miroir puis quart de tour, le quart de tour est annulé.

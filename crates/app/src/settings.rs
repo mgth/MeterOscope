@@ -31,6 +31,10 @@ pub struct Settings {
 }
 
 fn settings_file() -> Option<PathBuf> {
+    // Les tests ne lisent ni n'écrivent les réglages de l'utilisateur.
+    if cfg!(test) {
+        return None;
+    }
     Some(dirs::config_dir()?.join("meteroscope").join("settings.json"))
 }
 
