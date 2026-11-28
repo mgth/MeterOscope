@@ -295,3 +295,63 @@ fn inclinaison_entre_deux_segments() {
     let v = m.shape.values(&st.doc.calibration)[0].value;
     assert!((v - (20f64).atan2(80.0).to_degrees()).abs() < 0.1, "{v}");
 }
+
+fn type_text(h: &mut Harness<'_, St>, s: &str) {
+    h.event(Event::Text(s.to_owned()));
+    h.step();
+}
+
+fn press_key(h: &mut Harness<'_, St>, key: Key) {
+    for pressed in [true, false] {
+        h.event(Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE });
+    }
+    h.step();
+    h.step();
+}
+
+#[test]
+fn texte_saisi_sur_place() {
+    meteroscope_i18n::set_language("fr");
+    let mut h = harness();
+    h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::Text));
+    click(&mut h, 50.0, 40.0);
+    h.step();
+    assert!(h.state().canvas.is_editing_text() && h.state().doc.measurements.is_empty());
+    type_text(&mut h, "Fissure à gauche");
+    press_key(&mut h, Key::Enter);
+    let st = h.state();
+    assert!(!st.canvas.is_editing_text());
+    assert_eq!(st.doc.measurements.len(), 1);
+    let Shape::Text { p, text } = &st.doc.measurements[0].shape else { panic!() };
+    assert!(near(*p, Pt::new(50.0, 40.0)) && text == "Fissure à gauche", "{text:?}");
+
+    // Double-clic (outil Sélection) : modifier ; Échap abandonne.
+    h.state_mut().canvas.set_tool(Tool::Select);
+    click(&mut h, 50.0, 40.0);
+    click(&mut h, 50.0, 40.0);
+    h.step();
+    assert!(h.state().canvas.is_editing_text());
+    type_text(&mut h, "autre");
+    press_key(&mut h, Key::Escape);
+    assert!(!h.state().canvas.is_editing_text());
+    assert_eq!(h.state().doc.measurements[0].shape.annotation_text(), Some("Fissure à gauche"));
+}
+
+#[test]
+fn fleche_et_texte_facultatif() {
+    meteroscope_i18n::set_language("fr");
+    let mut h = harness();
+    h.state_mut().canvas.set_tool(Tool::Draw(ShapeKind::Arrow));
+    click(&mut h, 20.0, 20.0);
+    click(&mut h, 80.0, 60.0);
+    h.step();
+    assert_eq!(h.state().doc.measurements.len(), 1);
+    assert!(h.state().canvas.is_editing_text());
+    type_text(&mut h, "ici");
+    press_key(&mut h, Key::Enter);
+    let Shape::Arrow { a, b, text } = &h.state().doc.measurements[0].shape else { panic!() };
+    assert!(near(*a, Pt::new(20.0, 20.0)) && near(*b, Pt::new(80.0, 60.0)) && text == "ici");
+    // Un seul pas d'annulation pour la flèche et son texte.
+    assert!(h.state_mut().doc.undo());
+    assert!(h.state().doc.measurements.is_empty() && !h.state().doc.can_undo());
+}

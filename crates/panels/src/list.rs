@@ -156,6 +156,15 @@ fn empty_hint(ui: &mut Ui) {
 fn main_value(doc: &Document, shape: &Shape) -> String {
     match shape {
         Shape::Marker { p } => format!("x {:.0} · y {:.0}", p.x, p.y),
+        // Annotation : début de son texte.
+        s if s.kind().is_annotation() => {
+            let t = s.annotation_text().unwrap_or_default();
+            match t.char_indices().nth(18) {
+                Some((i, _)) => format!("{}…", &t[..i]),
+                None if t.is_empty() => "—".to_owned(),
+                None => t.to_owned(),
+            }
+        }
         s => s.values(&doc.calibration).first().map(|v| v.text()).unwrap_or_else(|| "—".to_owned()),
     }
 }
@@ -304,6 +313,12 @@ fn values_box(ui: &mut Ui, doc: &Document, m: &Measurement) -> egui::Response {
                     Shape::Marker { p } => {
                         ui.label(RichText::new(tr!("item.position")).weak());
                         ui.label(format!("x {} · y {} px", format_number(p.x), format_number(p.y)));
+                        ui.end_row();
+                    }
+                    s if s.kind().is_annotation() => {
+                        ui.label(RichText::new(tr!("item.text")).weak());
+                        let t = s.annotation_text().unwrap_or_default();
+                        ui.add(Label::new(if t.is_empty() { "—" } else { t }).wrap());
                         ui.end_row();
                     }
                     s => {

@@ -2197,6 +2197,7 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "epaint_default_fonts",
+ "fontique",
  "image",
  "meteroscope-core",
  "meteroscope-i18n",

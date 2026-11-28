@@ -129,6 +129,7 @@ pub fn label_text(shape: &Shape, cal: &Calibration, marker_no: usize) -> String 
     let v = shape.values(cal);
     match shape {
         Shape::Marker { .. } => marker_no.to_string(),
+        Shape::Text { text, .. } | Shape::Arrow { text, .. } => text.clone(),
         Shape::Rect { .. } if v.len() >= 3 => {
             format!("{} × {} {}\n{}", format_number(v[1].value), format_number(v[2].value), v[1].unit, v[0].text())
         }
@@ -176,7 +177,13 @@ pub fn label_anchor(shape: &Shape, xf: Xf) -> (Pos2, Align2) {
             Some((c, _)) => (s(c) + vec2(0.0, 6.0), Align2::CENTER_TOP),
             None => (s(shape.points()[0]), Align2::LEFT_BOTTOM),
         },
-        Shape::Marker { p } => (s(*p), Align2::CENTER_CENTER),
+        Shape::Marker { p } | Shape::Text { p, .. } => (s(*p), Align2::CENTER_CENTER),
+        // À la base, du côté opposé à la pointe.
+        Shape::Arrow { a, b, .. } => {
+            let d = s(*a) - s(*b);
+            let dir = if d.length() > 0.0 { d.normalized() } else { vec2(0.0, -1.0) };
+            (s(*a) + dir * 6.0, align_out(dir))
+        }
         Shape::LineAngle { a, b, c, d } => match line_angle_arc(xf, *a, *b, *c, *d) {
             // Sur l'arc, du côté extérieur.
             Some((v, a0, sweep, r)) => {
@@ -316,7 +323,32 @@ pub fn paint_shape(p: &Painter, xf: Xf, shape: &Shape, color: Color32, width: f3
             };
             p.text(c, Align2::CENTER_CENTER, marker_no.to_string(), FontId::proportional(11.0), text_color);
         }
+        // Le texte est dessiné comme une étiquette ; sans texte, un simple point.
+        Shape::Text { p: q, text } => {
+            if text.is_empty() {
+                dot(p, s(*q), color);
+            }
+        }
+        Shape::Arrow { a, b, .. } => arrow(p, s(*a), s(*b), color, width),
     }
+}
+
+/// Flèche de `a` vers la pointe `b` (écran), pointe pleine avec halo.
+pub fn arrow(p: &Painter, a: Pos2, b: Pos2, color: Color32, width: f32) {
+    let d = b - a;
+    let len = d.length();
+    if len == 0.0 {
+        dot(p, a, color);
+        return;
+    }
+    let (u, n) = (d / len, vec2(-d.y, d.x) / len);
+    let head = (4.0 * width + 6.0).min(len * 0.6);
+    let base = b - u * head;
+    let tip = vec![b, base + n * head * 0.45, base - n * head * 0.45];
+    // Le trait s'arrête dans la pointe pour ne pas dépasser de son sommet.
+    outlined(p, vec![a, b - u * head * 0.5], false, color, width);
+    p.add(EShape::convex_polygon(tip.clone(), HALO, Stroke::new(2.5, HALO)));
+    p.add(EShape::convex_polygon(tip, color, Stroke::NONE));
 }
 
 /// Poignée de rotation (ronde) reliée au bord en `base`.
@@ -463,6 +495,13 @@ mod tests {
         assert_eq!(label_text(&Shape::Marker { p: Pt::default() }, &cal, 3), "3");
         let la = Shape::LineAngle { a: Pt::new(0., 0.), b: Pt::new(10., 0.), c: Pt::new(0., 5.), d: Pt::new(0., 9.) };
         assert_eq!(label_text(&la, &cal, 0), "90,00°");
+        let t = Shape::Text { p: Pt::default(), text: "Défaut".to_owned() };
+        assert_eq!(label_text(&t, &cal, 0), "Défaut");
+        assert_eq!(label_text(&Shape::Arrow { a: Pt::default(), b: Pt::new(5., 0.), text: String::new() }, &cal, 0), "");
+        // Étiquette d'une flèche : à sa base, du côté opposé à la pointe.
+        let xf = Xf::new(Pos2::ZERO, 1.0);
+        let (pos, align) = label_anchor(&Shape::Arrow { a: Pt::new(50., 50.), b: Pt::new(100., 50.), text: "x".into() }, xf);
+        assert!(pos.x < 50.0 && align == Align2::RIGHT_CENTER, "{pos:?} {align:?}");
     }
 
     #[test]

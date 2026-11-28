@@ -155,6 +155,23 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                     dot(*q);
                 }
             }
+            ShapeKind::Text => {
+                // Lettre « T » dans une étiquette.
+                let label = Rect::from_min_max(p(0.06, 0.14), p(0.94, 0.86));
+                painter.rect_filled(label, 2.5, light);
+                painter.rect_stroke(label, 2.5, stroke, StrokeKind::Middle);
+                painter.line_segment([p(0.30, 0.32), p(0.70, 0.32)], stroke);
+                painter.line_segment([p(0.50, 0.32), p(0.50, 0.70)], stroke);
+            }
+            ShapeKind::Arrow => {
+                let (a, b) = (p(0.12, 0.88), p(0.86, 0.14));
+                let u = (b - a).normalized();
+                let n = vec2(-u.y, u.x);
+                let h = 0.30 * s;
+                painter.line_segment([a, b - u * h * 0.5], stroke);
+                painter.add(Shape::convex_polygon(vec![b, b - u * h + n * h * 0.45, b - u * h - n * h * 0.45], color, Stroke::NONE));
+                dot(a);
+            }
             ShapeKind::Marker => {
                 painter.line_segment([p(0.5, 0.06), p(0.5, 0.94)], stroke);
                 painter.line_segment([p(0.06, 0.5), p(0.94, 0.5)], stroke);

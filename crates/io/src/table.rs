@@ -54,7 +54,8 @@ fn measurement_rows(doc: &Document) -> Vec<Vec<String>> {
     header.extend(COLUMNS.iter().map(|q| format!("{} ({})", q.label(), unit_of(doc, *q))));
     header.extend(["X (px)".to_owned(), "Y (px)".to_owned()]);
     let mut rows = vec![header];
-    for m in &doc.measurements {
+    // Les annotations (texte, flèche) ne sont pas des mesures.
+    for m in doc.measurements.iter().filter(|m| !m.shape.kind().is_annotation()) {
         let mut row = vec![m.name.clone(), m.shape.kind().label().to_owned()];
         let values = m.shape.values(&doc.calibration);
         for q in COLUMNS {
@@ -215,6 +216,16 @@ Nombre de marqueurs;2\r\n\
         assert_eq!(lines.len(), 7);
         assert_eq!(lines[1], "Longueur 1\tLongueur\t5\t\t\t\t\t\t\t\t\t");
         assert_eq!(lines[6], "Point; \"spécial\"\tMarqueur\t\t\t\t\t\t\t\t\t3\t4");
+    }
+
+    #[test]
+    fn annotations_hors_tableau() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = sample();
+        d.add(Shape::Text { p: Pt::new(1., 1.), text: "note".into() });
+        d.add(Shape::Arrow { a: Pt::new(0., 0.), b: Pt::new(5., 5.), text: "ici".into() });
+        assert_eq!(csv_string(&d), csv_string(&sample()));
+        assert_eq!(clipboard_table(&d), clipboard_table(&sample()));
     }
 
     #[test]

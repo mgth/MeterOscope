@@ -6,7 +6,7 @@ use egui::{Align2, FontId, Key, Rect, RichText, ScrollArea, Sense, Ui, WidgetInf
 use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
-pub const TOOLS: [Tool; 13] = [
+pub const TOOLS: [Tool; 15] = [
     Tool::Select,
     Tool::Calibrate,
     Tool::Straighten,
@@ -20,6 +20,8 @@ pub const TOOLS: [Tool; 13] = [
     Tool::Draw(ShapeKind::Circle),
     Tool::Draw(ShapeKind::Circle3),
     Tool::Draw(ShapeKind::Marker),
+    Tool::Draw(ShapeKind::Text),
+    Tool::Draw(ShapeKind::Arrow),
 ];
 
 /// Largeur fixe des boutons (et donc du panneau).
@@ -63,6 +65,8 @@ pub fn tool_description(tool: Tool) -> &'static str {
             ShapeKind::Marker => tr!("tool_help.marker"),
             ShapeKind::LineAngle => tr!("tool_help.line_angle"),
             ShapeKind::Rect3 => tr!("tool_help.rect3"),
+            ShapeKind::Text => tr!("tool_help.text"),
+            ShapeKind::Arrow => tr!("tool_help.arrow"),
         },
     }
 }
@@ -71,7 +75,8 @@ pub fn tool_description(tool: Tool) -> &'static str {
 ///
 /// S Sélection · E Échelle · H Horizon (redresser) · L Longueur · B ligne
 /// Brisée (chemin) · A Angle · I Inclinaison · P Polygone (surface) ·
-/// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur.
+/// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur ·
+/// X teXte · F Flèche.
 pub fn tool_shortcut(tool: Tool) -> Option<Key> {
     Some(match tool {
         Tool::Select => Key::S,
@@ -88,6 +93,8 @@ pub fn tool_shortcut(tool: Tool) -> Option<Key> {
             ShapeKind::Marker => Key::M,
             ShapeKind::LineAngle => Key::I,
             ShapeKind::Rect3 => Key::O,
+            ShapeKind::Text => Key::X,
+            ShapeKind::Arrow => Key::F,
         },
     })
 }
@@ -112,7 +119,7 @@ pub fn tool_palette(ui: &mut Ui, tool: &mut Tool) {
             ui.spacing_mut().item_spacing.y = 3.0;
             ui.add_space(4.0);
             for t in TOOLS {
-                if t == Tool::Draw(ShapeKind::Length) {
+                if t == Tool::Draw(ShapeKind::Length) || t == Tool::Draw(ShapeKind::Text) {
                     ui.add_space(2.0);
                     ui.separator();
                     ui.add_space(2.0);
@@ -188,7 +195,7 @@ mod tests {
             assert_eq!(k.name().len(), 1, "{k:?} n'est pas une lettre");
             assert!(k.name().chars().all(|c| c.is_ascii_uppercase()));
         }
-        assert_eq!(seen.len(), 13);
+        assert_eq!(seen.len(), 15);
     }
 
     #[test]

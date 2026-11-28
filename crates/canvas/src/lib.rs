@@ -15,6 +15,7 @@
 //!   horizontale ou verticale ; la vue pivote (`Document::rotation`), l'image
 //!   et les coordonnées des mesures restent inchangées.
 
+mod annotate;
 mod draft;
 mod edit;
 mod render;
@@ -129,6 +130,8 @@ pub struct Canvas {
     has_selection: bool,
     hover_hit: Option<Hit>,
     shift: bool,
+    /// Saisie du texte d'une annotation.
+    annot: annotate::Annotations,
     out: CanvasOutput,
 }
 
@@ -151,6 +154,7 @@ impl Default for Canvas {
             has_selection: false,
             hover_hit: None,
             shift: false,
+            annot: annotate::Annotations::default(),
             out: CanvasOutput::default(),
         }
     }
@@ -261,6 +265,9 @@ impl Canvas {
     /// l'avancement du tracé (« Cliquez le premier point », …).
     pub fn hint(&self) -> String {
         let n = self.draft.pts.len();
+        if self.annot.editing.is_some() {
+            return tr!("hint.annot.typing").to_owned();
+        }
         let s = match self.tool {
             Tool::Select => {
                 if matches!(self.gesture.as_ref().map(|g| g.kind), Some(GestureKind::Handle(..))) {
@@ -311,6 +318,9 @@ impl Canvas {
                 (ShapeKind::LineAngle, 1) => tr!("hint.line_angle.first_end"),
                 (ShapeKind::LineAngle, 2) => tr!("hint.line_angle.second"),
                 (ShapeKind::LineAngle, _) => tr!("hint.line_angle.second_end"),
+                (ShapeKind::Text, _) => tr!("hint.text"),
+                (ShapeKind::Arrow, 0) => tr!("hint.arrow.base"),
+                (ShapeKind::Arrow, _) => tr!("hint.arrow.tip"),
             },
         };
         s.to_owned()
@@ -390,7 +400,7 @@ impl Canvas {
             match ev {
                 Event::PointerMoved(pos) => self.pointer_moved(*pos, doc),
                 Event::PointerButton { pos, button, pressed: true, .. } => {
-                    if self.gesture.is_none() && hovering && rect.contains(*pos) {
+                    if self.gesture.is_none() && hovering && rect.contains(*pos) && !self.annot.covers(*pos) {
                         self.press(*pos, *button, space, doc);
                     }
                 }
@@ -440,6 +450,7 @@ impl Canvas {
         painter.add(egui::Shape::convex_polygon(outline, Color32::from_gray(10), Stroke::new(1.0, Color32::from_gray(10))));
         render::paint_image(&painter, tex.id(), [w, h], xf, self.baked);
         self.paint_measurements(&painter, xf, doc);
+        self.show_editor(ui, rect, xf, doc);
 
         // Aperçu du tracé (le point sous le curseur suit la contrainte Maj).
         let pointer = if self.gesture.is_some() { hover } else { hover_in };
@@ -677,6 +688,15 @@ impl Canvas {
                 self.apply(step, doc);
             }
             GestureKind::Void if !g.dragged => doc.selected = None,
+            // Double-clic sur une annotation : modifier son texte.
+            GestureKind::Body(id) | GestureKind::Handle(id, _) if !g.dragged => {
+                let double =
+                    self.last_click.is_some_and(|(t, q)| time - t <= DOUBLE_CLICK_DELAY && q.distance(pos) <= DOUBLE_CLICK_DIST);
+                self.last_click = if double { None } else { Some((time, pos)) };
+                if double && doc.get(id).is_some_and(|m| m.shape.kind().is_annotation()) {
+                    self.begin_edit(annotate::Target::Existing { id, fresh: None }, doc);
+                }
+            }
             _ => {}
         }
     }
@@ -685,6 +705,7 @@ impl Canvas {
     /// ou redressement de la vue.
     fn apply(&mut self, step: Step, doc: &mut Document) {
         let Step::Done(pts) = step else { return };
+        self.finish_edit(doc);
         if self.tool == Tool::Straighten {
             if let [a, b] = pts[..]
                 && let Some(r) = straighten_rotation(a, b, doc.rotation)
@@ -697,8 +718,16 @@ impl Canvas {
                 self.calib_seg = Some((a, b));
                 self.out.calibration_segment = Some((a, b));
             }
+        } else if self.draft.kind == ShapeKind::Text {
+            // Le texte n'est ajouté qu'une fois saisi.
+            self.begin_edit(annotate::Target::New(pts[0]), doc);
         } else if let Some(shape) = self.shape_from_draft(self.draft.kind, &pts) {
-            self.out.created = Some(doc.add(shape));
+            let arrow = matches!(shape, Shape::Arrow { .. });
+            let id = doc.add(shape);
+            self.out.created = Some(id);
+            if arrow {
+                self.begin_edit(annotate::Target::Existing { id, fresh: Some(doc.revision()) }, doc);
+            }
         }
         self.last_click = None;
     }
@@ -731,7 +760,7 @@ impl Canvas {
                 continue;
             }
             let text = render::label_text(&m.shape, &doc.calibration, no);
-            if text.is_empty() {
+            if text.is_empty() || self.annot.editing_id() == Some(m.id) {
                 continue;
             }
             let (pos, align) = render::label_anchor(&m.shape, xf);

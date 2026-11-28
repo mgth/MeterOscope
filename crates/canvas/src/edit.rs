@@ -138,6 +138,7 @@ fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
         Shape::Area { pts } => closed(pts),
         Shape::Rect { a, b, angle } => closed(&rect_corners(*a, *b, *angle)),
         Shape::LineAngle { a, b, c, d } => vec![(*a, *b), (*c, *d)],
+        Shape::Arrow { a, b, .. } => vec![(*a, *b)],
         _ => vec![],
     }
 }
@@ -145,7 +146,7 @@ fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
 /// Distance du point `p` au tracé de la forme.
 pub fn dist_to_outline(shape: &Shape, p: Pt) -> f64 {
     match shape {
-        Shape::Marker { p: m } => m.dist(p),
+        Shape::Marker { p: m } | Shape::Text { p: m, .. } => m.dist(p),
         Shape::Circle { .. } | Shape::Circle3 { .. } => match shape.circle() {
             Some((c, r)) => (c.dist(p) - r).abs(),
             None => f64::INFINITY,
@@ -189,7 +190,7 @@ pub fn hit_test(doc: &Document, p: Pt, tol: f64, handle_tol: f64, gap: f64) -> O
         .rev()
         .filter(|m| m.visible)
         .map(|m| {
-            let t = if matches!(m.shape, Shape::Marker { .. }) { handle_tol } else { tol };
+            let t = if matches!(m.shape, Shape::Marker { .. } | Shape::Text { .. }) { handle_tol } else { tol };
             (m.id, dist_to_outline(&m.shape, p) - t)
         })
         .filter(|(_, d)| *d <= 0.0)
