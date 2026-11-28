@@ -5,7 +5,7 @@
 use super::{MeterOscopeApp, Mode};
 use egui::{Key, Ui};
 use image::RgbaImage;
-use meteroscope_core::Pt;
+use meteroscope_core::{Pt, Tool};
 use meteroscope_core::rescale::Rescale;
 use meteroscope_i18n::tr;
 
@@ -83,6 +83,12 @@ impl MeterOscopeApp {
         }
         if let Some((a, b)) = out.calibration_segment {
             self.calibration.open(a.dist(b));
+        }
+        if out.perspective_quad.is_some() {
+            // Pas de correction de perspective sur le flux : elle se fait sur l'image figée.
+            self.canvas.clear_perspective_quad();
+            self.canvas.set_tool(Tool::Select);
+            self.error(tr!("msg.perspective_live"));
         }
 
         // Entrée capture (hors tracé : Entrée y termine un chemin, déjà consommée).

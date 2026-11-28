@@ -7,6 +7,7 @@
 //! - un point trop proche du précédent est ignoré (évite les doublons d'un double-clic) ;
 //! - Inclinaison : deux segments, chacun tracé comme une longueur ; le second
 //!   peut partir de l'extrémité du premier (sommet commun) ;
+//! - Perspective : quatre coins, chacun posé par un clic ;
 //! - Distance point-droite, écart entre parallèles : la droite se trace comme
 //!   une longueur, puis un clic pour le point ;
 //! - Chemin/Surface se terminent par [`Draft::finish`] (double-clic, Entrée, clic
@@ -26,6 +27,9 @@ pub enum Step {
 pub struct Draft {
     pub kind: ShapeKind,
     pub pts: Vec<Pt>,
+    /// Nombre de points imposé, à la place de celui de `kind` (quadrilatère
+    /// de la correction de perspective : un polygone de quatre points).
+    count: Option<usize>,
     /// Un appui est en cours (reçu par la vue).
     pressing: bool,
     /// L'appui en cours a posé le premier point.
@@ -34,7 +38,16 @@ pub struct Draft {
 
 impl Draft {
     pub fn new(kind: ShapeKind) -> Self {
-        Self { kind, pts: Vec::new(), pressing: false, press_started: false }
+        Self { kind, pts: Vec::new(), count: None, pressing: false, press_started: false }
+    }
+
+    /// Polygone qui se termine de lui-même au `n`-ième point.
+    pub fn polygon(n: usize) -> Self {
+        Self { count: Some(n), ..Self::new(ShapeKind::Area) }
+    }
+
+    fn point_count(&self) -> Option<usize> {
+        self.count.or(self.kind.point_count())
     }
 
     pub fn is_active(&self) -> bool {
@@ -42,11 +55,11 @@ impl Draft {
     }
 
     pub fn reset(&mut self) {
-        *self = Draft::new(self.kind);
+        *self = Draft { count: self.count, ..Draft::new(self.kind) };
     }
 
     fn variable(&self) -> bool {
-        self.kind.point_count().is_none()
+        self.point_count().is_none()
     }
 
     /// Le prochain point commence un segment (premier point, ou début du
@@ -84,7 +97,7 @@ impl Draft {
             return Step::Continue;
         }
         // Surface : clic sur le premier point = fermer.
-        if self.kind == ShapeKind::Area && self.pts.len() >= 3 && self.pts[0].dist(p) <= tol {
+        if self.would_close(p, tol) {
             return self.finish();
         }
         self.pts.push(p);
@@ -95,7 +108,7 @@ impl Draft {
                 return Step::Continue;
             }
         }
-        if self.kind.point_count() == Some(self.pts.len()) {
+        if self.point_count() == Some(self.pts.len()) {
             return self.take();
         }
         Step::Continue
@@ -162,7 +175,7 @@ impl Draft {
 
     /// La surface se fermerait si l'on cliquait en `p`.
     pub fn would_close(&self, p: Pt, tol: f64) -> bool {
-        self.kind == ShapeKind::Area && self.pts.len() >= 3 && self.pts[0].dist(p) <= tol
+        self.kind == ShapeKind::Area && self.count.is_none() && self.pts.len() >= 3 && self.pts[0].dist(p) <= tol
     }
 }
 

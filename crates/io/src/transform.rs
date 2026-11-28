@@ -57,13 +57,25 @@ pub fn sync_orientation(image: &RgbaImage, applied: &mut Orientation, doc: &Docu
 
 pub fn apply_transform(image: &RgbaImage, doc: &mut Document, t: Transform) -> RgbaImage {
     let out = orient_image(image, step(t));
-    let (w, h) = (image.width() as f64, image.height() as f64);
+    let (mut w, mut h) = (image.width() as f64, image.height() as f64);
     // Un miroir inverse le sens du redressement (l'image redressée reste droite) ;
     // un quart de tour le conserve.
     let flip = matches!(t, Transform::FlipHorizontal | Transform::FlipVertical);
     // Toujours une étape d'historique, même sans mesure : l'orientation des
     // pixels en fait partie, et elle doit s'annuler avec le reste.
     doc.checkpoint();
+    // Perspective corrigée : `image` est la photo d'origine, les mesures
+    // sont dans l'image corrigée. Celle-ci subit la même transformation
+    // si les coins suivent, chacun dans son image.
+    if let Some(p) = &mut doc.perspective {
+        let (cw, ch) = (p.size.0 as f64, p.size.1 as f64);
+        p.src = p.src.map(|q| transform_point(q, w, h, t));
+        p.dst = p.dst.map(|q| transform_point(q, cw, ch, t));
+        if matches!(t, Transform::RotateLeft | Transform::RotateRight) {
+            p.size = (p.size.1, p.size.0);
+        }
+        (w, h) = (cw, ch);
+    }
     for m in &mut doc.measurements {
         m.shape.map_points(|p| transform_point(p, w, h, t));
         // Le miroir inverse aussi l'orientation d'un rectangle.

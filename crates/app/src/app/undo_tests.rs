@@ -76,3 +76,34 @@ fn le_document_du_flux_ne_reoriente_pas_la_photo() {
     app.sync_orientation();
     assert_eq!(app.image, turned);
 }
+
+#[test]
+fn annuler_un_miroir_avec_une_perspective_corrigee() {
+    meteroscope_i18n::set_language("fr");
+    let ctx = egui::Context::default();
+    let mut app = MeterOscopeApp::blank();
+    let img = RgbaImage::from_fn(60, 40, |x, y| Rgba([(x * 4) as u8, (y * 6) as u8, ((x * y) % 251) as u8, 255]));
+    app.set_image(&ctx, img, None);
+    let quad = [Pt::new(8.0, 6.0), Pt::new(50.0, 9.0), Pt::new(54.0, 33.0), Pt::new(5.0, 30.0)];
+    let p = meteroscope_core::Perspective::from_quad(quad, (60, 40), None).expect("quadrilatère valide");
+    assert!(app.doc.set_perspective(Some(p.clone()), None));
+    app.sync_flat();
+    let flat = app.work_image().unwrap().clone();
+    assert_eq!(flat.dimensions(), p.size);
+    app.doc.add(Shape::Marker { p: Pt::new(12.0, 7.0) });
+    let measurements = app.doc.measurements.clone();
+
+    // Miroir : la photo, la correction et l'image corrigée suivent.
+    app.transform(io::Transform::FlipHorizontal);
+    assert_ne!(app.doc.perspective.as_ref(), Some(&p));
+    assert_ne!(*app.work_image().unwrap(), flat);
+
+    // Ctrl+Z, puis ce que fait la frame suivante.
+    assert!(app.doc.undo());
+    app.sync_orientation();
+    app.sync_flat();
+    assert_eq!(app.doc.perspective.as_ref(), Some(&p));
+    assert_eq!(app.doc.measurements, measurements);
+    assert_eq!(*app.work_image().unwrap(), flat, "l'image corrigée est reconstruite sur la photo remise à l'endroit");
+    assert!(!app.image_modified());
+}

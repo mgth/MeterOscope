@@ -200,6 +200,40 @@ impl Geo {
     }
 }
 
+/// Correspondance entre les pixels d'une image reconstruite et l'image
+/// d'origine (rotation, correction de perspective).
+pub(crate) trait Mapping: Sync {
+    /// Taille de l'image d'origine.
+    fn src(&self) -> (usize, usize);
+    /// Taille de l'image reconstruite.
+    fn out(&self) -> (usize, usize);
+    /// Point de l'image d'origine (coordonnées continues) vu au centre du
+    /// pixel (`i`, `j`) de l'image reconstruite.
+    fn source(&self, i: usize, j: usize) -> (f64, f64);
+
+    /// Part du pixel de sortie couverte par l'image (bords adoucis sur un pixel).
+    fn coverage(&self, x: f64, y: f64) -> f32 {
+        let (w, h) = self.src();
+        let edge = |v: f64, n: usize| (v + 0.5).clamp(0.0, 1.0) * (n as f64 - v + 0.5).clamp(0.0, 1.0);
+        (edge(x, w) * edge(y, h)) as f32
+    }
+}
+
+impl Mapping for Geo {
+    fn src(&self) -> (usize, usize) {
+        (self.w, self.h)
+    }
+    fn out(&self) -> (usize, usize) {
+        (self.ow, self.oh)
+    }
+    fn source(&self, i: usize, j: usize) -> (f64, f64) {
+        Geo::source(self, i, j)
+    }
+    fn coverage(&self, x: f64, y: f64) -> f32 {
+        Geo::coverage(self, x, y)
+    }
+}
+
 // ---------- noyaux ----------
 
 fn lanczos(x: f64, a: f64) -> f64 {
@@ -269,12 +303,13 @@ fn mirror(i: isize, n: usize) -> usize {
 /// avant préfiltre) qui entourent le point : les noyaux à lobes négatifs
 /// dépassent sur les bords francs, et ce dépassement, très visible côté
 /// sombre en lumière linéaire, laisserait des tirets noirs le long des bords.
-fn resample<const N: usize>(src: &[Px], bounds: &[Px], g: &Geo, weights: impl Fn(f32) -> [f32; N] + Sync) -> RgbaImage {
+fn resample<const N: usize>(src: &[Px], bounds: &[Px], g: &impl Mapping, weights: impl Fn(f32) -> [f32; N] + Sync) -> RgbaImage {
     let t = tables();
-    let (w, h) = (g.w as isize, g.h as isize);
+    let ((gw, gh), (ow, oh)) = (g.src(), g.out());
+    let (w, h) = (gw as isize, gh as isize);
     let before = N as isize / 2 - 1;
-    let mut out = vec![0u8; g.ow * g.oh * 4];
-    par_lines(&mut out, g.ow * 4, |j, row| {
+    let mut out = vec![0u8; ow * oh * 4];
+    par_lines(&mut out, ow * 4, |j, row| {
         for (i, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let (x, y) = g.source(i, j);
             let cov = g.coverage(x, y);
@@ -299,9 +334,9 @@ fn resample<const N: usize>(src: &[Px], bounds: &[Px], g: &Geo, weights: impl Fn
                         }
                     }
                 } else {
-                    let base = mirror(y0 + ky as isize, g.h) * g.w;
+                    let base = mirror(y0 + ky as isize, gh) * gw;
                     for (kx, wxv) in wx.iter().enumerate() {
-                        let p = src[base + mirror(x0 + kx as isize, g.w)];
+                        let p = src[base + mirror(x0 + kx as isize, gw)];
                         for c in 0..4 {
                             line[c] += p[c] * wxv;
                         }
@@ -314,9 +349,9 @@ fn resample<const N: usize>(src: &[Px], bounds: &[Px], g: &Geo, weights: impl Fn
             let (bx, by) = (fu as isize, fv as isize);
             let near = if bx >= 0 && by >= 0 && bx + 1 < w && by + 1 < h {
                 let k = (by * w + bx) as usize;
-                [bounds[k], bounds[k + 1], bounds[k + g.w], bounds[k + g.w + 1]]
+                [bounds[k], bounds[k + 1], bounds[k + gw], bounds[k + gw + 1]]
             } else {
-                [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(dx, dy)| bounds[mirror(by + dy, g.h) * g.w + mirror(bx + dx, g.w)])
+                [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(dx, dy)| bounds[mirror(by + dy, gh) * gw + mirror(bx + dx, gw)])
             };
             for c in 0..4 {
                 let lo = near[0][c].min(near[1][c]).min(near[2][c]).min(near[3][c]);
@@ -326,7 +361,7 @@ fn resample<const N: usize>(src: &[Px], bounds: &[Px], g: &Geo, weights: impl Fn
             t.store(acc, cov, px);
         }
     });
-    RgbaImage::from_raw(g.ow as u32, g.oh as u32, out).expect("taille cohérente")
+    RgbaImage::from_raw(ow as u32, oh as u32, out).expect("taille cohérente")
 }
 
 // ---------- préfiltre B-spline ----------
@@ -697,22 +732,37 @@ pub fn rotate_image(image: &RgbaImage, deg: f64, filter: RotationFilter) -> Rgba
         return turned.into_owned();
     }
     let g = Geo::new(turned.width() as usize, turned.height() as usize, rest);
-    let mut src = to_working(&turned);
+    let src = to_working(&turned);
     drop(turned);
     match filter {
-        RotationFilter::Bicubic => resample(&src, &src, &g, catmull_rom),
-        RotationFilter::Lanczos3 => {
+        RotationFilter::Shear => rotate_shear(src, &g),
+        f => resample_with(src, f, &g),
+    }
+}
+
+/// Rééchantillonne `src` selon `g` avec le filtre séparable choisi (les
+/// cisaillements, propres aux rotations, cèdent la place à Lanczos).
+fn resample_with(mut src: Vec<Px>, filter: RotationFilter, g: &impl Mapping) -> RgbaImage {
+    match filter {
+        RotationFilter::Bicubic => resample(&src, &src, g, catmull_rom),
+        RotationFilter::Lanczos3 | RotationFilter::Shear => {
             let table = lanczos3_table();
-            resample(&src, &src, &g, |f| table[(f * PHASES as f32 + 0.5) as usize])
+            resample(&src, &src, g, |f| table[(f * PHASES as f32 + 0.5) as usize])
         }
         RotationFilter::BSpline => {
             // Les bornes viennent des échantillons, pas des coefficients.
             let orig = src.clone();
-            bspline_prefilter(&mut src, g.w, g.h);
-            resample(&src, &orig, &g, bspline)
+            let (w, h) = g.src();
+            bspline_prefilter(&mut src, w, h);
+            resample(&src, &orig, g, bspline)
         }
-        RotationFilter::Shear => rotate_shear(src, &g),
     }
+}
+
+/// Reconstruit `image` selon la correspondance `g` (même traitement que le
+/// redressement : lumière linéaire, alpha prémultiplié, valeurs bornées).
+pub(crate) fn remap(image: &RgbaImage, filter: RotationFilter, g: &impl Mapping) -> RgbaImage {
+    resample_with(to_working(image), filter, g)
 }
 
 #[cfg(test)]
