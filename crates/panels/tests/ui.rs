@@ -23,6 +23,30 @@ fn palette_change_l_outil() {
     assert_eq!(*harness.state(), Tool::Calibrate);
 }
 
+#[test]
+fn palette_groupe_les_outils_semblables() {
+    meteroscope_i18n::set_language("fr");
+    let mut harness = Harness::new_ui_state(|ui, tool: &mut Tool| tool_palette(ui, tool), Tool::Select);
+    harness.run();
+    // Seul le premier outil du groupe « Cercles » est visible.
+    assert!(harness.query_by_label("Cercle 3 points").is_none());
+    // Le clic droit ouvre le volet du groupe sans changer d'outil.
+    harness.get_by_label("Cercle").click_secondary();
+    harness.run();
+    assert_eq!(*harness.state(), Tool::Select);
+    harness.get_by_label("Cercle 3 points").click();
+    harness.run();
+    assert_eq!(*harness.state(), Tool::Draw(ShapeKind::Circle3));
+    // Le volet se referme et le bouton du groupe montre désormais l'outil choisi.
+    harness.run();
+    assert!(harness.query_by_label("Cercle").is_none());
+    harness.get_by_label("Sélection").click();
+    harness.run();
+    harness.get_by_label("Cercle 3 points").click();
+    harness.run();
+    assert_eq!(*harness.state(), Tool::Draw(ShapeKind::Circle3));
+}
+
 struct PanelState {
     doc: Document,
     out: PanelOutput,
@@ -246,6 +270,57 @@ fn changer_la_couleur() {
     let after = harness.state().doc.get(a).unwrap().color;
     assert_ne!(before, after);
     assert_eq!(after, meteroscope_core::PALETTE[7]);
+}
+
+/// Profil d'une barre claire (bords en 30 et 70 px) et son document.
+fn profile_state() -> (Document, u64, meteroscope_core::profile::Analysis) {
+    use meteroscope_core::profile::{EdgeMethod, analyze};
+    let values: Vec<f64> = (0..200).map(|i| if (60..140).contains(&i) { 0.8 } else { 0.2 }).collect();
+    let analysis = analyze(&values, 0.5, EdgeMethod::HalfHeight, None, None);
+    let mut doc = Document::new();
+    let id = doc.add(Shape::profile(Pt::new(0.0, 0.0), Pt::new(99.5, 0.0)));
+    if let Shape::Profile { result, .. } = &mut doc.get_mut(id).unwrap().shape {
+        *result = analysis.result();
+    }
+    (doc, id, analysis)
+}
+
+#[test]
+fn panneau_du_profil_reglages_annulables() {
+    meteroscope_i18n::set_language("fr");
+    let (doc, id, analysis) = profile_state();
+    assert!((analysis.result().unwrap().width_px() - 40.0).abs() < 0.05);
+    let undo_before = doc.clone();
+    let mut harness = Harness::builder().with_size(egui::vec2(900.0, 230.0)).build_ui_state(
+        move |ui, st: &mut (Document, bool)| {
+            let out = meteroscope_panels::profile_panel(ui, &mut st.0, id, &analysis);
+            st.1 |= out.export_csv;
+        },
+        (doc, false),
+    );
+    harness.run();
+    // Nom de la mesure, largeur en pixels (sans échelle) et réglages visibles.
+    harness.get_by_label("Profil 1");
+    harness.get_by_label("40,00 px");
+    harness.get_by_label("Mi-hauteur");
+    // Décocher la correction d'inclinaison : appliqué, en une étape d'annulation.
+    harness.get_by_label("Mesurer perpendiculairement aux bords").click();
+    harness.run();
+    let params = |d: &Document| match &d.get(id).unwrap().shape {
+        Shape::Profile { params, .. } => params.clone(),
+        _ => panic!(),
+    };
+    assert!(!params(&harness.state().0).perpendicular);
+    harness.get_by_label("Gradient").click();
+    harness.run();
+    assert_eq!(params(&harness.state().0).method, meteroscope_core::EdgeMethod::Gradient);
+    let st = harness.state_mut();
+    assert!(st.0.undo() && st.0.undo());
+    assert_eq!(st.0.measurements, undo_before.measurements);
+    assert!(!st.1);
+    harness.get_by_label("Exporter la courbe…").click();
+    harness.run();
+    assert!(harness.state().1);
 }
 
 struct PresetState {

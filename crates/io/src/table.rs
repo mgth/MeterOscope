@@ -108,7 +108,7 @@ pub fn csv_separator() -> char {
 }
 
 /// Champ CSV : entre guillemets si nécessaire, guillemets doublés.
-fn csv_field(s: &str, sep: char) -> String {
+pub(crate) fn csv_field(s: &str, sep: char) -> String {
     if s.contains([sep, '"', '\n', '\r']) || s.starts_with(' ') || s.ends_with(' ') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
