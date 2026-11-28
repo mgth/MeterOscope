@@ -532,6 +532,22 @@ fn selection_multiple_propre_au_document() {
     harness.run();
     assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![ids[2]]);
 
+    // Image 2 dont la longueur 1 est identique à celle de l'image 1 (même
+    // identifiant, nom et géométrie), la 3 différente : pas confondue non plus.
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 1").click();
+    harness.run();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 3").click_modifiers(egui::Modifiers::COMMAND);
+    harness.run();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc).len(), 2);
+    let mut twin = image(15.0);
+    twin.measurements[0].shape = harness.state().doc.measurements[0].shape.clone();
+    let first = std::mem::replace(&mut harness.state_mut().doc, twin);
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![last]);
+    harness.run();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![last]);
+    harness.state_mut().doc = first;
+    harness.run();
+
     // Renommage en cours sur l'image 1, puis image 2 : le champ disparaît.
     let fields = harness.query_all_by_role(egui::Role::TextInput).count();
     harness.get_by_role_and_label(egui::Role::Button, "Longueur 2").click();

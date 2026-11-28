@@ -46,6 +46,8 @@ fn multi_id() -> egui::Id {
 #[derive(Clone, Default)]
 struct Multi {
     ids: Vec<u64>,
+    /// Adresse du tableau des mesures du document (voir [`Multi::same_doc`]).
+    buf: usize,
     /// Identifiant, nom et forme des mesures que la liste retient (sélection
     /// multiple, ancre de Maj + clic, renommage), relevés à la fin de chaque
     /// frame du panneau.
@@ -57,16 +59,26 @@ impl Multi {
         ctx.data(|d| d.get_temp(multi_id())).unwrap_or_default()
     }
 
-    /// Le document est celui de la frame précédente. Les identifiants se
-    /// recoupent d'un document à l'autre (images d'une série, caméra) et
-    /// l'application les échange sans prévenir le panneau : on reconnaît le
-    /// même document à ce qu'une mesure retenue au moins y est restée
-    /// identique. Une édition entre deux frames (glisser une poignée dans la
-    /// vue) ne touche qu'une mesure à la fois.
+    /// Le document est celui de la frame précédente. Les identifiants, et
+    /// parfois des mesures entières, se recoupent d'un document à l'autre
+    /// (images d'une série, caméra) ; l'application les échange sans prévenir
+    /// le panneau. Le tableau des mesures, lui, suit son document quand on
+    /// les échange (`mem::swap`) : même adresse, même document. Elle change
+    /// aussi quand le tableau est réalloué (ajout, annulation), ce qui ne
+    /// coûte que la sélection multiple. Les mesures retenues, dont une au
+    /// moins doit être restée identique (une édition entre deux frames n'en
+    /// touche qu'une), écartent le cas d'une adresse libérée puis reprise par
+    /// le tableau d'un autre document.
     fn same_doc(&self, doc: &Document) -> bool {
         self.marks.is_empty()
-            || self.marks.iter().any(|(id, name, shape)| doc.get(*id).is_some_and(|m| m.name == *name && m.shape == *shape))
+            || (self.buf == buf_of(doc)
+                && self.marks.iter().any(|(id, name, shape)| doc.get(*id).is_some_and(|m| m.name == *name && m.shape == *shape)))
     }
+}
+
+/// Adresse du tableau des mesures de `doc`.
+fn buf_of(doc: &Document) -> usize {
+    doc.measurements.as_ptr() as usize
 }
 
 /// Mesures sélectionnées : la sélection multiple de la liste si elle
@@ -197,7 +209,7 @@ fn panel(ui: &mut Ui, doc: &mut Document, presets: Option<&mut ScalePresets>) ->
     }
     let kept = multi.iter().copied().chain(st.anchor).chain(st.renaming.as_ref().map(|r| r.0));
     let marks = kept.filter_map(|id| doc.get(id)).map(|m| (m.id, m.name.clone(), m.shape.clone())).collect();
-    ui.data_mut(|d| d.insert_temp(multi_id(), Multi { ids: multi, marks }));
+    ui.data_mut(|d| d.insert_temp(multi_id(), Multi { ids: multi, buf: buf_of(doc), marks }));
 
     // Zone du bas : statistiques puis boutons ; sa hauteur sert à la frame suivante.
     let top = ui.cursor().top();
