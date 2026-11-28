@@ -295,3 +295,35 @@ fn inclinaison_entre_deux_segments() {
     let v = m.shape.values(&st.doc.calibration)[0].value;
     assert!((v - (20f64).atan2(80.0).to_degrees()).abs() < 0.1, "{v}");
 }
+
+#[test]
+fn perspective_quatre_coins() {
+    meteroscope_i18n::set_language("fr");
+    let mut h = harness();
+    h.state_mut().canvas.set_tool(Tool::Perspective);
+    assert!(h.state().canvas.hint().contains("premier coin"));
+    let corners = [Pt::new(30.0, 20.0), Pt::new(160.0, 30.0), Pt::new(150.0, 80.0), Pt::new(20.0, 70.0)];
+    for (i, c) in corners.iter().enumerate() {
+        assert!(h.state().outs.iter().all(|o| o.perspective_quad.is_none()));
+        click(&mut h, c.x, c.y);
+        assert_eq!(h.state().canvas.is_drawing(), i < 3, "le quatrième coin termine le tracé");
+    }
+    // Un double-clic ou Entrée en cours de route ne termine pas le quadrilatère.
+    let st = h.state();
+    let quad = st.outs.iter().find_map(|o| o.perspective_quad).expect("quadrilatère signalé");
+    assert!(quad.iter().zip(&corners).all(|(a, b)| near(*a, *b)), "{quad:?}");
+    assert!(st.doc.measurements.is_empty() && !st.doc.can_undo(), "la vue ne modifie pas le document");
+    // Le quadrilatère reste affiché pendant le dialogue, puis s'efface.
+    assert!(st.canvas.hint().contains("dimensions"));
+    h.state_mut().canvas.clear_perspective_quad();
+    assert!(h.state().canvas.hint().contains("premier coin"));
+    // Échap (annulation) en cours de tracé : on repart de zéro.
+    click(&mut h, 30.0, 20.0);
+    click(&mut h, 160.0, 30.0);
+    h.state_mut().canvas.cancel();
+    assert!(!h.state().canvas.is_drawing());
+    click(&mut h, 30.0, 20.0);
+    h.key_press(Key::Enter);
+    h.step();
+    assert!(h.state().canvas.is_drawing(), "Entrée ne valide pas un quadrilatère incomplet");
+}

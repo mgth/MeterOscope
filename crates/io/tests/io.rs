@@ -42,6 +42,40 @@ fn sample_doc() -> Document {
 }
 
 #[test]
+fn project_keeps_perspective_correction() {
+    meteroscope_i18n::set_language("fr");
+    let dir = TestDir::new("projet-perspective");
+    let img = dir.path("photo.png");
+    std::fs::write(&img, b"x").unwrap();
+    let proj = dir.path("essai.meteroscope");
+
+    // Projet sans correction : le champ n'est pas écrit.
+    let plain = sample_doc();
+    save_project(&Project { image_path: Some(img.clone()), document: plain.clone() }, &proj).unwrap();
+    let old = std::fs::read_to_string(&proj).unwrap();
+    assert!(!old.contains("\"perspective\""), "{old}");
+
+    // Avec correction : elle est enregistrée et relue telle quelle, le
+    // projet référence toujours la photo d'origine.
+    let mut doc = plain.clone();
+    let quad = [Pt::new(150., 120.), Pt::new(620., 180.), Pt::new(560., 470.), Pt::new(90., 380.)];
+    assert!(doc.correct_perspective(quad, (800, 600), Some((297.0, 210.0, "mm"))));
+    save_project(&Project { image_path: Some(img.clone()), document: doc.clone() }, &proj).unwrap();
+    let p = load_project(&proj).unwrap();
+    assert_eq!(p.image_path.as_deref(), Some(img.as_path()));
+    assert_eq!(p.document.perspective, doc.perspective);
+    assert!(p.document.perspective.is_some());
+    assert_eq!(p.document.measurements, doc.measurements);
+    assert_eq!(p.document.calibration, doc.calibration);
+
+    // Un projet d'avant cette fonction (sans le champ) reste lisible.
+    std::fs::write(&proj, old).unwrap();
+    let p = load_project(&proj).unwrap();
+    assert!(p.document.perspective.is_none());
+    assert_eq!(p.document.measurements, plain.measurements);
+}
+
+#[test]
 fn project_round_trip_relative() {
     meteroscope_i18n::set_language("fr");
     let dir = TestDir::new("projet");
