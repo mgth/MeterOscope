@@ -37,7 +37,7 @@ JSON, l'anglais sert de référence).
 |---|---|
 | Ctrl+O | Ouvrir : les images s'ajoutent au travail en cours, un projet le remplace |
 | Ctrl+N | Nouveau travail |
-| Ctrl+V | Coller une image ou un fichier (ajouté au travail) |
+| Ctrl+V | Coller : une image s'ajoute au travail en cours, un projet copié le remplace |
 | Ctrl+S / Ctrl+Maj+S | Enregistrer / enregistrer sous |
 | Ctrl+E | Exporter le CSV |
 | Ctrl+Z / Ctrl+Y (ou Ctrl+Maj+Z) | Annuler / rétablir (ajouts d'images et nouveau travail compris) |
