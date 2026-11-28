@@ -3,6 +3,7 @@ use crate::calibration::Calibration;
 use crate::geometry::{self as geo, Pt};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
@@ -341,19 +342,46 @@ impl Value {
     }
 }
 
-/// Formate un nombre avec une précision adaptée à sa grandeur, séparateur décimal de la langue.
+/// Nombre de décimales affichées choisi par l'utilisateur (`AUTO` : selon la grandeur).
+/// Réglage global, comme la langue : une seule interface par processus.
+static DECIMALS: AtomicU8 = AtomicU8::new(AUTO);
+const AUTO: u8 = u8::MAX;
+
+/// Plus grand nombre de décimales proposé.
+pub const MAX_DECIMALS: u8 = 4;
+
+/// Fixe le nombre de décimales des valeurs affichées (`None` : automatique).
+pub fn set_decimals(decimals: Option<u8>) {
+    DECIMALS.store(decimals.map_or(AUTO, |d| d.min(MAX_DECIMALS)), Ordering::Relaxed);
+}
+
+/// Nombre de décimales des valeurs affichées (`None` : automatique).
+pub fn decimals() -> Option<u8> {
+    Some(DECIMALS.load(Ordering::Relaxed)).filter(|&d| d != AUTO)
+}
+
+/// Formate un nombre avec le nombre de décimales réglé ([`set_decimals`]),
+/// séparateur décimal de la langue.
 pub fn format_number(v: f64) -> String {
+    format_number_with(v, decimals())
+}
+
+/// Formate un nombre avec `decimals` décimales, ou une précision adaptée à sa
+/// grandeur (`None`), séparateur décimal de la langue.
+pub fn format_number_with(v: f64, decimals: Option<u8>) -> String {
     let a = v.abs();
-    let decimals = if a >= 1000.0 {
-        0
-    } else if a >= 100.0 {
-        1
-    } else if a >= 1.0 {
-        2
-    } else {
-        3
+    let decimals = match decimals {
+        Some(d) => usize::from(d),
+        None if a >= 1000.0 => 0,
+        None if a >= 100.0 => 1,
+        None if a >= 1.0 => 2,
+        None => 3,
     };
-    let s = format!("{v:.decimals$}");
+    let mut s = format!("{v:.decimals$}");
+    // « -0,00 » pour une valeur négative arrondie à zéro.
+    if s.starts_with('-') && s.bytes().all(|b| matches!(b, b'-' | b'0' | b'.')) {
+        s.remove(0);
+    }
     match meteroscope_i18n::decimal_separator() {
         '.' => s,
         sep => s.replace('.', &sep.to_string()),
@@ -373,6 +401,20 @@ pub struct Measurement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimales_choisies() {
+        meteroscope_i18n::set_language("fr");
+        assert_eq!(format_number_with(1234.567, None), "1235");
+        assert_eq!(format_number_with(0.12345, None), "0,123");
+        assert_eq!(format_number_with(1234.567, Some(2)), "1234,57");
+        assert_eq!(format_number_with(0.12345, Some(0)), "0");
+        assert_eq!(format_number_with(12.5, Some(4)), "12,5000");
+        // Pas de « -0 » pour une petite valeur négative arrondie.
+        assert_eq!(format_number_with(-0.004, Some(2)), "0,00");
+        assert_eq!(format_number_with(-0.4, Some(0)), "0");
+        assert_eq!(format_number_with(-1.5, Some(1)), "-1,5");
+    }
 
     #[test]
     fn values_and_calibration() {
