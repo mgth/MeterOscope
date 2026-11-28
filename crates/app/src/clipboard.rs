@@ -238,10 +238,18 @@ mod tests {
         assert_eq!(img.get_pixel(0, 0).0[3], 0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn uri_list_avec_echappements() {
         let text = "# commentaire\r\nfile:///home/moi/Images/plan%20%C3%A9t%C3%A9.png\r\nfile://localhost/tmp/b.jpg\r\n";
         assert_eq!(paths_from_text(text), vec![p("/home/moi/Images/plan été.png"), p("/tmp/b.jpg")]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uri_list_windows() {
+        let text = "file:///C:/Users/moi/plan%20%C3%A9t%C3%A9.png\r\nfile://localhost/D:/b.jpg\r\n";
+        assert_eq!(paths_from_text(text), vec![p("C:/Users/moi/plan été.png"), p("D:/b.jpg")]);
     }
 
     #[test]
