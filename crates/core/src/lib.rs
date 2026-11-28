@@ -6,6 +6,7 @@
 pub mod calibration;
 pub mod document;
 pub mod geometry;
+pub mod groups;
 pub mod measure;
 pub mod stats;
 

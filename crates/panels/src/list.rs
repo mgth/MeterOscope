@@ -3,11 +3,12 @@
 use meteroscope_i18n::tr;
 use crate::PanelOutput;
 use crate::format::scale_texts;
+use crate::group_ui::group_editor;
 use crate::icons::{paint_cross, paint_eye};
 use egui::text::CCursorRange;
 use egui::{
     Align, Button, CollapsingHeader, Color32, Frame, Grid, Key, Label, Layout, Popup, Rect, RichText, ScrollArea,
-    Sense, Stroke, TextEdit, Ui, UiBuilder, Vec2, vec2,
+    Modifiers, Sense, Stroke, TextEdit, Ui, UiBuilder, Vec2, vec2,
 };
 use meteroscope_core::measure::format_number;
 use meteroscope_core::{Document, Measurement, PALETTE, Quantity, Shape, ShapeKind, Stats};
@@ -24,11 +25,37 @@ struct ListState {
     last_selected: Option<u64>,
     /// Hauteur de la zone du bas (statistiques + boutons) à la frame précédente.
     bottom_h: f32,
+    /// Ligne de départ d'une sélection par Maj + clic.
+    anchor: Option<u64>,
+    /// Liste présentée par groupe.
+    by_group: bool,
+    /// Groupes repliés dans la liste.
+    collapsed: Vec<String>,
+}
+
+/// Clé (mémoire temporaire d'egui) de la sélection multiple : mesures
+/// choisies par Maj/Ctrl + clic dans la liste, la mesure sélectionnée
+/// (`Document::selected`) comprise. Elle ne vit que dans la liste : la vue
+/// image ne met en évidence que la mesure sélectionnée.
+fn multi_id() -> egui::Id {
+    egui::Id::unique("meteroscope_selection_multiple")
+}
+
+/// Mesures sélectionnées : la sélection multiple de la liste si elle
+/// contient la mesure sélectionnée du document, sinon celle-ci seule.
+pub fn selection(ctx: &egui::Context, doc: &Document) -> Vec<u64> {
+    let multi: Vec<u64> = ctx.data(|d| d.get_temp(multi_id())).unwrap_or_default();
+    match doc.selected {
+        Some(id) if multi.contains(&id) => multi.into_iter().filter(|m| doc.get(*m).is_some()).collect(),
+        Some(id) => vec![id],
+        None => vec![],
+    }
 }
 
 /// Action demandée sur une ligne, appliquée après le parcours de la liste.
 enum RowAction {
-    Select,
+    /// Clic sur la ligne, avec les touches de modification (Maj, Ctrl).
+    Select(Modifiers),
     StartRename,
     /// Saisie en cours (conservée pour la frame suivante).
     EditRename(String),
@@ -37,6 +64,16 @@ enum RowAction {
     SetColor([u8; 3]),
     ToggleVisible,
     Remove,
+    SetGroup(String),
+    /// Afficher (`true`) ou masquer tout un groupe.
+    GroupVisible(String, bool),
+    ToggleCollapsed(String),
+    /// Actions sur toute la sélection multiple.
+    MultiGroup(String),
+    MultiColor([u8; 3]),
+    MultiVisible(bool),
+    MultiRemove,
+    ClearMulti,
 }
 
 fn rgb(c: [u8; 3]) -> Color32 {
@@ -55,17 +92,36 @@ pub fn measurements_panel(ui: &mut Ui, doc: &mut Document) -> PanelOutput {
     scale_card(ui, doc, &mut out);
     ui.add_space(10.0);
 
+    let groups = doc.groups();
     ui.horizontal(|ui| {
         ui.label(RichText::new(tr!("panel.measurements")).strong());
         if !doc.measurements.is_empty() {
             ui.label(RichText::new(format!("({})", doc.measurements.len())).weak());
         }
+        if !groups.is_empty() {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.toggle_value(&mut st.by_group, tr!("panel.by_group")).on_hover_text(tr!("panel.by_group_tip"));
+            });
+        }
     });
+    let grouped = st.by_group && !groups.is_empty();
+    let multi = selection(ui.ctx(), doc);
+    let mut actions: Vec<(u64, RowAction)> = Vec::new();
+    if multi.len() > 1 {
+        multi_bar(ui, doc, &multi, &groups, &mut actions);
+    }
+
+    // Lignes dans l'ordre affiché : par groupe, ou dans l'ordre de création.
+    let sections: Vec<(Option<String>, Vec<u64>)> = if grouped {
+        doc.grouped_order().into_iter().map(|(g, ids)| (Some(g), ids)).collect()
+    } else {
+        vec![(None, doc.measurements.iter().map(|m| m.id).collect())]
+    };
+    let order: Vec<u64> = sections.iter().flat_map(|(_, ids)| ids.iter().copied()).collect();
 
     // La liste prend toute la hauteur restante, moins la zone du bas.
     let list_h = (ui.available_height() - st.bottom_h - ui.spacing().item_spacing.y).max(90.0);
     let selection_changed = doc.selected != st.last_selected;
-    let mut actions: Vec<(u64, RowAction)> = Vec::new();
     ScrollArea::vertical()
         .id_salt("meteroscope_liste_mesures")
         .auto_shrink([false, false])
@@ -74,12 +130,22 @@ pub fn measurements_panel(ui: &mut Ui, doc: &mut Document) -> PanelOutput {
             if doc.measurements.is_empty() {
                 empty_hint(ui);
             }
-            for m in &doc.measurements {
-                measurement_row(ui, doc, m.id, &st, selection_changed, &mut actions);
+            for (group, ids) in &sections {
+                if let Some(g) = group {
+                    let folded = st.collapsed.contains(g);
+                    group_header(ui, doc, g, ids, folded, &mut actions);
+                    if folded {
+                        continue;
+                    }
+                }
+                for id in ids {
+                    let row = Row { multi: &multi, groups: &groups, selection_changed };
+                    measurement_row(ui, doc, *id, &st, &row, &mut actions);
+                }
             }
         });
     st.last_selected = doc.selected;
-    apply_actions(doc, &mut st, actions);
+    apply_actions(ui.ctx(), doc, &mut st, &order, actions);
     if st.renaming.as_ref().is_some_and(|(id, ..)| doc.get(*id).is_none()) {
         st.renaming = None;
     }
@@ -87,7 +153,7 @@ pub fn measurements_panel(ui: &mut Ui, doc: &mut Document) -> PanelOutput {
     // Zone du bas : statistiques puis boutons ; sa hauteur sert à la frame suivante.
     let top = ui.cursor().top();
     ui.separator();
-    stats_section(ui, doc);
+    stats_section(ui, doc, grouped);
     ui.add_space(4.0);
     actions_bar(ui, doc, &mut out);
     ui.add_space(4.0);
@@ -169,16 +235,18 @@ fn main_value(doc: &Document, shape: &Shape) -> String {
     }
 }
 
-fn measurement_row(
-    ui: &mut Ui,
-    doc: &Document,
-    id: u64,
-    st: &ListState,
+/// Contexte commun aux lignes de la liste.
+struct Row<'a> {
+    /// Sélection multiple (vide ou une seule mesure : sélection simple).
+    multi: &'a [u64],
+    groups: &'a [String],
     selection_changed: bool,
-    actions: &mut Vec<(u64, RowAction)>,
-) {
+}
+
+fn measurement_row(ui: &mut Ui, doc: &Document, id: u64, st: &ListState, ctx: &Row, actions: &mut Vec<(u64, RowAction)>) {
     let Some(m) = doc.get(id) else { return };
-    let selected = doc.selected == Some(id);
+    let single = ctx.multi.len() <= 1;
+    let selected = doc.selected == Some(id) || ctx.multi.contains(&id);
     let visuals = ui.visuals().clone();
     let (rect, row) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
     row.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &m.name));
@@ -198,15 +266,15 @@ fn measurement_row(
     row_content(&mut content, doc, m, selected, renaming, actions);
 
     if row.clicked() {
-        actions.push((id, RowAction::Select));
+        actions.push((id, RowAction::Select(ui.input(|i| i.modifiers))));
     }
-    if row.double_clicked() {
+    if row.double_clicked() && ui.input(|i| i.modifiers.is_none()) {
         actions.push((id, RowAction::StartRename));
     }
-    if selected {
-        let details = values_box(ui, doc, m);
+    if selected && single {
+        let details = values_box(ui, doc, m, ctx.groups, actions);
         ui.add_space(4.0);
-        if selection_changed {
+        if ctx.selection_changed {
             // Amène la ligne et ses valeurs dans la zone visible.
             ui.scroll_to_rect(row.rect.union(details.rect), None);
         }
@@ -296,7 +364,13 @@ fn row_content(
 }
 
 /// Encart des valeurs de la mesure sélectionnée.
-fn values_box(ui: &mut Ui, doc: &Document, m: &Measurement) -> egui::Response {
+fn values_box(
+    ui: &mut Ui,
+    doc: &Document,
+    m: &Measurement,
+    groups: &[String],
+    actions: &mut Vec<(u64, RowAction)>,
+) -> egui::Response {
     let visuals = ui.visuals().clone();
     Frame::new()
         .fill(visuals.faint_bg_color)
@@ -329,6 +403,11 @@ fn values_box(ui: &mut Ui, doc: &Document, m: &Measurement) -> egui::Response {
                         }
                     }
                 }
+                ui.label(RichText::new(tr!("item.group")).weak());
+                if let Some(g) = group_editor(ui, m.id, &m.group, groups) {
+                    actions.push((m.id, RowAction::SetGroup(g)));
+                }
+                ui.end_row();
                 if !m.visible {
                     ui.label("");
                     ui.label(RichText::new(tr!("item.hidden")).weak().italics());
@@ -339,10 +418,45 @@ fn values_box(ui: &mut Ui, doc: &Document, m: &Measurement) -> egui::Response {
         .response
 }
 
-fn apply_actions(doc: &mut Document, st: &mut ListState, actions: Vec<(u64, RowAction)>) {
+fn apply_actions(ctx: &egui::Context, doc: &mut Document, st: &mut ListState, order: &[u64], actions: Vec<(u64, RowAction)>) {
+    let mut multi = selection(ctx, doc);
     for (id, action) in actions {
         match action {
-            RowAction::Select => doc.selected = Some(id),
+            RowAction::Select(mods) => {
+                multi = select_click(&multi, doc.selected, st.anchor, order, id, mods);
+                if !mods.shift || st.anchor.is_none() {
+                    st.anchor = Some(id);
+                }
+                // La mesure cliquée devient la principale, sauf si Ctrl la retire.
+                doc.selected = if multi.contains(&id) { Some(id) } else { multi.last().copied() };
+            }
+            RowAction::SetGroup(g) => {
+                doc.set_group(&[id], &g);
+            }
+            RowAction::GroupVisible(g, v) => {
+                doc.set_visible(&doc.group_members(&g), v);
+            }
+            RowAction::ToggleCollapsed(g) => {
+                if let Some(i) = st.collapsed.iter().position(|c| *c == g) {
+                    st.collapsed.remove(i);
+                } else {
+                    st.collapsed.push(g);
+                }
+            }
+            RowAction::MultiGroup(g) => {
+                doc.set_group(&multi, &g);
+            }
+            RowAction::MultiColor(c) => {
+                doc.set_color(&multi, c);
+            }
+            RowAction::MultiVisible(v) => {
+                doc.set_visible(&multi, v);
+            }
+            RowAction::MultiRemove => {
+                doc.remove_many(&multi);
+                multi.clear();
+            }
+            RowAction::ClearMulti => multi = doc.selected.into_iter().collect(),
             RowAction::StartRename => {
                 if let Some(m) = doc.get(id) {
                     st.renaming = Some((id, m.name.clone(), true));
@@ -392,6 +506,112 @@ fn apply_actions(doc: &mut Document, st: &mut ListState, actions: Vec<(u64, RowA
             }
         }
     }
+    ctx.data_mut(|d| d.insert_temp(multi_id(), multi));
+}
+
+/// Nouvelle sélection multiple après un clic sur `id` : seul (clic simple),
+/// ajouté ou retiré (Ctrl), ou plage depuis `anchor` dans l'ordre affiché (Maj).
+fn select_click(multi: &[u64], selected: Option<u64>, anchor: Option<u64>, order: &[u64], id: u64, mods: Modifiers) -> Vec<u64> {
+    let mut cur: Vec<u64> = if multi.is_empty() { selected.into_iter().collect() } else { multi.to_vec() };
+    if mods.command {
+        if let Some(i) = cur.iter().position(|x| *x == id) {
+            cur.remove(i);
+        } else {
+            cur.push(id);
+        }
+        cur
+    } else if mods.shift {
+        let from = anchor.or(selected).unwrap_or(id);
+        match (order.iter().position(|x| *x == from), order.iter().position(|x| *x == id)) {
+            (Some(i), Some(j)) => order[i.min(j)..=i.max(j)].to_vec(),
+            _ => vec![id],
+        }
+    } else {
+        vec![id]
+    }
+}
+
+/// En-tête d'un groupe : repli, nom, nombre, œil pour tout masquer ou afficher.
+fn group_header(ui: &mut Ui, doc: &Document, group: &str, ids: &[u64], folded: bool, actions: &mut Vec<(u64, RowAction)>) {
+    let any_visible = ids.iter().any(|id| doc.get(*id).is_some_and(|m| m.visible));
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        let name = if group.is_empty() { tr!("group.ungrouped") } else { group };
+        // Triangle de repli dessiné (la police n'a pas ▶ ▼), puis le nom.
+        let (r, tri) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::click());
+        let c = r.center();
+        let color = ui.visuals().text_color();
+        let pts = if folded {
+            vec![c + vec2(-3.0, -5.0), c + vec2(4.0, 0.0), c + vec2(-3.0, 5.0)]
+        } else {
+            vec![c + vec2(-5.0, -3.0), c + vec2(5.0, -3.0), c + vec2(0.0, 4.0)]
+        };
+        ui.painter().add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+        let title = ui.add(Button::new(RichText::new(name).strong()).frame(false));
+        let title = title.on_hover_text(tr!("group.fold_tip"));
+        if title.clicked() || tri.clicked() {
+            actions.push((0, RowAction::ToggleCollapsed(group.to_owned())));
+        }
+        ui.label(RichText::new(format!("({})", ids.len())).weak());
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.add_space(6.0);
+            let tip = if any_visible { tr!("group.hide") } else { tr!("group.show") };
+            if icon_button(ui, tip, move |p, r, c| paint_eye(p, r, c, any_visible), None).on_hover_text(tip).clicked() {
+                actions.push((0, RowAction::GroupVisible(group.to_owned(), !any_visible)));
+            }
+        });
+    });
+}
+
+/// Barre d'actions sur la sélection multiple : groupe, couleur, visibilité, suppression.
+fn multi_bar(ui: &mut Ui, doc: &Document, multi: &[u64], groups: &[String], actions: &mut Vec<(u64, RowAction)>) {
+    let visuals = ui.visuals().clone();
+    Frame::new()
+        .fill(visuals.faint_bg_color)
+        .stroke(Stroke::new(1.0, visuals.selection.bg_fill))
+        .corner_radius(5.0)
+        .inner_margin(8.0)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tr!("multi.count", n = multi.len())).strong());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if icon_button(ui, tr!("multi.clear"), paint_cross, None).on_hover_text(tr!("multi.clear")).clicked() {
+                        actions.push((0, RowAction::ClearMulti));
+                    }
+                });
+            });
+            // Groupe commun, s'il l'est.
+            let first = doc.get(multi[0]).map(|m| m.group.as_str()).unwrap_or_default();
+            let common = if multi.iter().all(|id| doc.get(*id).is_some_and(|m| m.group == first)) { first } else { "" };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tr!("item.group")).weak());
+                if let Some(g) = group_editor(ui, "multi", common, groups) {
+                    actions.push((0, RowAction::MultiGroup(g)));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for (i, c) in PALETTE.into_iter().enumerate() {
+                    let all = multi.iter().all(|id| doc.get(*id).is_some_and(|m| m.color == c));
+                    if color_choice(ui, rgb(c), all, i).on_hover_text(tr!("multi.color_tip")).clicked() {
+                        actions.push((0, RowAction::MultiColor(c)));
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                let any_visible = multi.iter().any(|id| doc.get(*id).is_some_and(|m| m.visible));
+                let label = if any_visible { tr!("multi.hide") } else { tr!("multi.show") };
+                if ui.button(label).clicked() {
+                    actions.push((0, RowAction::MultiVisible(!any_visible)));
+                }
+                let del = Button::new(RichText::new(tr!("multi.delete")).color(visuals.error_fg_color));
+                if ui.add(del).on_hover_text(tr!("multi.delete_tip")).clicked() {
+                    actions.push((0, RowAction::MultiRemove));
+                }
+            });
+        });
+    ui.add_space(4.0);
 }
 
 /// Pastille ronde cliquable.
@@ -445,7 +665,7 @@ fn icon_button(
 }
 
 /// Statistiques par type (repliable) : un tableau compact, une ligne par type.
-fn stats_section(ui: &mut Ui, doc: &Document) {
+fn stats_section(ui: &mut Ui, doc: &Document, grouped: bool) {
     CollapsingHeader::new(RichText::new(tr!("stats.title")).strong())
         .id_salt("meteroscope_statistiques")
         .default_open(true)
@@ -459,8 +679,16 @@ fn stats_section(ui: &mut Ui, doc: &Document) {
             // Hauteur plafonnée : la liste des mesures reste prioritaire.
             let max_h = (ui.ctx().content_rect().height() * 0.3).max(110.0);
             ScrollArea::vertical().id_salt("meteroscope_stats_defilement").max_height(max_h).show(ui, |ui| {
-                if !summary.is_empty() {
-                    stats_table(ui, &summary);
+                if grouped {
+                    // Par groupe, puis par type.
+                    for (g, s) in doc.summary_by_group() {
+                        ui.add_space(4.0);
+                        let name = if g.is_empty() { tr!("group.ungrouped") } else { g.as_str() };
+                        ui.label(RichText::new(name).strong().underline());
+                        stats_table(ui, &s, &g);
+                    }
+                } else if !summary.is_empty() {
+                    stats_table(ui, &summary, "");
                 }
                 if markers > 0 {
                     ui.add_space(4.0);
@@ -473,10 +701,13 @@ fn stats_section(ui: &mut Ui, doc: &Document) {
         });
 }
 
-fn stats_table(ui: &mut Ui, summary: &[(ShapeKind, Quantity, String, Stats)]) {
+/// `salt` : distingue les tableaux de plusieurs groupes.
+fn stats_table(ui: &mut Ui, summary: &[(ShapeKind, Quantity, String, Stats)], salt: &str) {
     // Colonnes de largeur minimale commune : les grilles successives restent alignées.
     const COL_W: f32 = 54.0;
-    let grid = |salt: &str| Grid::new(("meteroscope_stats", salt.to_owned())).num_columns(4).min_col_width(COL_W).spacing([8.0, 0.0]);
+    let grid = |s: &str| {
+        Grid::new(("meteroscope_stats", salt.to_owned(), s.to_owned())).num_columns(4).min_col_width(COL_W).spacing([8.0, 0.0])
+    };
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
     grid("entete").show(ui, |ui| {
         for h in [tr!("stats.mean"), tr!("stats.std_dev"), tr!("stats.min"), tr!("stats.max")] {

@@ -112,7 +112,8 @@ fn renommer_par_double_clic() {
     harness.get_by_role_and_label(egui::Role::Button, "Longueur 1").click();
     harness.run();
     // Le champ de saisie a le focus, texte sélectionné : la frappe remplace le nom.
-    harness.get_by_role(egui::Role::TextInput).type_text("Pièce A");
+    // Premier champ : le nom (le champ Groupe est dans l'encart des valeurs, dessous).
+    harness.query_all_by_role(egui::Role::TextInput).next().unwrap().type_text("Pièce A");
     harness.run();
     harness.key_press(Key::Enter);
     harness.run();
@@ -218,14 +219,15 @@ fn renommer_puis_echap_annule() {
     harness.step();
     harness.get_by_role_and_label(egui::Role::Button, "Longueur 1").click();
     harness.run();
-    harness.get_by_role(egui::Role::TextInput).type_text("Autre");
+    harness.query_all_by_role(egui::Role::TextInput).next().unwrap().type_text("Autre");
     harness.run();
     harness.key_press(Key::Escape);
     harness.run();
     let doc = &harness.state().doc;
     assert_eq!(doc.get(a).unwrap().name, "Longueur 1");
     assert_eq!(count_undo(doc), undo_before);
-    assert!(harness.query_by_role(egui::Role::TextInput).is_none());
+    // Reste le seul champ Groupe.
+    assert_eq!(harness.query_all_by_role(egui::Role::TextInput).count(), 1);
 }
 
 #[test]
@@ -246,4 +248,51 @@ fn changer_la_couleur() {
     let after = harness.state().doc.get(a).unwrap().color;
     assert_ne!(before, after);
     assert_eq!(after, meteroscope_core::PALETTE[7]);
+}
+
+#[test]
+fn selection_multiple_groupe_et_suppression() {
+    meteroscope_i18n::set_language("fr");
+    let mut doc = Document::new();
+    let a = doc.add(length(10.0));
+    let b = doc.add(length(20.0));
+    let c = doc.add(length(30.0));
+    let mut harness = panel_harness(doc);
+    harness.run();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 1").click();
+    harness.run();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 3").click_modifiers(egui::Modifiers::COMMAND);
+    harness.run();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc), vec![a, c]);
+    harness.get_by_label_contains("2 sélectionnées");
+
+    // Groupe pour les deux, en un pas d'annulation.
+    let undo_before = count_undo(&harness.state().doc);
+    harness.query_all_by_role(egui::Role::TextInput).next().unwrap().focus();
+    harness.run();
+    harness.query_all_by_role(egui::Role::TextInput).next().unwrap().type_text("Pièce A");
+    harness.run();
+    harness.key_press(Key::Enter);
+    harness.run();
+    let d = &harness.state().doc;
+    let g = |id| d.get(id).unwrap().group.as_str();
+    assert_eq!((g(a), g(b), g(c)), ("Pièce A", "", "Pièce A"));
+    assert_eq!(count_undo(d), undo_before + 1);
+
+    // Présentation par groupe : en-tête « Sans groupe » dans la liste et dans les statistiques.
+    harness.get_by_label("Par groupe").click();
+    harness.run();
+    assert_eq!(harness.query_all_by_label("Sans groupe").count(), 2);
+
+    // Maj + clic : plage dans l'ordre affiché (Pièce A : 1, 3 ; puis 2).
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 1").click();
+    harness.run();
+    harness.get_by_role_and_label(egui::Role::Button, "Longueur 2").click_modifiers(egui::Modifiers::SHIFT);
+    harness.run();
+    assert_eq!(meteroscope_panels::selection(&harness.ctx, &harness.state().doc).len(), 3);
+    harness.get_by_role_and_label(egui::Role::Button, "Supprimer la sélection").click();
+    harness.run();
+    assert!(harness.state().doc.measurements.is_empty());
+    assert!(harness.state_mut().doc.undo());
+    assert_eq!(harness.state().doc.measurements.len(), 3);
 }

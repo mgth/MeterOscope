@@ -391,6 +391,9 @@ pub struct Measurement {
     pub shape: Shape,
     pub color: [u8; 3],
     pub visible: bool,
+    /// Groupe (nom libre ; vide : sans groupe).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
 }
 
 #[cfg(test)]

@@ -52,7 +52,7 @@ fn unit_of(doc: &Document, q: Quantity) -> String {
 fn measurement_rows(doc: &Document) -> Vec<Vec<String>> {
     let mut header = vec![tr!("table.name").to_owned(), tr!("item.type").to_owned()];
     header.extend(COLUMNS.iter().map(|q| format!("{} ({})", q.label(), unit_of(doc, *q))));
-    header.extend(["X (px)".to_owned(), "Y (px)".to_owned()]);
+    header.extend(["X (px)".to_owned(), "Y (px)".to_owned(), tr!("table.group").to_owned()]);
     let mut rows = vec![header];
     // Les annotations (texte, flèche) ne sont pas des mesures.
     for m in doc.measurements.iter().filter(|m| !m.shape.kind().is_annotation()) {
@@ -65,6 +65,7 @@ fn measurement_rows(doc: &Document) -> Vec<Vec<String>> {
             Shape::Marker { p } => row.extend([format_precise(p.x), format_precise(p.y)]),
             _ => row.extend([String::new(), String::new()]),
         }
+        row.push(m.group.clone());
         rows.push(row);
     }
     rows
@@ -189,13 +190,13 @@ mod tests {
     fn csv_exact() {
         meteroscope_i18n::set_language("fr");
         let expected = "\u{feff}\
-Nom;Type;Longueur (mm);Angle (°);Aire (mm²);Périmètre (mm);Largeur (mm);Hauteur (mm);Diamètre (mm);Rayon (mm);X (px);Y (px)\r\n\
-Longueur 1;Longueur;5;;;;;;;;;\r\n\
-Longueur 2;Longueur;10;;;;;;;;;\r\n\
-Rectangle 1;Rectangle;;;2;6;2;1;;;;\r\n\
-Angle 1;Angle;;90;;;;;;;;\r\n\
-Marqueur 1;Marqueur;;;;;;;;;12,5;7\r\n\
-\"Point; \"\"spécial\"\"\";Marqueur;;;;;;;;;3;4\r\n\
+Nom;Type;Longueur (mm);Angle (°);Aire (mm²);Périmètre (mm);Largeur (mm);Hauteur (mm);Diamètre (mm);Rayon (mm);X (px);Y (px);Groupe\r\n\
+Longueur 1;Longueur;5;;;;;;;;;;\r\n\
+Longueur 2;Longueur;10;;;;;;;;;;\r\n\
+Rectangle 1;Rectangle;;;2;6;2;1;;;;;\r\n\
+Angle 1;Angle;;90;;;;;;;;;\r\n\
+Marqueur 1;Marqueur;;;;;;;;;12,5;7;\r\n\
+\"Point; \"\"spécial\"\"\";Marqueur;;;;;;;;;3;4;\r\n\
 \r\n\
 Statistiques;Grandeur;Unité;n;Moyenne;Écart-type;Min;Max\r\n\
 Longueur;Longueur;mm;2;7,5;3,53553;5;10\r\n\
@@ -214,8 +215,8 @@ Nombre de marqueurs;2\r\n\
         assert!(!t.starts_with('\u{feff}'));
         let lines: Vec<&str> = t.lines().collect();
         assert_eq!(lines.len(), 7);
-        assert_eq!(lines[1], "Longueur 1\tLongueur\t5\t\t\t\t\t\t\t\t\t");
-        assert_eq!(lines[6], "Point; \"spécial\"\tMarqueur\t\t\t\t\t\t\t\t\t3\t4");
+        assert_eq!(lines[1], "Longueur 1\tLongueur\t5\t\t\t\t\t\t\t\t\t\t");
+        assert_eq!(lines[6], "Point; \"spécial\"\tMarqueur\t\t\t\t\t\t\t\t\t3\t4\t");
     }
 
     #[test]
@@ -229,13 +230,27 @@ Nombre de marqueurs;2\r\n\
     }
 
     #[test]
+    fn csv_avec_groupes() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = sample();
+        let ids: Vec<u64> = d.measurements.iter().map(|m| m.id).collect();
+        d.set_group(&ids[..2], "Pièce A");
+        d.set_group(&ids[4..5], "Lot; 2");
+        let s = csv_string(&d);
+        assert!(s.contains("Longueur 1;Longueur;5;;;;;;;;;;Pièce A\r\n"), "{s}");
+        assert!(s.contains("Rectangle 1;Rectangle;;;2;6;2;1;;;;;\r\n"));
+        assert!(s.contains("Marqueur 1;Marqueur;;;;;;;;;12,5;7;\"Lot; 2\"\r\n"));
+        assert!(clipboard_table(&d).lines().nth(2).unwrap().ends_with("\tPièce A"));
+    }
+
+    #[test]
     fn uncalibrated() {
         meteroscope_i18n::set_language("fr");
         let mut d = Document::new();
         d.add(Shape::Circle { center: Pt::new(0., 0.), edge: Pt::new(10., 0.) });
         let s = csv_string(&d);
         assert!(s.contains("Diamètre (px)") && s.contains("Aire (px²)"));
-        assert!(s.contains("Cercle 1;Cercle;;;314,159;62,8319;;;20;10;;\r\n"));
+        assert!(s.contains("Cercle 1;Cercle;;;314,159;62,8319;;;20;10;;;\r\n"));
         assert!(s.ends_with("Échelle;non étalonnée (mesures en pixels)\r\n"));
     }
 }

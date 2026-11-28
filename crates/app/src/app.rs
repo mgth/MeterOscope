@@ -372,8 +372,9 @@ impl MeterOscopeApp {
             }
         }
         if ctx.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) && !self.canvas.is_drawing()
-            && let Some(id) = self.doc.selected {
-                self.doc.remove(id);
+            && self.doc.selected.is_some() {
+                // Toute la sélection multiple de la liste, en un seul pas d'annulation.
+                self.doc.remove_many(&meteroscope_panels::selection(ctx, &self.doc));
             }
         if ctx.input(|i| i.modifiers.is_none()) {
             for t in meteroscope_panels::TOOLS {
