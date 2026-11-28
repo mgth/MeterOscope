@@ -631,6 +631,9 @@ fn segment(p: &Prepared, params: &DetectParams) -> (Vec<u32>, Vec<Component>, Ve
 /// Détecte les objets. `contours` : suivre et simplifier les contours
 /// (sinon `Object::polygon` reste vide, pour compter vite).
 pub fn detect(p: &Prepared, params: &DetectParams, contours: bool) -> Detection {
+    if p.is_empty() {
+        return Detection::default();
+    }
     let (labels, comps, keep) = segment(p, params);
     let k = p.scale as f64;
     let (ox, oy) = (p.origin.0 as f64, p.origin.1 as f64);
