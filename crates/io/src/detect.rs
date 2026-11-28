@@ -86,8 +86,10 @@ pub struct Object {
     pub area: f64,
     /// Centre de gravité des pixels.
     pub centroid: Pt,
-    /// Contour extérieur simplifié (polygone fermé, au moins 3 points) ;
-    /// vide si les contours n'ont pas été demandés.
+    /// Contour simplifié (polygone fermé, au moins 3 points) ; vide si les
+    /// contours n'ont pas été demandés. Si les trous sont gardés, chacun y est
+    /// raccordé en « trou de serrure » (voir [`bridge_hole`]) : l'aire du
+    /// polygone suit alors `area`, trous déduits.
     pub polygon: Vec<Pt>,
 }
 
@@ -271,14 +273,13 @@ impl Prepared {
 
 // ---------- composantes connexes ----------
 
-/// Bouche les trous : les pixels de fond qu'on ne peut atteindre (en
-/// 4-connexité) ni depuis le bord, ni depuis l'extérieur de la zone,
-/// deviennent objet.
-pub fn fill_holes(mask: &mut [bool], w: usize, h: usize, zone: Option<&[bool]>) {
+/// Pixels de fond qu'on peut atteindre (en 4-connexité) depuis le bord ou
+/// depuis l'extérieur de la zone ; les autres pixels de fond sont des trous.
+fn outer_background(is_obj: impl Fn(usize) -> bool, w: usize, h: usize, zone: Option<&[bool]>) -> Vec<bool> {
     let mut seen = vec![false; w * h];
     let mut stack = Vec::new();
     let seed = |i: usize, seen: &mut [bool], stack: &mut Vec<usize>| {
-        if !mask[i] && !seen[i] {
+        if !is_obj(i) && !seen[i] {
             seen[i] = true;
             stack.push(i);
         }
@@ -301,7 +302,7 @@ pub fn fill_holes(mask: &mut [bool], w: usize, h: usize, zone: Option<&[bool]>) 
     while let Some(i) = stack.pop() {
         let (x, y) = (i % w, i / w);
         let mut push = |j: usize| {
-            if !mask[j] && !seen[j] {
+            if !is_obj(j) && !seen[j] {
                 seen[j] = true;
                 stack.push(j);
             }
@@ -319,11 +320,85 @@ pub fn fill_holes(mask: &mut [bool], w: usize, h: usize, zone: Option<&[bool]>) 
             push(i + w);
         }
     }
+    seen
+}
+
+/// Bouche les trous : les pixels de fond qu'on ne peut atteindre (en
+/// 4-connexité) ni depuis le bord, ni depuis l'extérieur de la zone,
+/// deviennent objet.
+pub fn fill_holes(mask: &mut [bool], w: usize, h: usize, zone: Option<&[bool]>) {
+    let seen = outer_background(|i| mask[i], w, h, zone);
     for (m, s) in mask.iter_mut().zip(seen) {
         if !*m && !s {
             *m = true;
         }
     }
+}
+
+/// Trou : (étiquette de l'objet qui l'entoure, nombre de pixels, contour).
+type Hole = (u32, u64, Vec<(i64, i64)>);
+
+/// Trous des objets (composantes 4-connexes de fond fermées) : pour chacun,
+/// l'étiquette de l'objet qui l'entoure, son nombre de pixels et son contour
+/// (sommets de pixels, sens horaire, trou à droite). Un objet posé dans le
+/// trou d'un autre fait partie du contour de ce trou.
+fn hole_contours(labels: &[u32], w: usize, h: usize, zone: Option<&[bool]>) -> Vec<Hole> {
+    let seen = outer_background(|i| labels[i] != 0, w, h, zone);
+    let mut holes = vec![0u32; w * h];
+    let mut out = Vec::new();
+    let mut stack = Vec::new();
+    for start in 0..w * h {
+        if labels[start] != 0 || seen[start] || holes[start] != 0 {
+            continue;
+        }
+        // Premier pixel du trou dans l'ordre de lecture : celui du dessus est
+        // forcément objet (sinon il serait du même trou ou du fond extérieur).
+        let id = out.len() as u32 + 1;
+        let owner = labels[start - w];
+        holes[start] = id;
+        stack.push(start);
+        let mut count = 0u64;
+        while let Some(i) = stack.pop() {
+            count += 1;
+            let (x, y) = (i % w, i / w);
+            for (ok, j) in [(x > 0, i.wrapping_sub(1)), (x + 1 < w, i + 1), (y > 0, i.wrapping_sub(w)), (y + 1 < h, i + w)] {
+                if ok && labels[j] == 0 && !seen[j] && holes[j] == 0 {
+                    holes[j] = id;
+                    stack.push(j);
+                }
+            }
+        }
+        out.push((owner, count, (start % w, start / w)));
+    }
+    out.into_iter()
+        .enumerate()
+        .map(|(k, (owner, count, first))| (owner, count, trace_contour(&holes, w, h, k as u32 + 1, first)))
+        .collect()
+}
+
+/// Raccorde un trou au polygone en « trou de serrure » : une fente aller-retour
+/// relie le sommet du trou le plus proche d'un sommet du polygone. Le trou est
+/// parcouru en sens inverse, si bien que l'aire du polygone (formule du lacet)
+/// est celle de l'objet moins celle du trou ; la fente ne compte pas.
+pub fn bridge_hole(poly: &mut Vec<Pt>, hole: &[Pt]) {
+    if poly.is_empty() || hole.len() < 3 {
+        return;
+    }
+    let (mut bi, mut bj, mut bd) = (0, 0, f64::INFINITY);
+    for (i, p) in poly.iter().enumerate() {
+        for (j, q) in hole.iter().enumerate() {
+            let d = (p.x - q.x).powi(2) + (p.y - q.y).powi(2);
+            if d < bd {
+                (bi, bj, bd) = (i, j, d);
+            }
+        }
+    }
+    let n = hole.len();
+    let ring = (0..=n).map(|k| hole[(bj + n - k % n) % n]);
+    let tail: Vec<Pt> = poly.drain(bi..).collect();
+    poly.push(tail[0]);
+    poly.extend(ring);
+    poly.extend(tail);
 }
 
 /// Statistiques d'une composante connexe.
@@ -555,6 +630,13 @@ pub fn detect(p: &Prepared, params: &DetectParams, contours: bool) -> Detection 
     let k = p.scale as f64;
     let (ox, oy) = (p.origin.0 as f64, p.origin.1 as f64);
     let to_img = |x: f64, y: f64| Pt::new(ox + x * k, oy + y * k);
+    // Trous gardés : le polygone les contourne, pour que son aire soit celle
+    // des pixels de l'objet (celle qui a servi au filtre).
+    let holes = if contours && !params.fill_holes { hole_contours(&labels, p.width, p.height, p.zone.as_deref()) } else { vec![] };
+    let mut by_owner = vec![vec![]; comps.len()];
+    for (h, hole) in holes.iter().enumerate() {
+        by_owner[hole.0 as usize - 1].push(h);
+    }
     let mut out = Detection::default();
     for (i, c) in comps.iter().enumerate() {
         if !keep[i] {
@@ -568,7 +650,13 @@ pub fn detect(p: &Prepared, params: &DetectParams, contours: bool) -> Detection 
                 .into_iter()
                 .map(|(x, y)| to_img(x as f64, y as f64))
                 .collect();
-            simplify_closed(&raw, simplify_tolerance(n * k * k))
+            let mut poly = simplify_closed(&raw, simplify_tolerance(n * k * k));
+            for &h in &by_owner[i] {
+                let (_, count, hole) = &holes[h];
+                let hole: Vec<Pt> = hole.iter().map(|&(x, y)| to_img(x as f64, y as f64)).collect();
+                bridge_hole(&mut poly, &simplify_closed(&hole, simplify_tolerance(*count as f64 * k * k)));
+            }
+            poly
         } else {
             vec![]
         };

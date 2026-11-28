@@ -224,7 +224,9 @@ impl DetectView {
             if self.pending.is_some() {
                 ui.spinner();
                 ui.label(tr!("detect.running"));
-            } else if ui.add_enabled(n > 0, egui::Button::new(tr!("detect.add"))).on_hover_text(tr!("detect.add_tip")).clicked() {
+            // Aperçu réduit : de petits objets peuvent n'apparaître qu'à
+            // pleine résolution, le calcul complet reste donc possible.
+            } else if ui.add_enabled(n > 0 || approx, egui::Button::new(tr!("detect.add"))).on_hover_text(tr!("detect.add_tip")).clicked() {
                 run = true;
             }
         });

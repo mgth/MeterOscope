@@ -141,8 +141,36 @@ fn trous_bouches_ou_non() {
     assert_eq!((filled.objects.len(), open.objects.len()), (1, 1));
     assert_eq!(filled.objects[0].area, full);
     assert_eq!(open.objects[0].area, full - hole);
-    // Le contour extérieur est le même : le polygone englobe le trou.
-    assert_eq!(filled.objects[0].polygon, open.objects[0].polygon);
+    // Trou bouché : le polygone englobe le trou ; trou gardé : il le contourne
+    // en trou de serrure et son aire suit celle des pixels.
+    let rel = |o: &Object| (polygon_area(&o.polygon) - o.area).abs() / o.area;
+    assert!(rel(&filled.objects[0]) < 0.01 && rel(&open.objects[0]) < 0.01);
+    assert!(open.objects[0].polygon.len() > filled.objects[0].polygon.len());
+}
+
+#[test]
+fn trou_de_serrure_exact() {
+    // Carré 20 × 20 évidé de 10 × 10 (cas de la relecture), et un îlot de
+    // 2 × 2 dans un second trou : contours carrés, aucune simplification.
+    let img = RgbaImage::from_fn(60, 40, |x, y| {
+        let square = (5..25).contains(&x) && (5..25).contains(&y) && !((10..20).contains(&x) && (10..20).contains(&y));
+        let frame = (30..55).contains(&x) && (5..30).contains(&y) && !((33..52).contains(&x) && (8..27).contains(&y));
+        let island = (40..42).contains(&x) && (15..17).contains(&y);
+        let v = if square || frame || island { FG } else { BG };
+        image::Rgba([v, v, v, 255])
+    });
+    let prep = prepare(&img, None, u32::MAX, false);
+    let p = DetectParams { fill_holes: false, min_area: 1.0, ..params(120, true) };
+    let det = detect(&prep, &p, true);
+    assert_eq!(det.objects.len(), 3);
+    let areas: Vec<(f64, f64)> = det.objects.iter().map(|o| (o.area, polygon_area(&o.polygon))).collect();
+    assert_eq!(areas, [(300.0, 300.0), (25.0 * 25.0 - 19.0 * 19.0, 25.0 * 25.0 - 19.0 * 19.0), (4.0, 4.0)]);
+    // Un filtre d'aire max. à 350 garde le carré évidé, mesuré 300 px².
+    let det = detect(&prep, &DetectParams { max_area: 350.0, ..p }, true);
+    assert_eq!(polygon_area(&det.objects[0].polygon), 300.0);
+    // Trous bouchés : le contour extérieur seul.
+    let det = detect(&prep, &DetectParams { fill_holes: true, ..p }, true);
+    assert_eq!((det.objects[0].area, polygon_area(&det.objects[0].polygon)), (400.0, 400.0));
 }
 
 #[test]
