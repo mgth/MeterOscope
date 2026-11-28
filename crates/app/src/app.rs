@@ -11,6 +11,7 @@ use meteroscope_io as io;
 use meteroscope_panels::{CalibrationDialog, PerspectiveDialog};
 use crate::clipboard::Pasted;
 use crate::history::{ImageHistory, Workspace};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -58,10 +59,11 @@ pub struct MeterOscopeApp {
     /// Calcul qui a échoué : on ne le relance pas, l'aperçu GPU reste.
     failed: Option<(u64, TexKey)>,
     image_path: Option<PathBuf>,
-    /// Fichier image que cette session a écrit (image sans fichier, ou
-    /// transformée) et projet auquel il appartient : le seul fichier qu'un
-    /// enregistrement peut réécrire, et seulement pour ce projet.
-    owned_image: Option<(PathBuf, PathBuf)>,
+    /// Fichiers image que cette session a écrits (image sans fichier, ou
+    /// transformée), par projet propriétaire : les seuls qu'un enregistrement
+    /// peut réécrire, chacun pour son projet. Hors de l'historique : un droit
+    /// retiré parce que le fichier est devenu partagé ne revient pas avec Ctrl+Z.
+    owned_images: HashMap<PathBuf, PathBuf>,
     project_path: Option<PathBuf>,
     /// Révision du document au dernier enregistrement.
     saved_revision: u64,
@@ -145,7 +147,7 @@ impl MeterOscopeApp {
             job: None,
             failed: None,
             image_path: None,
-            owned_image: None,
+            owned_images: HashMap::new(),
             project_path: None,
             saved_revision: 0,
             brightness: 0.0,
@@ -391,7 +393,6 @@ impl MeterOscopeApp {
         self.image = Some(Arc::new(img));
         self.pixels_changed();
         self.image_path = path;
-        self.owned_image = None;
         self.project_path = None;
         self.doc = Document::new();
         self.applied = Orientation::IDENTITY;
@@ -411,7 +412,6 @@ impl MeterOscopeApp {
         Some(Workspace {
             image: self.image.take()?,
             image_path: self.image_path.take(),
-            owned_image: self.owned_image.take(),
             applied: self.applied,
             file_orientation: self.file_orientation,
             project_path: self.project_path.take(),
@@ -426,7 +426,6 @@ impl MeterOscopeApp {
         self.image = Some(w.image);
         self.pixels_changed();
         self.image_path = w.image_path;
-        self.owned_image = w.owned_image;
         self.applied = w.applied;
         self.file_orientation = w.file_orientation;
         self.project_path = w.project_path;
@@ -594,7 +593,7 @@ impl MeterOscopeApp {
     /// premier nom libre. « Enregistrer sous » un autre projet lui réserve
     /// donc son propre fichier, sans toucher à celui du premier.
     fn image_file_for(&self, project: &Path) -> PathBuf {
-        if let Some((image, _)) = self.owned_image.as_ref().filter(|(_, owner)| owner == project) {
+        if let Some(image) = self.owned_images.get(project) {
             return image.clone();
         }
         let stem = project.file_stem().map_or_else(|| self.default_stem(), |s| s.to_string_lossy().into_owned());
@@ -619,13 +618,14 @@ impl MeterOscopeApp {
             if self.report(r, "").is_none() {
                 return false;
             }
-            self.owned_image = Some((png.clone(), path.to_owned()));
+            self.owned_images.insert(path.to_owned(), png.clone());
             self.image_path = Some(png);
             self.file_orientation = self.applied;
-        } else if self.owned_image.as_ref().is_some_and(|(image, owner)| owner != path && Some(image) == self.image_path.as_ref()) {
+        } else if let Some(image) = &self.image_path {
             // Un autre projet va référencer ce fichier tel quel : désormais
-            // partagé, il ne sera plus réécrit pour aucun des deux.
-            self.owned_image = None;
+            // partagé, il ne sera plus réécrit pour aucun des deux, quel que
+            // soit l'état que l'historique rétablit ensuite.
+            self.owned_images.retain(|owner, owned| owner == path || owned != image);
         }
         let project = io::Project { image_path: self.image_path.clone(), document: self.doc.clone() };
         if self.report(io::save_project(&project, path), tr!("msg.project_saved")).is_none() {

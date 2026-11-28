@@ -257,3 +257,50 @@ fn enregistrer_sous_ne_touche_pas_l_image_du_premier_projet() {
     assert_eq!(image_of(&b), photo(), "l'image partagée avec B a été réécrite");
     assert_eq!(image_of(&a), image::imageops::flip_horizontal(&photo()));
 }
+
+#[test]
+fn annuler_ne_rend_pas_le_droit_d_ecraser_une_image_partagee() {
+    meteroscope_i18n::set_language("fr");
+    let ctx = egui::Context::default();
+    let dir = TestDir::new("partage_puis_annulation");
+    let (a, b) = (dir.0.join("A.meteroscope"), dir.0.join("B.meteroscope"));
+    let image_of = |project: &std::path::Path| io::load_image(io::load_project(project).unwrap().image_path.as_deref().unwrap()).unwrap();
+
+    // Image collée, en miroir, enregistrée dans A : A.png appartient à A.
+    let mut app = MeterOscopeApp::blank();
+    app.set_image(&ctx, photo(), None);
+    app.transform(io::Transform::FlipHorizontal);
+    assert!(app.write_project(&a));
+    let a_png = io::load_project(&a).unwrap().image_path.unwrap();
+    let mirrored = image::imageops::flip_horizontal(&photo());
+
+    // A rouvert (Ctrl+O), puis « Enregistrer sous » B sans rien changer : fichier partagé.
+    app.set_image(&ctx, io::load_image(&a_png).unwrap(), Some(a_png.clone()));
+    app.project_path = Some(a.clone());
+    assert!(app.write_project(&b));
+    assert_eq!(io::load_project(&b).unwrap().image_path.as_deref(), Some(a_png.as_path()));
+
+    // Ctrl+Z : retour à l'état d'avant la réouverture de A.
+    app.undo(&ctx);
+    assert_eq!(app.project_path.as_deref(), Some(a.as_path()));
+    assert_eq!(**app.image.as_ref().unwrap(), mirrored);
+
+    // Quart de tour puis enregistrement de A : B garde son image.
+    app.transform(io::Transform::RotateRight);
+    assert!(app.write_project(&a));
+    assert_eq!(image_of(&b), mirrored, "l'image partagée avec B a été réécrite");
+    assert_eq!(image_of(&b).dimensions(), (9, 5));
+    assert_eq!(image_of(&a), image::imageops::rotate90(&mirrored));
+    assert_ne!(io::load_project(&a).unwrap().image_path, io::load_project(&b).unwrap().image_path);
+
+    // Rétablir (retour sur A rouvert) puis transformer et enregistrer sous B :
+    // B, qui ne possède pas le fichier partagé, reçoit le sien.
+    let before = image_of(&a);
+    app.set_image(&ctx, io::load_image(&a_png).unwrap(), Some(a_png.clone()));
+    app.project_path = Some(b.clone());
+    app.transform(io::Transform::FlipVertical);
+    assert!(app.write_project(&b));
+    assert_eq!(io::load_image(&a_png).unwrap(), mirrored, "le fichier partagé a été réécrit");
+    assert_eq!(image_of(&a), before);
+    assert_eq!(image_of(&b), image::imageops::flip_vertical(&mirrored));
+}
