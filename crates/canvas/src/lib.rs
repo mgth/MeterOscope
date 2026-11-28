@@ -8,8 +8,10 @@
 //!   ou droit, Espace + glisser, ou glisser dans le vide (outil Sélection) :
 //!   déplacer la vue ;
 //! - outils de tracé : clic puis clic, ou presser-glisser-relâcher ; Maj
-//!   contraint ; Entrée / double-clic / clic droit terminent un chemin ou une
-//!   surface, Retour arrière retire le dernier point ;
+//!   contraint ; près d'un point remarquable d'une mesure, le point s'y
+//!   aimante (Alt maintenu : sans aimantation) ; Entrée / double-clic / clic
+//!   droit terminent un chemin ou une surface, Retour arrière retire le
+//!   dernier point ;
 //! - outil Sélection : clic pour sélectionner, glisser une poignée ou le corps ;
 //! - outil Redresser : tracer un segment le long d'une ligne qui doit être
 //!   horizontale ou verticale ; la vue pivote (`Document::rotation`), l'image
@@ -18,6 +20,7 @@
 mod draft;
 mod edit;
 mod render;
+mod snap;
 mod view;
 #[cfg(test)]
 mod tests;
@@ -42,6 +45,8 @@ const DRAG_THRESHOLD: f32 = 4.0;
 const HIT_TOL: f32 = 6.0;
 /// Tolérance de clic sur une poignée ou un point (pixels écran).
 const HANDLE_TOL: f32 = 9.0;
+/// Distance d'aimantation aux points remarquables (pixels écran).
+const SNAP_TOL: f32 = 8.0;
 /// Distance écran entre le bord d'un rectangle et sa poignée de rotation.
 const ROTATE_GAP: f32 = 24.0;
 /// Délai et distance maximaux d'un double-clic.
@@ -129,6 +134,12 @@ pub struct Canvas {
     has_selection: bool,
     hover_hit: Option<Hit>,
     shift: bool,
+    /// Alt maintenu : aimantation désactivée.
+    alt: bool,
+    /// Point d'accroche courant (tracé ou poignée), pour le repère et l'aide.
+    snap: Option<snap::Snap>,
+    /// La poignée saisie peut s'aimanter (voir [`handle_snaps`]).
+    handle_snaps: bool,
     out: CanvasOutput,
 }
 
@@ -151,6 +162,9 @@ impl Default for Canvas {
             has_selection: false,
             hover_hit: None,
             shift: false,
+            alt: false,
+            snap: None,
+            handle_snaps: false,
             out: CanvasOutput::default(),
         }
     }
@@ -163,6 +177,17 @@ fn draft_kind(tool: Tool) -> Option<ShapeKind> {
         Tool::Calibrate | Tool::Straighten => Some(ShapeKind::Length),
         Tool::Draw(k) => Some(k),
     }
+}
+
+/// La poignée `i` de la mesure `id` peut s'aimanter. Ni la rotation d'un
+/// rectangle (seul l'angle compte), ni un marqueur (deux marqueurs superposés
+/// se compteraient sans se voir).
+fn handle_snaps(doc: &Document, id: u64, i: usize) -> bool {
+    doc.get(id).is_some_and(|m| match m.shape {
+        Shape::Rect { .. } => i != edit::ROTATE_HANDLE,
+        Shape::Marker { .. } => false,
+        _ => true,
+    })
 }
 
 /// Couleur attribuée par `Document::add` à un type de forme.
@@ -327,7 +352,20 @@ impl Canvas {
                 (ShapeKind::Profile, _) => tr!("hint.profile.second"),
             },
         };
-        s.to_owned()
+        // Aimantation : partout où l'on pose un point ou déplace une poignée.
+        let snapping = match self.tool {
+            Tool::Select => {
+                self.handle_snaps && matches!(self.gesture.as_ref().map(|g| g.kind), Some(GestureKind::Handle(..)))
+            }
+            Tool::Calibrate => n > 0 || self.calib_seg.is_none(),
+            Tool::Draw(k) => k != ShapeKind::Marker,
+            Tool::Straighten => true,
+        };
+        match (snapping, self.snap) {
+            (false, _) => s.to_owned(),
+            (true, Some(sn)) => format!("{s} — {}", tr!("hint.snapped", target = sn.kind.label())),
+            (true, None) => format!("{s} — {}", tr!("hint.snap")),
+        }
     }
 
     fn xf(&self) -> Xf {
@@ -366,10 +404,11 @@ impl Canvas {
         // Entrées de la frame.
         let kb_ok = !ui.ctx().egui_wants_keyboard_input();
         let hovering = resp.contains_pointer();
-        let (events, shift, space, time, scroll, pinch, hover) = ui.input(|i| {
+        let (events, shift, alt, space, time, scroll, pinch, hover) = ui.input(|i| {
             (
                 i.events.clone(),
                 i.modifiers.shift,
+                i.modifiers.alt,
                 i.key_down(Key::Space),
                 i.time,
                 i.smooth_scroll_delta,
@@ -378,6 +417,7 @@ impl Canvas {
             )
         });
         self.shift = shift;
+        self.alt = alt;
         let space = space && kb_ok && (hovering || self.gesture.is_some());
 
         // Zoom (molette, pincement) sous le curseur ; défilement horizontal = déplacement.
@@ -458,8 +498,16 @@ impl Canvas {
         // Aperçu du tracé (le point sous le curseur suit la contrainte Maj).
         let pointer = if self.gesture.is_some() { hover } else { hover_in };
         let draw_tool = draft_kind(self.tool).is_some();
-        let rot = self.rotation;
-        let preview_pt = pointer.filter(|_| draw_tool).map(|p| self.draft.constrain(xf.to_image(p), shift, rot));
+        // Repère d'aimantation : celui de la poignée déplacée (calculé au
+        // glisser) ou celui du point sous le curseur pendant un tracé.
+        if !matches!(self.gesture, Some(Gesture { kind: GestureKind::Handle(..), dragged: true, .. })) {
+            self.snap = None;
+        }
+        let preview_pt = pointer.filter(|_| draw_tool).map(|p| {
+            let (q, s) = self.draft_point(doc, xf.to_image(p), xf);
+            self.snap = s;
+            q
+        });
         if self.tool == Tool::Calibrate
             && !self.draft.is_active()
             && let Some((a, b)) = self.calib_seg
@@ -475,6 +523,10 @@ impl Canvas {
                 painter.circle_stroke(xf.to_screen(self.draft.pts[0]), 8.0, Stroke::new(2.0, Color32::WHITE));
             }
         }
+        let snap_mark = self.snap;
+        if let Some(s) = snap_mark {
+            render::paint_snap(&painter, xf.to_screen(s.pt), s.kind);
+        }
         render::paint_scale_bar(&painter, rect, xf.zoom, &doc.calibration);
 
         // Loupe : pendant un tracé ou le glisser d'une poignée.
@@ -486,7 +538,10 @@ impl Canvas {
             if draw_tool && !panning && let Some(p) = preview_pt {
                 let pts = self.draft.preview(Some(p));
                 render::paint_loupe(&painter, tex.id(), [w, h], self.baked, xf, p, cur, rect, mag, |lp, lxf| {
-                    self.paint_draft(lp, lxf, &pts, None)
+                    self.paint_draft(lp, lxf, &pts, None);
+                    if let Some(s) = snap_mark {
+                        render::paint_snap(lp, lxf.to_screen(s.pt), s.kind);
+                    }
                 });
             } else if let Some(Gesture { kind: GestureKind::Handle(id, i), dragged: true, .. }) = &self.gesture
                 && let Some(m) = doc.get(*id)
@@ -497,6 +552,9 @@ impl Canvas {
                 let color = render::color32(m.color);
                 render::paint_loupe(&painter, tex.id(), [w, h], self.baked, xf, hp, cur, rect, mag, |lp, lxf| {
                     render::paint_shape(lp, lxf, &m.shape, color, 1.5, 0);
+                    if let Some(s) = snap_mark {
+                        render::paint_snap(lp, lxf.to_screen(s.pt), s.kind);
+                    }
                 });
             }
         }
@@ -572,6 +630,22 @@ impl Canvas {
         xf.img_len(HANDLE_TOL).min(xf.img_len(DOUBLE_CLICK_DIST))
     }
 
+    /// Point d'accroche près de `p` (pixels image), sauf si Alt est maintenu.
+    fn find_snap(&self, doc: &Document, p: Pt, xf: Xf, exclude: Option<u64>) -> Option<snap::Snap> {
+        if self.alt {
+            return None;
+        }
+        snap::find_snap(doc, p, xf.img_len(SNAP_TOL), exclude)
+    }
+
+    /// Point du tracé sous le pointeur `ip` : aimanté, sinon contraint par Maj.
+    /// Les marqueurs (comptage) ne s'aimantent pas : deux marqueurs
+    /// superposés se compteraient sans se voir.
+    fn draft_point(&self, doc: &Document, ip: Pt, xf: Xf) -> (Pt, Option<snap::Snap>) {
+        let s = if self.draft.kind == ShapeKind::Marker { None } else { self.find_snap(doc, ip, xf, None) };
+        (snap::snap_or(s, ip, |p| self.draft.constrain(p, self.shift, self.rotation)), s)
+    }
+
     fn press(&mut self, pos: Pos2, button: PointerButton, space: bool, doc: &mut Document) {
         let xf = self.xf();
         let ip = xf.to_image(pos);
@@ -587,6 +661,7 @@ impl Canvas {
                             let h = edit::handles(&m.shape, xf.img_len(ROTATE_GAP))[i];
                             grab = (h.x - ip.x, h.y - ip.y);
                         }
+                        self.handle_snaps = handle_snaps(doc, id, i);
                         GestureKind::Handle(id, i)
                     }
                     Some(Hit::Body(id)) => {
@@ -599,7 +674,7 @@ impl Canvas {
                     if !self.draft.is_active() {
                         self.calib_seg = None;
                     }
-                    let p = self.draft.constrain(ip, self.shift, self.rotation);
+                    let (p, _) = self.draft_point(doc, ip, xf);
                     let step = self.draft.press(p, self.draft_tol(xf));
                     self.apply(step, doc);
                     GestureKind::Draw
@@ -642,14 +717,19 @@ impl Canvas {
                     self.fitted = false;
                     self.view.clamp(self.last_rect.size(), self.vimg());
                 }
-                GestureKind::Handle(id, i) => match doc.get_mut(id) {
-                    Some(m) => {
-                        let p = Pt::new(ip.x + g.grab.0, ip.y + g.grab.1);
-                        let p = edit::constrain_handle(&m.shape, i, p, self.shift, self.rotation);
-                        edit::set_handle(&mut m.shape, i, p);
+                GestureKind::Handle(id, i) => {
+                    let p = Pt::new(ip.x + g.grab.0, ip.y + g.grab.1);
+                    // Une mesure ne s'aimante jamais sur elle-même.
+                    self.snap = if handle_snaps(doc, id, i) { self.find_snap(doc, p, xf, Some(id)) } else { None };
+                    match doc.get_mut(id) {
+                        Some(m) => {
+                            let (shift, rot) = (self.shift, self.rotation);
+                            let p = snap::snap_or(self.snap, p, |p| edit::constrain_handle(&m.shape, i, p, shift, rot));
+                            edit::set_handle(&mut m.shape, i, p);
+                        }
+                        None => return, // mesure disparue (annuler pendant le glisser)
                     }
-                    None => return, // mesure disparue (annuler pendant le glisser)
-                },
+                }
                 GestureKind::Body(id) => match (doc.get_mut(id), &g.orig) {
                     (Some(m), Some(orig)) => {
                         m.shape = orig.clone();
@@ -671,7 +751,7 @@ impl Canvas {
         let xf = self.xf();
         match g.kind {
             GestureKind::Draw => {
-                let p = self.draft.constrain(xf.to_image(pos), self.shift, self.rotation);
+                let (p, _) = self.draft_point(doc, xf.to_image(pos), xf);
                 let step = self.draft.release(p, g.dragged, self.draft_tol(xf));
                 let done = matches!(step, Step::Done(_));
                 self.apply(step, doc);
