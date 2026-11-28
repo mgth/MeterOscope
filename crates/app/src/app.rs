@@ -16,6 +16,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 mod live;
+mod export;
 #[cfg(test)]
 mod undo_tests;
 
@@ -772,8 +773,9 @@ impl MeterOscopeApp {
             }
         }
         if ctx.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) && !self.canvas.is_drawing()
-            && let Some(id) = self.doc.selected {
-                self.doc.remove(id);
+            && self.doc.selected.is_some() {
+                // Toute la sélection multiple de la liste, en un seul pas d'annulation.
+                self.doc.remove_many(&meteroscope_panels::selection(ctx, &self.doc));
             }
         if ctx.input(|i| i.modifiers.is_none()) {
             for t in meteroscope_panels::TOOLS {
@@ -838,6 +840,7 @@ impl MeterOscopeApp {
                         if ui.button(tr!("toolbar.export_image")).clicked() {
                             self.export_image();
                         }
+                        self.export_menu_items(ui);
                         if ui.button(tr!("toolbar.copy_image")).clicked() {
                             self.copy_image(&ctx);
                         }
