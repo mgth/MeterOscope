@@ -195,7 +195,8 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 // ---------- écriture ----------
 
 /// Enregistre le projet. Une seule image que la version 1.1.0 relirait
-/// fidèlement s'écrit en version 1 ; tout le reste en version 2.
+/// fidèlement, avec les réglages de série par défaut, s'écrit en version 1 ;
+/// tout le reste en version 2.
 pub fn save_series(project: &SeriesProject, path: &Path) -> Result<()> {
     let ctx = || tr!("project.save_failed", file = file_name(path));
     let proj_abs = absolute_clean(path);
@@ -215,8 +216,10 @@ pub fn save_series(project: &SeriesProject, path: &Path) -> Result<()> {
     };
     let format = FORMAT_ID.to_owned();
     let json = match project.images.as_slice() {
-        [only] if readable_by_v1(&only.document) => {
-            // Rien que la forme de la 1.1.0 : pas de champs de série.
+        // La forme de la 1.1.0 n'a pas de champs de série : le lecteur les
+        // reconstitue (échelle commune active, image liée). Des réglages
+        // différents, gardés d'une série ramenée à une image, imposent la v2.
+        [only] if project.shared_scale && !only.own_scale && readable_by_v1(&only.document) => {
             let image = ImageFile { width: None, height: None, own_scale: false, ..entry(only) };
             serde_json::to_string_pretty(&SingleFile { format, version: PROJECT_FORMAT_VERSION, image })
         }

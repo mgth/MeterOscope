@@ -310,6 +310,26 @@ mod tests {
         assert_eq!(version(d), 2, "type de mesure inconnu de la 1.1.0");
     }
 
+    /// Série ramenée à une image : ses réglages d'échelle (échelle commune
+    /// coupée, échelle propre) survivent à l'enregistrement, ce que la forme
+    /// version 1 ne permet pas.
+    #[test]
+    fn reglages_de_serie_gardes_avec_une_seule_image() {
+        meteroscope_i18n::set_language("fr");
+        let dir = scratch("reglages");
+        write_png(&dir.join("a.png"));
+        let path = dir.join("p.meteroscope");
+        for (shared_scale, own_scale, version) in [(true, false, 1), (false, false, 2), (true, true, 2), (false, true, 2)] {
+            let mut only = image(&dir.join("a.png"), doc(&[30.0], Some((10.0, "mm"))));
+            only.own_scale = own_scale;
+            save_series(&SeriesProject { images: vec![only], active: 0, shared_scale }, &path).unwrap();
+            let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(json["version"], version, "échelle commune {shared_scale}, échelle propre {own_scale}");
+            let back = load_series(&path).unwrap();
+            assert_eq!((back.shared_scale, back.images[0].own_scale), (shared_scale, own_scale));
+        }
+    }
+
     /// Le garde-fou des champs inconnus vaut aussi pour un projet d'une image.
     #[test]
     fn champ_inconnu_refuse_dans_un_projet_d_une_image() {
