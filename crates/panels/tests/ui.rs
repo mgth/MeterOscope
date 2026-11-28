@@ -23,6 +23,30 @@ fn palette_change_l_outil() {
     assert_eq!(*harness.state(), Tool::Calibrate);
 }
 
+#[test]
+fn palette_groupe_les_outils_semblables() {
+    meteroscope_i18n::set_language("fr");
+    let mut harness = Harness::new_ui_state(|ui, tool: &mut Tool| tool_palette(ui, tool), Tool::Select);
+    harness.run();
+    // Seul le premier outil du groupe « Cercles » est visible.
+    assert!(harness.query_by_label("Cercle 3 points").is_none());
+    // Le clic droit ouvre le volet du groupe sans changer d'outil.
+    harness.get_by_label("Cercle").click_secondary();
+    harness.run();
+    assert_eq!(*harness.state(), Tool::Select);
+    harness.get_by_label("Cercle 3 points").click();
+    harness.run();
+    assert_eq!(*harness.state(), Tool::Draw(ShapeKind::Circle3));
+    // Le volet se referme et le bouton du groupe montre désormais l'outil choisi.
+    harness.run();
+    assert!(harness.query_by_label("Cercle").is_none());
+    harness.get_by_label("Sélection").click();
+    harness.run();
+    harness.get_by_label("Cercle 3 points").click();
+    harness.run();
+    assert_eq!(*harness.state(), Tool::Draw(ShapeKind::Circle3));
+}
+
 struct PanelState {
     doc: Document,
     out: PanelOutput,

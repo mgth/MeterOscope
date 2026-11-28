@@ -2,7 +2,10 @@
 
 use meteroscope_i18n::tr;
 use crate::icons::paint_tool_icon;
-use egui::{Align2, FontId, Key, Rect, RichText, ScrollArea, Sense, Ui, WidgetInfo, pos2, vec2};
+use egui::{
+    Align2, FontId, Id, Key, Popup, PopupCloseBehavior, PopupKind, Rect, RectAlign, RichText, ScrollArea, Sense,
+    SetOpenCommand, Shape, Stroke, Ui, WidgetInfo, pos2, vec2,
+};
 use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
@@ -25,6 +28,64 @@ pub const TOOLS: [Tool; 17] = [
     Tool::Draw(ShapeKind::Arc),
     Tool::Draw(ShapeKind::Marker),
 ];
+
+/// Groupe d'outils semblables : un seul bouton dans la palette, qui montre
+/// le dernier outil utilisé du groupe ; les autres s'ouvrent à côté.
+#[derive(Clone, Copy, Debug)]
+pub struct ToolGroup {
+    /// Nom traduit du groupe (`None` pour un outil seul).
+    label: Option<fn() -> &'static str>,
+    pub tools: &'static [Tool],
+}
+
+impl ToolGroup {
+    /// Nom du groupe, ou celui de son outil s'il est seul.
+    pub fn name(&self) -> &'static str {
+        match self.label {
+            Some(label) => label(),
+            None => tool_name(self.tools[0]),
+        }
+    }
+}
+
+/// Groupes de la palette, dans l'ordre ; ensemble, ils reprennent
+/// exactement [`TOOLS`].
+pub const GROUPS: [ToolGroup; 7] = [
+    ToolGroup { label: None, tools: &[Tool::Select] },
+    ToolGroup { label: Some(|| tr!("tool_group.reference")), tools: &[Tool::Calibrate, Tool::Straighten] },
+    ToolGroup {
+        label: Some(|| tr!("tool_group.lines")),
+        tools: &[
+            Tool::Draw(ShapeKind::Length),
+            Tool::Draw(ShapeKind::Path),
+            Tool::Draw(ShapeKind::PointLine),
+            Tool::Draw(ShapeKind::Parallel),
+        ],
+    },
+    ToolGroup {
+        label: Some(|| tr!("tool_group.angles")),
+        tools: &[Tool::Draw(ShapeKind::Angle), Tool::Draw(ShapeKind::LineAngle)],
+    },
+    ToolGroup {
+        label: Some(|| tr!("tool_group.surfaces")),
+        tools: &[
+            Tool::Draw(ShapeKind::Area),
+            Tool::Draw(ShapeKind::Rect),
+            Tool::Draw(ShapeKind::Rect3),
+            Tool::Draw(ShapeKind::Ellipse),
+        ],
+    },
+    ToolGroup {
+        label: Some(|| tr!("tool_group.circles")),
+        tools: &[Tool::Draw(ShapeKind::Circle), Tool::Draw(ShapeKind::Circle3), Tool::Draw(ShapeKind::Arc)],
+    },
+    ToolGroup { label: None, tools: &[Tool::Draw(ShapeKind::Marker)] },
+];
+
+/// Groupe qui contient `tool`.
+pub fn tool_group(tool: Tool) -> &'static ToolGroup {
+    GROUPS.iter().find(|g| g.tools.contains(&tool)).expect("chaque outil a un groupe")
+}
 
 /// Largeur fixe des boutons (et donc du panneau).
 const BUTTON_W: f32 = 76.0;
@@ -116,9 +177,14 @@ pub fn tool_tooltip(tool: Tool) -> String {
 }
 
 /// Palette d'outils verticale (gros boutons avec icône dessinée + nom,
-/// raccourci en infobulle). Modifie `tool` au clic. Les outils sont groupés
-/// par famille, séparées d'un trait ; si la hauteur ne suffit pas pour une
-/// seule colonne, chaque famille se range deux par deux (aucun outil caché).
+/// raccourci en infobulle). Modifie `tool` au clic.
+///
+/// Les outils semblables sont regroupés ([`GROUPS`]) : le bouton montre
+/// l'outil actif du groupe, ou le dernier utilisé ; un clic droit, un appui
+/// long ou un nouveau clic sur le bouton déjà actif ouvre les autres outils
+/// du groupe à côté. Les raccourcis clavier gardent un outil chacun. Si la
+/// hauteur ne suffit pas pour une seule colonne, les boutons se rangent deux
+/// par deux.
 pub fn tool_palette(ui: &mut Ui, tool: &mut Tool) {
     let columns = palette_columns(ui.available_height());
     let gap = ui.spacing().item_spacing.x;
@@ -130,18 +196,16 @@ pub fn tool_palette(ui: &mut Ui, tool: &mut Tool) {
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = ROW_GAP;
             ui.add_space(4.0);
-            for (i, group) in families().iter().enumerate() {
-                if i > 0 {
+            for (s, section) in sections().iter().enumerate() {
+                if s > 0 {
                     ui.add_space(2.0);
                     ui.separator();
                     ui.add_space(2.0);
                 }
-                for row in group.chunks(columns) {
+                for row in section.chunks(columns) {
                     ui.horizontal(|ui| {
-                        for t in row {
-                            if tool_button(ui, *t, *tool == *t).clicked() {
-                                *tool = *t;
-                            }
+                        for (index, group) in row {
+                            group_button(ui, *index, group, tool);
                         }
                     });
                 }
@@ -150,36 +214,67 @@ pub fn tool_palette(ui: &mut Ui, tool: &mut Tool) {
         });
 }
 
+/// Bouton d'un groupe et son volet d'outils.
+fn group_button(ui: &mut Ui, index: usize, group: &ToolGroup, tool: &mut Tool) {
+    let memory_id = Id::unique(("meteroscope_groupe_outils", index));
+    let active = group.tools.contains(tool);
+    let shown = if active {
+        ui.data_mut(|d| d.insert_temp(memory_id, *tool));
+        *tool
+    } else {
+        ui.data(|d| d.get_temp::<Tool>(memory_id)).filter(|t| group.tools.contains(t)).unwrap_or(group.tools[0])
+    };
+    let multiple = group.tools.len() > 1;
+
+    let response = tool_button(ui, shown, active, multiple.then_some(group));
+    if !multiple {
+        if response.clicked() {
+            *tool = shown;
+        }
+        return;
+    }
+
+    let open_flyout = response.secondary_clicked() || response.long_touched() || (response.clicked() && active);
+    if response.clicked() && !active {
+        *tool = shown;
+    }
+    Popup::from_response(&response)
+        .kind(PopupKind::Menu)
+        .align(RectAlign::RIGHT_START)
+        .gap(4.0)
+        .open_memory(open_flyout.then_some(SetOpenCommand::Bool(true)))
+        .close_behavior(PopupCloseBehavior::CloseOnClick)
+        .show(|ui| {
+            ui.label(RichText::new(group.name()).small().weak());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
+                for &t in group.tools {
+                    if tool_button(ui, t, *tool == t, None).clicked() {
+                        *tool = t;
+                    }
+                }
+            });
+        });
+}
+
 /// Espace vertical entre deux boutons.
 const ROW_GAP: f32 = 3.0;
 /// Hauteur prise par un séparateur de familles (marges comprises).
 const SEPARATOR_H: f32 = 12.0;
 
-/// Famille d'un outil : réglages de l'image, longueurs et distances, angles,
-/// surfaces, cercles et arcs, comptage.
-fn family(tool: Tool) -> u8 {
-    match tool {
-        Tool::Select | Tool::Calibrate | Tool::Straighten => 0,
-        Tool::Draw(k) => match k {
-            ShapeKind::Length | ShapeKind::Path | ShapeKind::PointLine | ShapeKind::Parallel => 1,
-            ShapeKind::Angle | ShapeKind::LineAngle => 2,
-            ShapeKind::Area | ShapeKind::Rect | ShapeKind::Rect3 | ShapeKind::Ellipse => 3,
-            ShapeKind::Circle | ShapeKind::Circle3 | ShapeKind::Arc => 4,
-            ShapeKind::Marker => 5,
-        },
-    }
-}
-
-/// Outils groupés par famille, dans l'ordre de la palette.
-fn families() -> Vec<Vec<Tool>> {
-    TOOLS.chunk_by(|a, b| family(*a) == family(*b)).map(<[Tool]>::to_vec).collect()
+/// Boutons de la palette par section (séparées d'un trait) : réglages de
+/// l'image, puis les mesures. Chaque bouton garde l'indice de son groupe.
+fn sections() -> [Vec<(usize, &'static ToolGroup)>; 2] {
+    let first_measure = GROUPS.iter().position(|g| matches!(g.tools[0], Tool::Draw(_))).unwrap_or(GROUPS.len());
+    let all: Vec<_> = GROUPS.iter().enumerate().collect();
+    [all[..first_measure].to_vec(), all[first_measure..].to_vec()]
 }
 
 /// Hauteur de la palette sur `columns` colonnes.
 fn palette_height(columns: usize) -> f32 {
-    let groups = families();
-    let rows: usize = groups.iter().map(|g| g.len().div_ceil(columns)).sum();
-    8.0 + rows as f32 * (BUTTON_H + ROW_GAP) + (groups.len() - 1) as f32 * SEPARATOR_H
+    let sections = sections();
+    let rows: usize = sections.iter().map(|g| g.len().div_ceil(columns)).sum();
+    8.0 + rows as f32 * (BUTTON_H + ROW_GAP) + (sections.len() - 1) as f32 * SEPARATOR_H
 }
 
 /// Une colonne si tout tient dans la hauteur `available`, sinon deux.
@@ -189,7 +284,9 @@ fn palette_columns(available: f32) -> usize {
 
 /// Un bouton de la palette : icône au-dessus, nom dessous, lettre du
 /// raccourci discrète dans le coin.
-fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
+/// `group` : groupe à plusieurs outils dont ce bouton est le représentant
+/// dans la palette (petit triangle dans le coin, aide en infobulle).
+fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, group: Option<&ToolGroup>) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(BUTTON_W, BUTTON_H), Sense::click());
     response.widget_info(|| WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, tool_name(tool)));
 
@@ -223,6 +320,15 @@ fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
                 ui.visuals().weak_text_color(),
             );
         }
+        if group.is_some() {
+            // Petit triangle en bas à droite : d'autres outils sont rangés ici.
+            let c = rect.right_bottom() + vec2(-4.0, -4.0);
+            painter.add(Shape::convex_polygon(
+                vec![c, c + vec2(0.0, -6.0), c + vec2(-6.0, 0.0)],
+                ui.visuals().weak_text_color(),
+                Stroke::NONE,
+            ));
+        }
     }
 
     response.on_hover_ui(|ui| {
@@ -230,6 +336,11 @@ fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
         ui.label(tool_description(tool));
         if let Some(k) = tool_shortcut(tool) {
             ui.label(RichText::new(tr!("tool.shortcut", key = k.name())).weak());
+        }
+        if let Some(g) = group {
+            let others: Vec<&str> = g.tools.iter().filter(|&&t| t != tool).map(|&t| tool_name(t)).collect();
+            ui.separator();
+            ui.label(RichText::new(tr!("tool_group.hint", tools = others.join(", "))).weak());
         }
     })
 }
@@ -263,19 +374,20 @@ mod tests {
     }
 
     #[test]
-    fn familles_sans_outil_cache() {
+    fn les_groupes_reprennent_tous_les_outils_dans_l_ordre() {
         meteroscope_i18n::set_language("fr");
-        // Chaque outil apparaît une fois, les familles sont contiguës dans TOOLS.
-        let flat: Vec<Tool> = families().concat();
-        assert_eq!(flat, TOOLS.to_vec());
-        let ids: Vec<u8> = families().iter().map(|g| family(g[0])).collect();
-        assert_eq!(ids, [0, 1, 2, 3, 4, 5]);
-        assert!(families()[1].contains(&Tool::Draw(ShapeKind::PointLine)));
-        assert!(families()[4].contains(&Tool::Draw(ShapeKind::Arc)));
+        let flat: Vec<Tool> = GROUPS.iter().flat_map(|g| g.tools.iter().copied()).collect();
+        assert_eq!(flat, TOOLS);
+        for g in &GROUPS {
+            assert!(!g.tools.is_empty());
+            assert_eq!(g.label.is_some(), g.tools.len() > 1, "{}", g.name());
+        }
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Rect3)).name(), "Surfaces");
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Arc)).name(), "Cercles et arcs");
+        assert_eq!(tool_group(Tool::Draw(ShapeKind::Parallel)).name(), "Lignes et distances");
         // Deux colonnes quand la hauteur manque : bien moins haut, mêmes outils.
         assert_eq!(palette_columns(2000.0), 1);
-        assert_eq!(palette_columns(700.0), 2);
-        assert!(palette_height(2) < 0.65 * palette_height(1));
-        assert!(palette_height(2) < 700.0);
+        assert_eq!(palette_columns(300.0), 2);
+        assert!(palette_height(2) < 0.7 * palette_height(1));
     }
 }
