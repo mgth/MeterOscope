@@ -42,6 +42,92 @@ fn sample_doc() -> Document {
 }
 
 #[test]
+fn project_keeps_perspective_correction() {
+    meteroscope_i18n::set_language("fr");
+    let dir = TestDir::new("projet-perspective");
+    let img = dir.path("photo.png");
+    std::fs::write(&img, b"x").unwrap();
+    let proj = dir.path("essai.meteroscope");
+
+    // Projet sans correction : le champ n'est pas écrit.
+    let plain = sample_doc();
+    save_project(&Project { image_path: Some(img.clone()), document: plain.clone() }, &proj).unwrap();
+    let old = std::fs::read_to_string(&proj).unwrap();
+    assert!(!old.contains("\"perspective\""), "{old}");
+    // … et le projet reste en version 1, lisible par les versions antérieures.
+    assert!(old.contains("\"version\": 1"), "{old}");
+
+    // Avec correction : elle est enregistrée et relue telle quelle, le
+    // projet référence toujours la photo d'origine.
+    let mut doc = plain.clone();
+    let quad = [Pt::new(150., 120.), Pt::new(620., 180.), Pt::new(560., 470.), Pt::new(90., 380.)];
+    assert!(doc.correct_perspective(quad, (800, 600), Some((297.0, 210.0, "mm"))));
+    save_project(&Project { image_path: Some(img.clone()), document: doc.clone() }, &proj).unwrap();
+    // Version 2 : un lecteur qui ne connaît pas la correction refuse le projet
+    // au lieu de poser les mesures de l'image corrigée sur la photo brute.
+    // Même forme qu'une série d'une image : un tableau `images`, pas de
+    // `document` à la racine.
+    let text = std::fs::read_to_string(&proj).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json["version"], 2, "{text}");
+    assert!(json.get("document").is_none(), "{text}");
+    assert_eq!(json["images"].as_array().map(Vec::len), Some(1), "{text}");
+    assert_eq!(json["images"][0]["image"], "photo.png");
+    assert!(json["images"][0]["document"]["perspective"].is_object(), "{text}");
+    let p = load_project(&proj).unwrap();
+    assert_eq!(p.image_path.as_deref(), Some(img.as_path()));
+    assert_eq!(p.document.perspective, doc.perspective);
+    assert!(p.document.perspective.is_some());
+    assert_eq!(p.document.measurements, doc.measurements);
+    assert_eq!(p.document.calibration, doc.calibration);
+
+    // Un projet d'avant cette fonction (sans le champ) reste lisible.
+    std::fs::write(&proj, old).unwrap();
+    let p = load_project(&proj).unwrap();
+    assert!(p.document.perspective.is_none());
+    assert_eq!(p.document.measurements, plain.measurements);
+}
+
+/// Les fichiers version 2 des deux origines : tableau `images` (séries
+/// d'images, et projets à perspective) ou `document` à la racine.
+#[test]
+fn project_version_2_shapes() {
+    meteroscope_i18n::set_language("fr");
+    let dir = TestDir::new("projet-v2");
+    let proj = dir.path("essai.meteroscope");
+    let doc = serde_json::to_string(&sample_doc()).unwrap();
+    let load = |text: String| {
+        std::fs::write(&proj, text).unwrap();
+        load_project(&proj)
+    };
+
+    // Série d'une seule image, avec les champs propres aux séries.
+    let one = format!(
+        r#"{{"format":"meteroscope","version":2,"shared_scale":false,"active":0,
+            "images":[{{"image":"a.png","width":800,"height":600,"own_scale":true,"document":{doc}}}]}}"#
+    );
+    let p = load(one).unwrap();
+    assert_eq!(p.image_path.as_deref(), Some(dir.path("a.png").as_path()));
+    assert_eq!(p.document.measurements, sample_doc().measurements);
+
+    // Série de plusieurs images : refusée clairement, pas ouverte à moitié.
+    let two = format!(
+        r#"{{"format":"meteroscope","version":2,"active":1,
+            "images":[{{"image":"a.png","document":{doc}}},{{"image":"b.png","document":{doc}}}]}}"#
+    );
+    let e = format!("{:#}", load(two).err().unwrap());
+    assert!(e.contains("série d'images") && e.contains("essai.meteroscope"), "{e}");
+    let none = r#"{"format":"meteroscope","version":2,"images":[]}"#.to_owned();
+    assert!(load(none).is_err());
+
+    // `document` à la racine en version 2 : lu comme un projet version 1.
+    let root = format!(r#"{{"format":"meteroscope","version":2,"image":"a.png","document":{doc}}}"#);
+    let p = load(root).unwrap();
+    assert_eq!(p.image_path.as_deref(), Some(dir.path("a.png").as_path()));
+    assert_eq!(p.document.measurements, sample_doc().measurements);
+}
+
+#[test]
 fn project_round_trip_relative() {
     meteroscope_i18n::set_language("fr");
     let dir = TestDir::new("projet");

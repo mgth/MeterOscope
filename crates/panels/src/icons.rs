@@ -71,6 +71,17 @@ pub fn paint_tool_icon(painter: &Painter, rect: Rect, tool: Tool, color: Color32
                 Stroke::NONE,
             ));
         }
+        Tool::Perspective => {
+            // Quadrilatère fuyant (pâle) ramené à un rectangle droit.
+            let quad = vec![p(0.30, 0.16), p(0.70, 0.16), p(0.96, 0.84), p(0.04, 0.84)];
+            painter.add(Shape::closed_line(quad, Stroke::new(w * 0.8, light.gamma_multiply(3.0))));
+            let rr = Rect::from_min_max(p(0.20, 0.16), p(0.80, 0.84));
+            painter.rect_filled(rr, 0.0, light);
+            painter.rect_stroke(rr, 0.0, stroke, StrokeKind::Middle);
+            for c in [rr.left_top(), rr.right_top(), rr.right_bottom(), rr.left_bottom()] {
+                dot(c);
+            }
+        }
         Tool::Draw(kind) => match kind {
             ShapeKind::Length => {
                 let (a, b) = (p(0.14, 0.80), p(0.86, 0.20));

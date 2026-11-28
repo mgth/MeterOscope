@@ -9,10 +9,11 @@ use egui::{
 use meteroscope_core::{ShapeKind, Tool};
 
 /// Tous les outils, dans l'ordre de la palette.
-pub const TOOLS: [Tool; 18] = [
+pub const TOOLS: [Tool; 19] = [
     Tool::Select,
     Tool::Calibrate,
     Tool::Straighten,
+    Tool::Perspective,
     Tool::Draw(ShapeKind::Length),
     Tool::Draw(ShapeKind::Path),
     Tool::Draw(ShapeKind::PointLine),
@@ -53,7 +54,7 @@ impl ToolGroup {
 /// exactement [`TOOLS`].
 pub const GROUPS: [ToolGroup; 7] = [
     ToolGroup { label: None, tools: &[Tool::Select] },
-    ToolGroup { label: Some(|| tr!("tool_group.reference")), tools: &[Tool::Calibrate, Tool::Straighten] },
+    ToolGroup { label: Some(|| tr!("tool_group.reference")), tools: &[Tool::Calibrate, Tool::Straighten, Tool::Perspective] },
     ToolGroup {
         label: Some(|| tr!("tool_group.lines")),
         tools: &[
@@ -100,6 +101,7 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::Select => tr!("tool.select"),
         Tool::Calibrate => tr!("tool.scale"),
         Tool::Straighten => tr!("tool.straighten"),
+        Tool::Perspective => tr!("tool.perspective"),
         Tool::Draw(k) => k.label(),
     }
 }
@@ -121,6 +123,7 @@ pub fn tool_description(tool: Tool) -> &'static str {
         Tool::Select => tr!("tool_help.select"),
         Tool::Calibrate => tr!("tool_help.scale"),
         Tool::Straighten => tr!("tool_help.straighten"),
+        Tool::Perspective => tr!("tool_help.perspective"),
         Tool::Draw(k) => match k {
             ShapeKind::Length => tr!("tool_help.length"),
             ShapeKind::Path => tr!("tool_help.path"),
@@ -143,7 +146,8 @@ pub fn tool_description(tool: Tool) -> &'static str {
 
 /// Raccourci clavier (une lettre, sans modificateur) associé à un outil.
 ///
-/// S Sélection · E Échelle · H Horizon (redresser) · L Longueur · B ligne
+/// S Sélection · E Échelle · H Horizon (redresser) · Q Quadrilatère
+/// (perspective) · L Longueur · B ligne
 /// Brisée (chemin) · A Angle · I Inclinaison · P Polygone (surface) ·
 /// R Rectangle · O rectangle Orienté (trois points) · C Cercle · T cercle Trois points · M Marqueur ·
 /// D Distance point-droite · G écart (« Gap ») entre parallèles · V ellipse (oVale) · U arc (en U).
@@ -153,6 +157,7 @@ pub fn tool_shortcut(tool: Tool) -> Option<Key> {
         Tool::Select => Key::S,
         Tool::Calibrate => Key::E,
         Tool::Straighten => Key::H,
+        Tool::Perspective => Key::Q,
         Tool::Draw(k) => match k {
             ShapeKind::Length => Key::L,
             ShapeKind::Path => Key::B,
@@ -366,7 +371,7 @@ mod tests {
             assert_eq!(k.name().len(), 1, "{k:?} n'est pas une lettre");
             assert!(k.name().chars().all(|c| c.is_ascii_uppercase()));
         }
-        assert_eq!(seen.len(), 18);
+        assert_eq!(seen.len(), 19);
     }
 
     #[test]
