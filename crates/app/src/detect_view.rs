@@ -110,6 +110,11 @@ impl DetectView {
     /// Une frame : panneau, aperçu sur la vue, résultat du calcul complet.
     /// Renvoie un message pour la barre d'état (texte, erreur ?).
     pub fn frame(&mut self, ctx: &egui::Context, image: Option<&RgbaImage>, doc: &mut Document, canvas: &mut Canvas) -> Option<(String, bool)> {
+        // Sans image (mode caméra…), `doc` n'est pas celui de la photo qui a
+        // lancé le calcul : son résultat est abandonné.
+        if image.is_none() {
+            self.pending = None;
+        }
         let msg = self.poll(ctx, doc);
         let Some(img) = image.filter(|_| self.open) else {
             canvas.set_overlay(None);
@@ -260,6 +265,29 @@ impl DetectView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resultat_abandonne_sans_image() {
+        // Calcul lancé sur la photo, puis passage en mode caméra : le document
+        // reçu (celui du flux) ne doit pas recevoir les contours de la photo.
+        meteroscope_i18n::set_language("fr");
+        let (ctx, mut canvas, img) = (egui::Context::default(), Canvas::default(), RgbaImage::new(8, 8));
+        let pending = || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let square = vec![Pt::new(1., 1.), Pt::new(3., 1.), Pt::new(3., 3.), Pt::new(1., 3.)];
+            tx.send(Detection { objects: vec![detect::Object { area: 4.0, centroid: Pt::new(2., 2.), polygon: square }], rejected: 0 }).unwrap();
+            Some(rx)
+        };
+        let mut view = DetectView { pending: pending(), ..Default::default() };
+        let mut camera_doc = Document::new();
+        assert!(view.frame(&ctx, None, &mut camera_doc, &mut canvas).is_none());
+        assert!(camera_doc.measurements.is_empty() && view.pending.is_none());
+        // Avec la photo, le résultat est bien ajouté.
+        let mut photo_doc = Document::new();
+        view.pending = pending();
+        assert!(view.frame(&ctx, Some(&img), &mut photo_doc, &mut canvas).is_some());
+        assert_eq!(photo_doc.measurements.len(), 1);
+    }
 
     #[test]
     fn zone_et_mesures() {

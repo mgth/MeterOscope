@@ -292,6 +292,7 @@ impl MeterOscopeApp {
                 self.set_image(ctx, img, project.image_path.clone());
             }
             self.doc = project.document;
+            self.detect.invalidate();
             self.saved_revision = self.doc.revision();
             self.project_path = Some(path.to_owned());
             self.settings.add_recent(path);
