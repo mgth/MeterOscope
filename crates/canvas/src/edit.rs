@@ -202,7 +202,7 @@ pub fn constrain_handle(shape: &Shape, i: usize, p: Pt, shift: bool, rot: f64) -
         return p;
     }
     match shape {
-        Shape::Length { a, b } => snap45(if i == 0 { *b } else { *a }, p, rot),
+        Shape::Length { a, b } | Shape::Profile { a, b, .. } => snap45(if i == 0 { *b } else { *a }, p, rot),
         // L'autre extrémité du même segment.
         Shape::LineAngle { .. } => snap45(shape.points()[i ^ 1], p, rot),
         // Les deux points de la droite de référence.
@@ -227,7 +227,7 @@ pub fn constrain_handle(shape: &Shape, i: usize, p: Pt, shift: bool, rot: f64) -
 }
 
 /// Segments du contour d'une forme (hors cercles, ellipses et arcs).
-fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
+pub(crate) fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
     let open = |pts: &[Pt]| pts.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>();
     let closed = |pts: &[Pt]| {
         let mut v = open(pts);
@@ -237,7 +237,7 @@ fn segments(shape: &Shape) -> Vec<(Pt, Pt)> {
         v
     };
     match shape {
-        Shape::Length { a, b } => vec![(*a, *b)],
+        Shape::Length { a, b } | Shape::Profile { a, b, .. } => vec![(*a, *b)],
         Shape::Path { pts } => open(pts),
         Shape::Angle { a, vertex, b } => vec![(*a, *vertex), (*vertex, *b)],
         Shape::Area { pts } => closed(pts),

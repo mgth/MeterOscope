@@ -45,10 +45,13 @@ pub enum ShapeKind {
     Ellipse,
     /// Arc de cercle par trois points.
     Arc,
+    /// Profil d'intensité : largeur entre deux bords détectés au sous-pixel
+    /// le long d'un segment (voir [`crate::profile`]).
+    Profile,
 }
 
 impl ShapeKind {
-    pub const ALL: [ShapeKind; 14] = [
+    pub const ALL: [ShapeKind; 15] = [
         ShapeKind::Length,
         ShapeKind::Path,
         ShapeKind::Angle,
@@ -63,6 +66,7 @@ impl ShapeKind {
         ShapeKind::Parallel,
         ShapeKind::Ellipse,
         ShapeKind::Arc,
+        ShapeKind::Profile,
     ];
 
     /// Type de la mesure produite par ce tracé (Rect3 → Rect).
@@ -90,6 +94,7 @@ impl ShapeKind {
             ShapeKind::Parallel => tr!("shape.parallel"),
             ShapeKind::Ellipse => tr!("shape.ellipse"),
             ShapeKind::Arc => tr!("shape.arc"),
+            ShapeKind::Profile => tr!("shape.profile"),
         }
     }
 
@@ -97,7 +102,7 @@ impl ShapeKind {
     /// terminé par double-clic / Entrée).
     pub fn point_count(self) -> Option<usize> {
         match self {
-            ShapeKind::Length | ShapeKind::Rect | ShapeKind::Circle => Some(2),
+            ShapeKind::Length | ShapeKind::Rect | ShapeKind::Circle | ShapeKind::Profile => Some(2),
             ShapeKind::Angle | ShapeKind::Circle3 | ShapeKind::Rect3 => Some(3),
             ShapeKind::PointLine | ShapeKind::Parallel | ShapeKind::Ellipse | ShapeKind::Arc => Some(3),
             ShapeKind::Marker => Some(1),
@@ -165,6 +170,16 @@ pub enum Shape {
     Ellipse { center: Pt, a: Pt, b: Pt },
     /// Arc de cercle d'extrémités `a`, `b`, passant par `m`.
     Arc { a: Pt, m: Pt, b: Pt },
+    /// Profil d'intensité le long de `a→b`. `result` est un cache : il dépend
+    /// des pixels et c'est l'application qui le recalcule.
+    Profile {
+        a: Pt,
+        b: Pt,
+        #[serde(default)]
+        params: crate::profile::ProfileParams,
+        #[serde(default)]
+        result: Option<crate::profile::ProfileResult>,
+    },
 }
 
 impl Shape {
@@ -196,6 +211,7 @@ impl Shape {
                 Shape::Ellipse { center, a, b }
             }
             ShapeKind::Arc => Shape::Arc { a: p[0], m: p[1], b: p[2] },
+            ShapeKind::Profile => Shape::profile(p[0], p[1]),
         })
     }
 
@@ -214,13 +230,14 @@ impl Shape {
             Shape::Parallel { .. } => ShapeKind::Parallel,
             Shape::Ellipse { .. } => ShapeKind::Ellipse,
             Shape::Arc { .. } => ShapeKind::Arc,
+            Shape::Profile { .. } => ShapeKind::Profile,
         }
     }
 
     /// Points de contrôle (poignées), dans l'ordre de saisie.
     pub fn points(&self) -> Vec<Pt> {
         match self {
-            Shape::Length { a, b } | Shape::Rect { a, b, .. } => vec![*a, *b],
+            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } => vec![*a, *b],
             Shape::Path { pts } | Shape::Area { pts } => pts.clone(),
             Shape::Angle { a, vertex, b } => vec![*a, *vertex, *b],
             Shape::Circle { center, edge } => vec![*center, *edge],
@@ -236,7 +253,7 @@ impl Shape {
     /// Accès mutable aux points de contrôle, même ordre que [`Shape::points`].
     pub fn points_mut(&mut self) -> Vec<&mut Pt> {
         match self {
-            Shape::Length { a, b } | Shape::Rect { a, b, .. } => vec![a, b],
+            Shape::Length { a, b } | Shape::Rect { a, b, .. } | Shape::Profile { a, b, .. } => vec![a, b],
             Shape::Path { pts } | Shape::Area { pts } => pts.iter_mut().collect(),
             Shape::Angle { a, vertex, b } => vec![a, vertex, b],
             Shape::Circle { center, edge } => vec![center, edge],
@@ -344,6 +361,8 @@ impl Shape {
                 ],
                 None => vec![],
             },
+            // Sans bords détectés : pas de valeur.
+            Shape::Profile { result, .. } => result.iter().map(|r| len(Quantity::Width, r.width_px())).collect(),
         }
     }
 }
