@@ -3,10 +3,11 @@
 
 use crate::calibration::Calibration;
 use crate::measure::{Measurement, Shape, format_number};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-/// Texte de l'étiquette d'une forme. `marker_no` : numéro du marqueur
-/// (voir [`marker_numbers`]). Vide quand il n'y a rien à afficher.
+/// Texte de l'étiquette d'une forme. `marker_no` : numéro du marqueur (les
+/// exports lui préfèrent [`marker_labels`], qui reste lisible après un
+/// renommage). Vide quand il n'y a rien à afficher.
 pub fn label_text(shape: &Shape, cal: &Calibration, marker_no: usize) -> String {
     let v = shape.values(cal);
     match shape {
@@ -30,15 +31,30 @@ fn name_number(name: &str) -> Option<usize> {
     name.rsplit(char::is_whitespace).next()?.parse().ok().filter(|n| *n > 0)
 }
 
-/// Numéro dessiné à côté de chaque marqueur, par identifiant de mesure :
-/// celui de son nom (« Marqueur 3 » → 3), pour que l'image et les tableaux
-/// désignent le même point même après une suppression. Un marqueur renommé
-/// sans numéro prend le plus petit numéro libre, dans l'ordre de la liste.
-pub fn marker_numbers(measurements: &[Measurement]) -> HashMap<u64, usize> {
+/// Étiquette dessinée à côté de chaque marqueur, par identifiant de mesure,
+/// pour que l'image et les tableaux désignent le même point : le numéro de
+/// son nom (« Marqueur 3 » → « 3 », même après une suppression) tant qu'il
+/// ne désigne que lui. Si deux marqueurs portent le même numéro (« Lot A 1 »
+/// et « Lot B 1 ») ou si le nom n'en a pas, c'est le nom entier ; un
+/// marqueur sans nom garde son rang dans la liste.
+pub fn marker_labels(measurements: &[Measurement]) -> HashMap<u64, String> {
     let markers = || measurements.iter().filter(|m| matches!(m.shape, Shape::Marker { .. }));
-    let named: HashSet<usize> = markers().filter_map(|m| name_number(&m.name)).collect();
-    let mut free = (1..).filter(|n| !named.contains(n));
-    markers().map(|m| (m.id, name_number(&m.name).or_else(|| free.next()).unwrap_or(0))).collect()
+    let mut uses: HashMap<usize, usize> = HashMap::new();
+    for n in markers().filter_map(|m| name_number(&m.name)) {
+        *uses.entry(n).or_default() += 1;
+    }
+    markers()
+        .enumerate()
+        .map(|(rank, m)| {
+            let name = m.name.trim();
+            let label = match name_number(name) {
+                Some(n) if uses[&n] == 1 => n.to_string(),
+                _ if name.is_empty() => (rank + 1).to_string(),
+                _ => name.to_owned(),
+            };
+            (m.id, label)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -47,21 +63,32 @@ mod tests {
     use crate::{Document, Pt};
 
     #[test]
-    fn numeros_des_marqueurs() {
+    fn etiquettes_des_marqueurs() {
         meteroscope_i18n::set_language("fr");
         let mut doc = Document::new();
         let ids: Vec<u64> = (0..4).map(|i| doc.add(Shape::Marker { p: Pt::new(i as f64, 0.) })).collect();
         doc.add(Shape::Length { a: Pt::new(0., 0.), b: Pt::new(1., 0.) });
-        let numbers = |doc: &Document| ids.iter().map(|id| marker_numbers(&doc.measurements).get(id).copied()).collect::<Vec<_>>();
-        assert_eq!(numbers(&doc), [Some(1), Some(2), Some(3), Some(4)]);
+        let labels = |doc: &Document| {
+            let all = marker_labels(&doc.measurements);
+            ids.iter().map(|id| all.get(id).cloned().unwrap_or_default()).collect::<Vec<_>>()
+        };
+        assert_eq!(labels(&doc), ["1", "2", "3", "4"]);
         // Suppression : les suivants gardent le numéro de leur nom.
         doc.remove(ids[1]);
-        assert_eq!(numbers(&doc), [Some(1), None, Some(3), Some(4)]);
-        // Renommé sans numéro : le premier numéro libre.
+        assert_eq!(labels(&doc), ["1", "", "3", "4"]);
+        // Renommé sans numéro : son nom, que l'on retrouve dans le tableau.
         doc.get_mut(ids[2]).unwrap().name = "Repère".to_owned();
-        assert_eq!(numbers(&doc), [Some(1), None, Some(2), Some(4)]);
+        assert_eq!(labels(&doc), ["1", "", "Repère", "4"]);
         doc.get_mut(ids[0]).unwrap().name = "Trou n° 12".to_owned();
-        assert_eq!(numbers(&doc), [Some(12), None, Some(1), Some(4)]);
+        assert_eq!(labels(&doc), ["12", "", "Repère", "4"]);
+        // Deux noms distincts qui finissent par le même numéro : jamais la
+        // même étiquette, chacun affiche son nom.
+        doc.get_mut(ids[0]).unwrap().name = "Lot A 1".to_owned();
+        doc.get_mut(ids[2]).unwrap().name = "Lot B 1".to_owned();
+        assert_eq!(labels(&doc), ["Lot A 1", "", "Lot B 1", "4"]);
+        // Sans nom : le rang dans la liste des marqueurs.
+        doc.get_mut(ids[3]).unwrap().name = "  ".to_owned();
+        assert_eq!(labels(&doc)[3], "3");
     }
 
     #[test]

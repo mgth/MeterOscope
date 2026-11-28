@@ -241,6 +241,11 @@ fn numero_de_marqueur_comme_son_nom() {
     assert!(doc.remove(ids[1]));
     assert_eq!(doc.measurements.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Marqueur 1", "Marqueur 3"]);
     assert_eq!(svg_texts(&doc), ["1", "3"]);
+    // Deux noms distincts de même numéro : chacun garde une étiquette qui
+    // le désigne seul dans le tableau.
+    doc.measurements[0].name = "Lot A 1".to_owned();
+    doc.measurements[1].name = "Lot B 1".to_owned();
+    assert_eq!(svg_texts(&doc), ["Lot A 1", "Lot B 1"]);
 }
 
 /// Démo seulement (`METEROSCOPE_REPORT_DEMO`) : le même document, sur une

@@ -21,7 +21,7 @@ pub mod stats;
 pub use calibration::{Calibration, Scale};
 pub use document::Document;
 pub use geometry::Pt;
-pub use label::{label_text, marker_numbers};
+pub use label::{label_text, marker_labels};
 pub use orientation::Orientation;
 pub use profile::{EdgeMethod, ProfileParams, ProfileResult};
 pub use measure::{Measurement, Quantity, Shape, ShapeKind, Tool, Value, PALETTE};

@@ -12,7 +12,7 @@ use crate::render::text_width;
 use crate::rotate::Frame;
 use meteroscope_core::geometry as geo;
 use meteroscope_core::scale_bar::TARGET_FRACTION;
-use meteroscope_core::{Corner, Document, Measurement, Pt, Shape, label_text, marker_numbers};
+use meteroscope_core::{Corner, Document, Measurement, Pt, Shape, label_text, marker_labels};
 
 /// Point de la surface (pixels).
 pub(crate) type P2 = (f32, f32);
@@ -473,9 +473,9 @@ impl<'a, S: Surface> Pencil<'a, S> {
 /// Dessine les mesures visibles de `doc` sur une surface dont le repère est
 /// `frame` (l'image d'origine, pivotée et éventuellement réduite).
 pub(crate) fn draw_measurements<S: Surface>(s: &mut S, doc: &Document, frame: &Frame) {
-    let numbers = marker_numbers(&doc.measurements);
+    let mut markers = marker_labels(&doc.measurements);
     for m in doc.measurements.iter().filter(|m| m.visible) {
-        let label = label_text(&m.shape, &doc.calibration, numbers.get(&m.id).copied().unwrap_or(0));
+        let label = markers.remove(&m.id).unwrap_or_else(|| label_text(&m.shape, &doc.calibration, 0));
         s.open(m);
         Pencil::new(s).draw(&frame.place(&m.shape), m.color, &label);
         s.close();
