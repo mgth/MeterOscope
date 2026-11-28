@@ -58,7 +58,16 @@ const CTRL_SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::COMMAND };
 
 impl MeterOscopeApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
-        let mut app = Self {
+        let mut app = Self::blank();
+        if let Some(p) = initial {
+            app.open_path(&cc.egui_ctx, &p);
+        }
+        app
+    }
+
+    /// Application sans image, en mode Image.
+    fn blank() -> Self {
+        Self {
             doc: Document::new(),
             image: None,
             texture: None,
@@ -76,11 +85,7 @@ impl MeterOscopeApp {
             mode: Mode::Image,
             camera: CameraView::default(),
             toast: None,
-        };
-        if let Some(p) = initial {
-            app.open_path(&cc.egui_ctx, &p);
         }
-        app
     }
 
     // ---------- messages ----------
@@ -183,6 +188,8 @@ impl MeterOscopeApp {
 
     /// Installe une nouvelle image avec un document vierge.
     fn set_image(&mut self, ctx: &egui::Context, img: RgbaImage, path: Option<PathBuf>) {
+        // D'abord rendre à l'image son document, pour ne pas écraser celui du flux.
+        self.mode_image();
         self.image = Some(img);
         self.straight = None;
         self.image_path = path;
@@ -192,7 +199,6 @@ impl MeterOscopeApp {
         self.saved_revision = 0;
         self.brightness = 0.0;
         self.contrast = 0.0;
-        self.mode_image();
         self.canvas.set_tool(Tool::Select);
         self.canvas.fit();
         self.refresh_texture(ctx);
@@ -217,6 +223,7 @@ impl MeterOscopeApp {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         if ext == io::PROJECT_EXTENSION {
             let Some(project) = self.report(io::load_project(path), "") else { return };
+            self.mode_image();
             let img = match &project.image_path {
                 Some(p) => self.report(io::load_image(p), ""),
                 None => None,

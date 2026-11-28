@@ -8,6 +8,7 @@ use image::RgbaImage;
 use meteroscope_camera::{CameraStream, DeviceInfo, Frame, VideoMode, list_devices, list_modes};
 use meteroscope_canvas::Canvas;
 use meteroscope_core::Document;
+use meteroscope_core::rescale::Reference;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,7 +45,7 @@ pub struct CameraView {
     pub other_canvas: Canvas,
     /// Taille d'image et caméra auxquelles se rapportent les coordonnées des
     /// mesures du flux.
-    pub doc_size: Option<(u32, u32)>,
+    pub reference: Reference,
     pub doc_device: Option<String>,
 }
 

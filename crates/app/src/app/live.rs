@@ -6,7 +6,7 @@ use super::{MeterOscopeApp, Mode};
 use egui::{Key, Ui};
 use image::RgbaImage;
 use meteroscope_core::Pt;
-use meteroscope_core::rescale::{Rescale, rescale};
+use meteroscope_core::rescale::Rescale;
 use meteroscope_i18n::tr;
 
 impl MeterOscopeApp {
@@ -48,22 +48,14 @@ impl MeterOscopeApp {
         if other_camera && self.doc.calibration.is_calibrated() {
             self.error(tr!("msg.live_other_camera"));
         }
-        if let Some(from) = self.camera.doc_size {
-            match rescale(&mut self.doc, from, size) {
+        let r = self.camera.reference.follow(&mut self.doc, size);
+        if !self.doc.measurements.is_empty() || self.doc.calibration.is_calibrated() {
+            match r {
                 Rescale::Same => {}
-                Rescale::Scaled(_) => {
-                    if !self.doc.measurements.is_empty() || self.doc.calibration.is_calibrated() {
-                        self.info(tr!("msg.live_rescaled", w = size.0, h = size.1));
-                    }
-                }
-                Rescale::Mismatch => {
-                    if !self.doc.measurements.is_empty() || self.doc.calibration.is_calibrated() {
-                        self.error(tr!("msg.live_mismatch", w = size.0, h = size.1));
-                    }
-                }
+                Rescale::Scaled(_) => self.info(tr!("msg.live_rescaled", w = size.0, h = size.1)),
+                Rescale::Mismatch => self.error(tr!("msg.live_mismatch", w = size.0, h = size.1)),
             }
         }
-        self.camera.doc_size = Some(size);
         self.camera.doc_device = Some(device);
     }
 
@@ -98,5 +90,59 @@ impl MeterOscopeApp {
             self.freeze(&ctx, img);
         }
         out.cursor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meteroscope_core::Shape;
+
+    fn photo(ctx: &egui::Context, app: &mut MeterOscopeApp, w: u32) {
+        app.set_image(ctx, RgbaImage::new(w, 10), None);
+    }
+
+    /// Mode caméra sans ouvrir de vraie caméra.
+    fn enter_without_device(app: &mut MeterOscopeApp) {
+        std::mem::swap(&mut app.doc, &mut app.camera.other_doc);
+        std::mem::swap(&mut app.canvas, &mut app.camera.other_canvas);
+        app.mode = Mode::Camera;
+    }
+
+    #[test]
+    fn ouvrir_une_photo_depuis_la_camera() {
+        meteroscope_i18n::set_language("fr");
+        let ctx = egui::Context::default();
+        let mut app = MeterOscopeApp::blank();
+        photo(&ctx, &mut app, 20);
+        app.doc.add(Shape::Marker { p: Pt::new(1.0, 1.0) });
+        enter_without_device(&mut app);
+        let live = app.doc.add(Shape::Marker { p: Pt::new(2.0, 2.0) });
+        // Ctrl+O d'une autre photo pendant le mode caméra.
+        photo(&ctx, &mut app, 30);
+        assert!(app.mode == Mode::Image);
+        assert!(app.doc.measurements.is_empty(), "la nouvelle photo part d'un document vierge");
+        assert_eq!(app.image.as_ref().map(|i| i.width()), Some(30));
+        // Le document du flux est intact pour le retour à la caméra.
+        assert_eq!(app.camera.other_doc.measurements.len(), 1);
+        assert!(app.camera.other_doc.get(live).is_some());
+        enter_without_device(&mut app);
+        assert!(app.doc.get(live).is_some());
+    }
+
+    #[test]
+    fn capture_garde_les_mesures_du_flux() {
+        meteroscope_i18n::set_language("fr");
+        let ctx = egui::Context::default();
+        let mut app = MeterOscopeApp::blank();
+        enter_without_device(&mut app);
+        assert!(app.doc.calibration.set_from_reference(100.0, 1.0, "mm"));
+        app.doc.add(Shape::Marker { p: Pt::new(2.0, 2.0) });
+        app.freeze(&ctx, RgbaImage::new(40, 30));
+        assert!(app.mode == Mode::Image);
+        assert_eq!(app.doc.measurements.len(), 1);
+        assert!(app.doc.calibration.is_calibrated());
+        // Le flux garde aussi les siennes.
+        assert_eq!(app.camera.other_doc.measurements.len(), 1);
     }
 }

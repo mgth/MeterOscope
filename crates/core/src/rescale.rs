@@ -52,6 +52,48 @@ pub fn rescale(doc: &mut Document, from: (u32, u32), to: (u32, u32)) -> Rescale 
     Rescale::Scaled(s)
 }
 
+/// Taille d'image à laquelle se rapportent les coordonnées d'un document
+/// dont la source change de résolution (flux caméra). Après une
+/// incompatibilité de rapport d'aspect, la taille de référence est gardée
+/// tant que le document n'est pas modifié : revenir à une résolution
+/// compatible avec elle remet mesures et échelle en place.
+#[derive(Clone, Debug, Default)]
+pub struct Reference {
+    size: Option<(u32, u32)>,
+    /// Taille incompatible affichée, et révision du document à ce moment.
+    mismatch: Option<((u32, u32), u64)>,
+}
+
+impl Reference {
+    /// Taille à laquelle les mesures et l'échelle sont exprimées.
+    pub fn size(&self) -> Option<(u32, u32)> {
+        self.size
+    }
+
+    /// L'image vaut désormais `size` : adapte le document (voir [`rescale`]).
+    pub fn follow(&mut self, doc: &mut Document, size: (u32, u32)) -> Rescale {
+        // Document modifié pendant l'incompatibilité : il se rapporte
+        // désormais à la taille qui était affichée.
+        if let Some((shown, rev)) = self.mismatch.take()
+            && doc.revision() != rev
+        {
+            self.size = Some(shown);
+        }
+        let Some(from) = self.size else {
+            self.size = Some(size);
+            return Rescale::Same;
+        };
+        let r = rescale(doc, from, size);
+        let empty = doc.measurements.is_empty() && !doc.calibration.is_calibrated();
+        if r == Rescale::Mismatch && !empty {
+            self.mismatch = Some((size, doc.revision()));
+        } else {
+            self.size = Some(size);
+        }
+        r
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +153,41 @@ mod tests {
         let mut e = Document::new();
         assert_eq!(rescale(&mut e, (640, 480), (320, 240)), Rescale::Scaled(0.5));
         assert!(!e.can_undo());
+    }
+
+    #[test]
+    fn reference_gardee_apres_incompatibilite() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = Document::new();
+        let id = d.add(Shape::Marker { p: Pt::new(640.0, 360.0) });
+        let mut r = Reference::default();
+        assert_eq!(r.follow(&mut d, (1280, 720)), Rescale::Same);
+        // 4:3 : incompatible, coordonnées inchangées, référence gardée.
+        assert_eq!(r.follow(&mut d, (640, 480)), Rescale::Mismatch);
+        assert_eq!(r.size(), Some((1280, 720)));
+        // 640 × 360 est la moitié de la référence, pas une nouvelle incompatibilité.
+        assert_eq!(r.follow(&mut d, (640, 360)), Rescale::Scaled(0.5));
+        assert!(matches!(d.get(id).unwrap().shape, Shape::Marker { p } if p == Pt::new(320.0, 180.0)));
+        assert_eq!(r.size(), Some((640, 360)));
+    }
+
+    #[test]
+    fn document_modifie_pendant_l_incompatibilite() {
+        meteroscope_i18n::set_language("fr");
+        let mut d = Document::new();
+        d.add(Shape::Marker { p: Pt::new(10.0, 10.0) });
+        let mut r = Reference::default();
+        r.follow(&mut d, (1280, 720));
+        assert_eq!(r.follow(&mut d, (640, 480)), Rescale::Mismatch);
+        // Mesure posée en 640 × 480 : c'est désormais la référence.
+        d.add(Shape::Marker { p: Pt::new(320.0, 240.0) });
+        assert_eq!(r.follow(&mut d, (1280, 960)), Rescale::Scaled(2.0));
+        assert_eq!(r.size(), Some((1280, 960)));
+        // Document vide : la référence suit simplement l'image.
+        let mut e = Document::new();
+        let mut r = Reference::default();
+        r.follow(&mut e, (1280, 720));
+        assert_eq!(r.follow(&mut e, (640, 480)), Rescale::Mismatch);
+        assert_eq!(r.size(), Some((640, 480)));
     }
 }
