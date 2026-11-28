@@ -185,6 +185,17 @@ impl DetectView {
         self.shown = Some((params, n));
     }
 
+    /// « Ajouter » est-il possible ? Il faut des objets dans l'aperçu, ou un
+    /// aperçu réduit (de petits objets peuvent n'apparaître qu'à pleine
+    /// résolution), et jamais une zone vide, même longue au point d'être
+    /// réduite.
+    fn can_add(&self) -> bool {
+        match (&self.prep, self.shown) {
+            (Some((_, p)), Some((_, n))) => !p.is_empty() && (n > 0 || p.scale > 1),
+            _ => false,
+        }
+    }
+
     /// Contenu du panneau ; renvoie `true` si l'utilisateur lance l'ajout.
     fn window(&mut self, ui: &mut Ui, doc: &Document, zone: Option<&str>) -> bool {
         ui.spacing_mut().item_spacing.y = 6.0;
@@ -227,6 +238,7 @@ impl DetectView {
         .on_hover_text(tr!("detect.zone_tip"));
         let n = self.shown.map_or(0, |s| s.1);
         let approx = self.prep.as_ref().is_some_and(|(_, p)| p.scale > 1);
+        let can_add = self.can_add();
         let count = if approx { tr!("detect.count_approx", n = n) } else { tr!("detect.count", n = n) };
         ui.label(RichText::new(count).strong());
         ui.label(RichText::new(tr!("detect.original_note")).weak().small());
@@ -235,9 +247,7 @@ impl DetectView {
             if self.pending.is_some() {
                 ui.spinner();
                 ui.label(tr!("detect.running"));
-            // Aperçu réduit : de petits objets peuvent n'apparaître qu'à
-            // pleine résolution, le calcul complet reste donc possible.
-            } else if ui.add_enabled(n > 0 || approx, egui::Button::new(tr!("detect.add"))).on_hover_text(tr!("detect.add_tip")).clicked() {
+            } else if ui.add_enabled(can_add, egui::Button::new(tr!("detect.add"))).on_hover_text(tr!("detect.add_tip")).clicked() {
                 run = true;
             }
         });
@@ -307,6 +317,24 @@ mod tests {
         view.update_preview(&ctx, &img, zone_of(&doc).map(|z| z.1));
         assert!(view.texture.is_none());
         assert_eq!(view.shown.map(|s| s.1), Some(0));
+        assert!(!view.can_add());
+
+        // Même zone aplatie, mais assez longue pour que l'aperçu soit réduit :
+        // « Ajouter » reste grisé.
+        let img = RgbaImage::new(64, 2000);
+        let mut doc = Document::new();
+        doc.add(Shape::Rect { a: Pt::new(10., 10.), b: Pt::new(10., 1810.), angle: 0.0 });
+        view.update_preview(&ctx, &img, zone_of(&doc).map(|z| z.1));
+        assert!(view.prep.as_ref().unwrap().1.scale > 1);
+        assert!(!view.can_add());
+
+        // Zone non vide et aperçu réduit, sans objet visible : le calcul
+        // complet reste possible.
+        let mut doc = Document::new();
+        doc.add(Shape::Rect { a: Pt::new(10., 10.), b: Pt::new(30., 1810.), angle: 0.0 });
+        view.update_preview(&ctx, &img, zone_of(&doc).map(|z| z.1));
+        assert_eq!(view.shown.map(|s| s.1), Some(0));
+        assert!(view.can_add());
     }
 
     #[test]

@@ -360,3 +360,19 @@ fn perf_24_mpx() {
     println!("complet : {:?}, {} objets", t.elapsed(), det.objects.len());
     assert_eq!(det.objects.len(), 2400);
 }
+
+#[test]
+fn zone_vide() {
+    // Zone aplatie mais longue : sans pixel, réduite ou non, trous gardés
+    // ou bouchés, la détection est vide au lieu d'échouer.
+    let img = RgbaImage::from_pixel(64, 2000, image::Rgba([200, 200, 200, 255]));
+    let zone = [Pt::new(10., 10.), Pt::new(10., 1810.), Pt::new(10., 1810.), Pt::new(10., 10.)];
+    for fill_holes in [true, false] {
+        for side in [1600, u32::MAX] {
+            let p = prepare(&img, Some(&zone), side, true);
+            assert!(p.is_empty());
+            let d = detect(&p, &DetectParams { fill_holes, ..Default::default() }, true);
+            assert!(d.objects.is_empty() && d.rejected == 0);
+        }
+    }
+}
