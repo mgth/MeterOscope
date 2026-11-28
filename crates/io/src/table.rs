@@ -49,7 +49,7 @@ fn unit_of(doc: &Document, q: Quantity) -> String {
 }
 
 /// Lignes du tableau des mesures (en-tête compris), cellules brutes.
-fn measurement_rows(doc: &Document) -> Vec<Vec<String>> {
+pub(crate) fn measurement_rows(doc: &Document) -> Vec<Vec<String>> {
     let mut header = vec![tr!("table.name").to_owned(), tr!("item.type").to_owned()];
     header.extend(COLUMNS.iter().map(|q| format!("{} ({})", q.label(), unit_of(doc, *q))));
     header.extend(["X (px)".to_owned(), "Y (px)".to_owned()]);
@@ -103,7 +103,7 @@ pub fn csv_separator() -> char {
 }
 
 /// Champ CSV : entre guillemets si nécessaire, guillemets doublés.
-fn csv_field(s: &str, sep: char) -> String {
+pub(crate) fn csv_field(s: &str, sep: char) -> String {
     if s.contains([sep, '"', '\n', '\r']) || s.starts_with(' ') || s.ends_with(' ') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
@@ -112,7 +112,7 @@ fn csv_field(s: &str, sep: char) -> String {
 }
 
 /// Champ tabulé : tabulations et retours à la ligne remplacés par des espaces.
-fn tsv_field(s: &str) -> String {
+pub(crate) fn tsv_field(s: &str) -> String {
     s.replace(['\t', '\n', '\r'], " ")
 }
 

@@ -8,6 +8,7 @@ mod image_io;
 mod project;
 mod render;
 mod rotate;
+mod series;
 mod table;
 mod transform;
 
@@ -20,6 +21,10 @@ use std::path::{Path, PathBuf};
 
 pub use image_io::can_save_extension;
 pub use project::PROJECT_FORMAT_VERSION;
+pub use series::{
+    SERIES_FORMAT_VERSION, SeriesImage, SeriesProject, export_series_csv, image_dimensions, load_series, save_series, series_clipboard_table,
+    series_csv_string, thumbnail,
+};
 pub use rotate::{RotationFilter, rotate_image, rotated_dimensions};
 pub use table::format_precise;
 pub use transform::transform_point;

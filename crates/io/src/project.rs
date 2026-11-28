@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
 
 /// Identifiant du format, pour reconnaître nos fichiers.
-const FORMAT_ID: &str = "meteroscope";
+pub(crate) const FORMAT_ID: &str = "meteroscope";
 /// Version courante du format sur disque.
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
 
@@ -29,7 +29,7 @@ struct ProjectFile {
 }
 
 /// Rend un chemin absolu sans accéder au disque et résout `.` / `..` lexicalement.
-fn absolute_clean(p: &Path) -> PathBuf {
+pub(crate) fn absolute_clean(p: &Path) -> PathBuf {
     let abs = std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
     let mut out = PathBuf::new();
     for c in abs.components() {
@@ -50,7 +50,7 @@ fn absolute_clean(p: &Path) -> PathBuf {
 /// Chemin de `target` relatif au dossier `base` (tous deux absolus et nettoyés),
 /// avec des `/`. `None` si aucune racine commune (autre lecteur sous Windows)
 /// ou si un composant n'est pas de l'UTF-8.
-fn relative_to(target: &Path, base: &Path) -> Option<String> {
+pub(crate) fn relative_to(target: &Path, base: &Path) -> Option<String> {
     let t: Vec<Component> = target.components().collect();
     let b: Vec<Component> = base.components().collect();
     let common = t.iter().zip(&b).take_while(|(x, y)| x == y).count();
@@ -70,7 +70,7 @@ fn relative_to(target: &Path, base: &Path) -> Option<String> {
 }
 
 /// Écrit `data` de façon atomique (fichier temporaire puis renommage).
-fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
@@ -108,7 +108,7 @@ pub fn save_project(project: &Project, path: &Path) -> Result<()> {
 }
 
 /// Résout le chemin d'image stocké, relativement au dossier du projet.
-fn resolve_image(stored: &str, absolute: Option<&str>, dir: &Path) -> PathBuf {
+pub(crate) fn resolve_image(stored: &str, absolute: Option<&str>, dir: &Path) -> PathBuf {
     let p = Path::new(stored);
     if p.is_absolute() {
         return absolute_clean(p);
