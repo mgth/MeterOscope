@@ -1,9 +1,11 @@
 //! Réglages retenus d'un lancement à l'autre : fichiers récents, dernier
-//! dossier, unité d'échelle, nombre de décimales. Un fichier JSON du dossier
+//! dossier, unité d'échelle, nombre de décimales, épaisseur des traits. Un
+//! fichier JSON du dossier
 //! de configuration, lu avec tolérance (fichier absent ou abîmé : valeurs par
 //! défaut, champ par champ).
 
 use egui::{ComboBox, Ui};
+use meteroscope_canvas::{DEFAULT_LINE_WIDTH, MAX_LINE_WIDTH, MIN_LINE_WIDTH};
 use meteroscope_core::measure::{MAX_DECIMALS, format_number_with};
 use meteroscope_i18n::tr;
 use serde::Serialize;
@@ -23,6 +25,9 @@ pub struct Settings {
     pub calibration_unit: Option<String>,
     /// Décimales des valeurs affichées (`None` : automatique).
     pub decimals: Option<u8>,
+    /// Épaisseur de base des traits dessinés sur l'image, en pixels écran
+    /// (`None` : épaisseur par défaut). Voir [`Settings::line_width`].
+    pub line_width: Option<f32>,
 }
 
 fn settings_file() -> Option<PathBuf> {
@@ -54,7 +59,13 @@ impl Settings {
         s.last_dir = field(&obj, "last_dir");
         s.calibration_unit = field::<String>(&obj, "calibration_unit").map(|u| u.trim().to_owned()).filter(|u| !u.is_empty());
         s.decimals = field::<u8>(&obj, "decimals").filter(|&d| d <= MAX_DECIMALS);
+        s.line_width = field::<f32>(&obj, "line_width").filter(|w| (MIN_LINE_WIDTH..=MAX_LINE_WIDTH).contains(w));
         s
+    }
+
+    /// Épaisseur de base des traits à appliquer au canevas.
+    pub fn line_width(&self) -> f32 {
+        self.line_width.unwrap_or(DEFAULT_LINE_WIDTH)
     }
 
     /// Échoue si un chemin n'est pas représentable en JSON (non UTF-8).
@@ -228,6 +239,35 @@ pub fn decimals_selector(ui: &mut Ui, settings: &mut Settings) {
     }
 }
 
+/// Réglage de l'épaisseur des traits (barre d'état) : un curseur dans une
+/// liste déroulante. Enregistre le choix au relâchement du curseur ; renvoie
+/// l'épaisseur courante, à appliquer au canevas.
+pub fn line_width_selector(ui: &mut Ui, settings: &mut Settings) -> f32 {
+    let mut width = settings.line_width();
+    let mut commit = false;
+    ComboBox::from_id_salt("meteroscope_line_width")
+        .selected_text(tr!("line_width.label", value = format_number_with(f64::from(width), Some(1))))
+        .show_ui(ui, |ui| {
+            let slider = egui::Slider::new(&mut width, MIN_LINE_WIDTH..=MAX_LINE_WIDTH).step_by(0.5).suffix(" px");
+            let resp = ui.add(slider);
+            commit |= resp.drag_stopped() || (resp.changed() && !resp.dragged());
+            if ui.add_enabled(width != DEFAULT_LINE_WIDTH, egui::Button::new(tr!("line_width.reset"))).clicked() {
+                width = DEFAULT_LINE_WIDTH;
+                commit = true;
+            }
+        })
+        .response
+        .on_hover_text(tr!("line_width.tip"));
+    let wanted = Some(width).filter(|&w| w != DEFAULT_LINE_WIDTH);
+    // Aperçu immédiat pendant le glissement ; l'écriture se fait au
+    // relâchement, même si la valeur finale a déjà été copiée.
+    settings.line_width = wanted;
+    if commit {
+        settings.save();
+    }
+    width
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +308,11 @@ mod tests {
         // Valeurs hors limites ou vides écartées, doublons et excédent retirés.
         let s = Settings::parse(r#"{"decimals": 9, "calibration_unit": "  ", "recent": ["/a", "/b", "/a", "", 5]}"#);
         assert_eq!((s.decimals, s.calibration_unit), (None, None));
+        // Épaisseur des traits : bornée, défaut quand elle manque ou sort des bornes.
+        assert_eq!(Settings::parse(r#"{"line_width": 4.5}"#).line_width(), 4.5);
+        for bad in [r#"{"line_width": 0.2}"#, r#"{"line_width": 40}"#, r#"{"line_width": "épais"}"#, "{}"] {
+            assert_eq!(Settings::parse(bad).line_width(), DEFAULT_LINE_WIDTH, "{bad}");
+        }
         assert_eq!(s.recent, Vec::<PathBuf>::new(), "liste au mauvais type (nombre) ignorée");
         let s = Settings::parse(r#"{"recent": ["/a", "/b", "/a", ""]}"#);
         assert_eq!(s.recent, vec![p("/a"), p("/b")]);
@@ -287,6 +332,7 @@ mod tests {
             last_dir: Some(p("/photos")),
             calibration_unit: Some("µm".to_owned()),
             decimals: Some(0),
+            line_width: Some(3.5),
         };
         s.save_to(&file).unwrap();
         assert_eq!(Settings::load_from(&file), s);

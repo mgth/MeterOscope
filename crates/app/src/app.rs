@@ -72,6 +72,8 @@ pub struct MeterOscopeApp {
     perspective: PerspectiveDialog,
     /// Préréglages d'échelle et option « garder l'échelle pour l'image suivante ».
     scale_presets: meteroscope_core::ScalePresets,
+    /// Outil montré par chaque groupe de la palette (préférence enregistrée).
+    group_tools: meteroscope_panels::GroupTools,
     mode: Mode,
     camera: CameraView,
     detect: DetectView,
@@ -126,6 +128,7 @@ impl MeterOscopeApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         let mut app = Self::blank();
         meteroscope_core::measure::set_decimals(app.settings.decimals);
+        app.canvas.set_line_width(app.settings.line_width());
         if let Some(u) = &app.settings.calibration_unit {
             app.calibration.set_unit(u);
         }
@@ -161,6 +164,7 @@ impl MeterOscopeApp {
             perspective: PerspectiveDialog::default(),
             // Les tests ne dépendent pas des préréglages de l'utilisateur.
             scale_presets: if cfg!(test) { Default::default() } else { crate::prefs::load_scale_presets() },
+            group_tools: crate::prefs::load_group_tools(),
             mode: Mode::Image,
             camera: CameraView::default(),
             detect: DetectView::default(),
@@ -946,6 +950,8 @@ impl MeterOscopeApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 crate::language::selector(ui);
                 crate::settings::decimals_selector(ui, &mut self.settings);
+                let width = crate::settings::line_width_selector(ui, &mut self.settings);
+                self.canvas.set_line_width(width);
                 ui.separator();
                 if let Some(img) = self.work_image().filter(|_| self.mode == Mode::Image) {
                     ui.label(format!("{} × {} px", img.width(), img.height()));
@@ -1058,7 +1064,9 @@ impl eframe::App for MeterOscopeApp {
             }
             egui::Panel::left("tools").resizable(false).show(ui, |ui| {
                 let mut tool = self.canvas.tool();
-                meteroscope_panels::tool_palette(ui, &mut tool);
+                if meteroscope_panels::tool_palette(ui, &mut tool, &mut self.group_tools) {
+                    crate::prefs::save_group_tools(&self.group_tools);
+                }
                 if tool != self.canvas.tool() {
                     self.canvas.set_tool(tool);
                 }
