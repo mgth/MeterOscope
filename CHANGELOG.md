@@ -12,7 +12,9 @@
 - Inclinaison (I) : angle de 0 à 90° entre deux segments éloignés.
 - Rectangles inclinés : poignée de rotation, et nouvel outil rectangle par trois points (O).
 - Annotations : texte (X) et flèche (F), saisis directement sur l'image.
-- Palette regroupée : les outils semblables partagent un bouton, chacun garde son raccourci.
+- Palette regroupée : les outils semblables partagent un bouton, chacun garde son raccourci ;
+  l'outil montré par chaque groupe est retenu d'un lancement à l'autre.
+- Épaisseur des traits réglable dans la barre d'état.
 - Aimantation : pendant le tracé, le point s'accroche aux points remarquables des autres mesures
   (coins, milieux, centres, intersections) ; Alt pour s'en passer.
 
@@ -52,6 +54,7 @@
 - La distance point-droite et l'écart entre parallèles ne donnent plus de valeur quand les deux
   points de la droite sont confondus.
 - Le panneau des mesures ne s'élargit plus sans fin quand une mesure est sélectionnée.
+- La détection ne fait plus fermer l'application quand sa zone devient vide.
 - Un fichier de préréglages ou de réglages partiellement abîmé ne fait plus perdre le reste.
 - L'enregistrement d'une série n'écrase jamais une photo existante.
 

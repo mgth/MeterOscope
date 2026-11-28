@@ -50,18 +50,19 @@ Mesures :
   détectés au sous-pixel, mi-hauteur ou gradient, export CSV de la courbe).
 - Angles : **angle** (A, 3 points), **inclinaison** (I, entre deux segments distants, 0° à 90°,
   prolongés en pointillés jusqu'à leur intersection).
-- Surfaces : **surface** (P, polygone : aire + périmètre), **rectangle** par deux coins (R) ou
-  incliné par trois points (O), inclinable par sa poignée ronde, **ellipse** (V : axes, aire,
+- Surfaces : **rectangle** par deux coins (R) ou incliné par trois points (O), inclinable par
+  sa poignée ronde, **surface** (P, polygone : aire + périmètre).
+- Cercles, arcs et ellipses : **cercle** centre-bord (C), **cercle par 3 points** (T), **arc**
+  par 3 points (U : rayon, longueur d'arc, angle au centre, corde), **ellipse** (V : axes, aire,
   périmètre).
-- Cercles : **cercle** centre-bord (C), **cercle par 3 points** (T), **arc** par 3 points (U :
-  rayon, longueur d'arc, angle au centre, corde).
 - **Marqueur** (M, comptage).
 
 Annotations (ni valeurs, ni statistiques, ni ligne au CSV) : **texte** (X), **flèche** (F)
 avec un texte facultatif.
 
 La palette regroupe les outils semblables en 8 boutons (Sélection, Référence, Lignes, Angles,
-Surfaces, Cercles, Marqueur, Annotations) ; chaque outil garde son raccourci.
+Surfaces, Cercles, arcs et ellipses, Marqueur, Annotations) ; chaque outil garde son raccourci,
+et l'outil montré par chaque groupe est retenu d'un lancement à l'autre.
 Statistiques par type, et par groupe s'il y en a : n, moyenne, écart-type, min, max.
 
 ## Fonctions
@@ -82,7 +83,7 @@ Statistiques par type, et par groupe s'il y en a : n, moyenne, écart-type, min,
   liée), rapport PDF (image, échelle, tableau, statistiques), tableau copié.
 - **Coller** (Ctrl+V) une image ou un fichier ; remplacer l'image est annulable.
 - **Réglages retenus** : fichiers récents, dernier dossier, unité, décimales, langue, filtre de
-  redressement, taille de la fenêtre.
+  redressement, épaisseur des traits, outil retenu par groupe de la palette, taille de la fenêtre.
 
 ## Commandes
 

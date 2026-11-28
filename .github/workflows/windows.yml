@@ -44,7 +44,8 @@ jobs:
         run: |
           $v = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages | Where-Object name -eq 'meteroscope' | Select-Object -ExpandProperty version
           $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { $env:GITHUB_REF_NAME }
-          $release = [bool]$env:INPUT_TAG -or $env:GITHUB_REF -like 'refs/tags/v*'
+          # Lancement manuel sans tag (même sur une référence de tag) : compilation seule.
+          $release = [bool]$env:INPUT_TAG -or ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -like 'refs/tags/v*')
           if ($release -and $tag -ne "v$v") { throw "Le tag $tag ne correspond pas à la version $v de Cargo.toml" }
           "version=$v" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
