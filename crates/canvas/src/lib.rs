@@ -286,6 +286,12 @@ impl Canvas {
         self.view.zoom
     }
 
+    /// Position à l'écran d'un point image selon la vue de la dernière frame
+    /// (pour superposer un dessin à l'image, p. ex. un réticule).
+    pub fn image_to_screen(&self, p: Pt) -> Pos2 {
+        self.xf().to_screen(p)
+    }
+
     /// Vrai si un tracé est en cours (Échap doit alors l'annuler plutôt que
     /// de revenir à l'outil Sélection).
     pub fn is_drawing(&self) -> bool {

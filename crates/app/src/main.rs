@@ -6,6 +6,7 @@ mod camera_view;
 mod language;
 mod prefs;
 mod profile_view;
+mod reticle;
 mod settings;
 
 /// Icône de la fenêtre et de la barre des tâches.
