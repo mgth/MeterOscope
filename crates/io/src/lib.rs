@@ -5,7 +5,9 @@
 //! existantes ; on peut en ajouter.
 
 mod image_io;
+mod perspective;
 mod presets;
+mod profile;
 mod project;
 mod render;
 mod rotate;
@@ -21,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub use image_io::can_save_extension;
+pub use perspective::warp_perspective;
 pub use presets::{scale_presets_from_json, scale_presets_to_json};
+pub use profile::{measure_profile, profile_csv_string};
 pub use project::PROJECT_FORMAT_VERSION;
 pub use series::{
     SERIES_FORMAT_VERSION, SeriesImage, SeriesProject, export_series_csv, image_dimensions, load_series, save_series, series_clipboard_table,
@@ -77,6 +81,13 @@ pub fn clipboard_table(doc: &Document) -> String {
 
 pub fn export_csv(doc: &Document, path: &Path) -> Result<()> {
     std::fs::write(path, csv_string(doc))
+        .map_err(|e| anyhow!(image_io::describe_io(&e)))
+        .with_context(|| tr!("csv.export_failed", file = image_io::file_name(path)))
+}
+
+/// Enregistre la courbe d'un profil d'intensité en CSV ([`profile_csv_string`]).
+pub fn export_profile_csv(name: &str, analysis: &meteroscope_core::profile::Analysis, doc: &Document, path: &Path) -> Result<()> {
+    std::fs::write(path, profile_csv_string(name, analysis, &doc.calibration))
         .map_err(|e| anyhow!(image_io::describe_io(&e)))
         .with_context(|| tr!("csv.export_failed", file = image_io::file_name(path)))
 }

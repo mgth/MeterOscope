@@ -103,12 +103,6 @@ fn free_name(base: &str, tail: &str, free: impl Fn(&str) -> bool) -> String {
     (2u32..).map(|k| format!("{base}-{k}{tail}")).find(|name| free(name)).unwrap_or(first)
 }
 
-/// Chemin réel d'un fichier (liens symboliques résolus), ou le chemin tel
-/// quel s'il n'existe pas : deux chemins égaux désignent le même fichier.
-fn real_path(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned())
-}
-
 fn placeholder(size: Option<(u32, u32)>) -> RgbaImage {
     let (w, h) = size.unwrap_or(PLACEHOLDER);
     RgbaImage::from_pixel(w.max(1), h.max(1), image::Rgba([72, 72, 78, 255]))
@@ -133,12 +127,21 @@ impl MeterOscopeApp {
 
     /// Modifications non enregistrées, sur n'importe quelle image de la série.
     pub(super) fn series_dirty(&self) -> bool {
-        self.series.model.revision(&self.doc) != self.series.saved
+        self.series.model.revision(self.image_doc()) != self.series.saved
+    }
+
+    /// Document de l'image affichée : `self.doc`, ou celui mis de côté
+    /// pendant le flux caméra.
+    fn image_doc(&self) -> &Document {
+        if self.mode == Mode::Camera { &self.camera.other_doc } else { &self.doc }
     }
 
     /// Reporte dans la série l'état de l'image affichée (chemin, dimensions)
     /// et lui fait suivre le document actif (historique, échelle commune).
     fn series_sync(&mut self) {
+        // En mode caméra `self.doc` est le document du flux : on rend
+        // d'abord à l'image le sien, seul connu de la série.
+        self.mode_image();
         let s = &mut self.series;
         if let Some(id) = s.shown
             && let Some(e) = s.model.active_entry_mut().filter(|e| e.id() == id)
@@ -157,7 +160,10 @@ impl MeterOscopeApp {
 
     /// À chaque image d'interface : suivi du document, vignettes, export.
     pub(super) fn series_frame(&mut self, ctx: &egui::Context) {
-        self.series_sync();
+        // Pendant le flux caméra, le document de l'image est de côté et ne change pas.
+        if self.mode == Mode::Image {
+            self.series_sync();
+        }
         self.series.thumbs.poll(ctx);
         self.series_export_poll();
     }
@@ -178,6 +184,8 @@ impl MeterOscopeApp {
             x.pixels = if keep { self.image.take() } else { None };
         }
         self.image = None;
+        // L'image corrigée de la perspective appartenait à l'ancienne photo.
+        self.flat = None;
         self.straight = None;
         self.canvas.cancel();
         let Some(entry) = self.series.model.active_entry() else {
@@ -401,15 +409,20 @@ impl MeterOscopeApp {
     }
 
     pub(super) fn can_undo(&self) -> bool {
-        self.series.model.can_undo(&self.doc)
+        if self.mode == Mode::Camera { self.doc.can_undo() } else { self.series.model.can_undo(&self.doc) }
     }
     pub(super) fn can_redo(&self) -> bool {
-        self.series.model.can_redo(&self.doc)
+        if self.mode == Mode::Camera { self.doc.can_redo() } else { self.series.model.can_redo(&self.doc) }
     }
 
     /// Ctrl+Z : la plus récente entre la dernière modification de l'image
     /// affichée et la dernière opération de série.
     pub(super) fn undo(&mut self, ctx: &egui::Context) {
+        // Sur le flux caméra : l'historique est celui du document du flux.
+        if self.mode == Mode::Camera {
+            self.doc.undo();
+            return;
+        }
         self.series_sync();
         if self.series.model.undo(&mut self.doc) == Undone::Series {
             self.series_after_op(ctx);
@@ -417,6 +430,10 @@ impl MeterOscopeApp {
     }
 
     pub(super) fn redo(&mut self, ctx: &egui::Context) {
+        if self.mode == Mode::Camera {
+            self.doc.redo();
+            return;
+        }
         self.series_sync();
         if self.series.model.redo(&mut self.doc) == Undone::Series {
             self.series_after_op(ctx);
@@ -545,7 +562,7 @@ impl MeterOscopeApp {
 
     /// (nom, document) de chaque image, dans l'ordre de la série.
     fn series_tables(&self) -> Vec<(String, &Document)> {
-        self.series_names().into_iter().zip(self.series.model.docs(&self.doc).map(|(_, d)| d)).collect()
+        self.series_names().into_iter().zip(self.series.model.docs(self.image_doc()).map(|(_, d)| d)).collect()
     }
 
     /// Nom de fichier proposé pour une sortie de toute la série.
@@ -591,13 +608,8 @@ impl MeterOscopeApp {
         let suffix = tr!("file.measurements_suffix");
         let active = self.series.model.active();
         let mut used = HashSet::new();
-        // Photos d'origine de la série : l'export ne doit jamais en écraser
-        // une, même si le dossier choisi est le leur.
-        // Comparées par chemin réel : le dossier peut y mener par un lien.
-        let sources: HashSet<PathBuf> =
-            self.series.model.entries().iter().filter_map(|e| e.path.clone()).chain(self.image_path.clone()).map(|p| real_path(&p)).collect();
         let mut items = vec![];
-        for (i, (e, doc)) in self.series.model.docs(&self.doc).enumerate() {
+        for (i, (e, doc)) in self.series.model.docs(self.image_doc()).enumerate() {
             let x = self.series.extras.get(&e.id());
             if x.is_some_and(|x| x.missing) {
                 continue;
@@ -612,7 +624,9 @@ impl MeterOscopeApp {
             };
             let Some(source) = source else { continue };
             let stem = e.path.as_ref().and_then(|p| p.file_stem()).map_or_else(|| format!("capture-{:02}", i + 1), |s| s.to_string_lossy().into_owned());
-            let name = free_name(&stem, &format!("{suffix}.png"), |name| !used.contains(name) && !sources.contains(&real_path(&dir.join(name))));
+            // Jamais sur un fichier déjà présent : ce pourrait être une photo
+            // d'origine, sous ce nom, par un lien symbolique ou un lien physique.
+            let name = free_name(&stem, &format!("{suffix}.png"), |name| !used.contains(name) && !dir.join(name).exists());
             used.insert(name.clone());
             items.push((source, doc.clone(), dir.join(name)));
         }
@@ -622,6 +636,7 @@ impl MeterOscopeApp {
         }
         let (tx, rx) = channel();
         let (brightness, contrast, ctx) = (self.brightness, self.contrast, ctx.clone());
+        let filter = self.filter.unwrap_or_default();
         let spawned = std::thread::Builder::new().name("export-serie".to_owned()).spawn(move || {
             for (k, (source, doc, out)) in items.into_iter().enumerate() {
                 let r = match source {
@@ -629,6 +644,11 @@ impl MeterOscopeApp {
                     Source::Pixels(px) => Ok(px),
                 }
                 .and_then(|img| {
+                    // Les mesures sont dans l'image corrigée de la perspective.
+                    let img = match &doc.perspective {
+                        Some(p) => io::warp_perspective(&img, p, filter).unwrap_or(img),
+                        None => img,
+                    };
                     let base = if brightness != 0.0 || contrast != 0.0 { io::adjust(&img, brightness, contrast) } else { img };
                     io::save_image(&io::render_annotated(&base, &doc), &out)
                 });
@@ -919,8 +939,8 @@ impl MeterOscopeApp {
         }
         egui::Panel::bottom("series_stats").resizable(false).show(ui, |ui| {
             egui::CollapsingHeader::new(RichText::new(tr!("series.stats_title", n = m.len())).strong()).id_salt("meteroscope_stats_serie").default_open(false).show(ui, |ui| {
-                let summary = series_summary(m.docs(&self.doc).map(|(_, d)| d));
-                let markers: usize = m.docs(&self.doc).map(|(_, d)| d.marker_count()).sum();
+                let summary = series_summary(m.docs(self.image_doc()).map(|(_, d)| d));
+                let markers: usize = m.docs(self.image_doc()).map(|(_, d)| d.marker_count()).sum();
                 if summary.is_empty() && markers == 0 {
                     ui.label(RichText::new(tr!("stats.empty")).weak());
                     return;
@@ -986,39 +1006,63 @@ mod tests {
         assert_eq!(out, ["a-2-mesures.png", "a-mesures.png", "a-3-mesures.png", "a-4-mesures.png", "a-2-2-mesures.png"]);
     }
 
-    /// Export dans le dossier des photos : `a.png` ne sort pas sous le nom
-    /// de la photo d'origine `a-mesures.png`.
-    #[test]
-    fn export_names_spare_sources() {
-        let dir = Path::new("/d");
-        let sources: HashSet<PathBuf> = [dir.join("a.png"), dir.join("a-mesures.png")].into();
-        let mut used = HashSet::new();
-        for stem in ["a", "a-mesures"] {
-            let name = free_name(stem, "-mesures.png", |n| !used.contains(n) && !sources.contains(&dir.join(n)));
-            assert!(!sources.contains(&dir.join(&name)), "{name} écrase une source");
-            assert!(used.insert(name));
-        }
-        assert!(used.contains("a-2-mesures.png") && used.contains("a-mesures-mesures.png"));
-    }
-
-    /// Même protection quand le dossier d'export mène aux photos par un
-    /// lien symbolique.
+    /// Export dans le dossier des photos : aucun nom de sortie ne désigne un
+    /// fichier déjà présent, même atteint par un lien symbolique ou physique.
     #[cfg(unix)]
     #[test]
-    fn export_names_spare_sources_through_symlink() {
-        let root = std::env::temp_dir().join(format!("meteroscope-lien-{}", std::process::id()));
+    fn export_names_spare_existing_files() {
+        let root = std::env::temp_dir().join(format!("meteroscope-export-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let photos = root.join("photos");
         std::fs::create_dir_all(&photos).unwrap();
-        for f in ["a.png", "a-mesures.png"] {
-            std::fs::write(photos.join(f), b"x").unwrap();
-        }
+        std::fs::write(photos.join("a.png"), b"x").unwrap();
+        std::fs::write(photos.join("original.png"), b"x").unwrap();
+        // Lien physique : même fichier que original.png sous un autre nom.
+        std::fs::hard_link(photos.join("original.png"), photos.join("a-mesures.png")).unwrap();
         let alias = root.join("alias");
         std::os::unix::fs::symlink(&photos, &alias).unwrap();
-        let sources: HashSet<PathBuf> = ["a.png", "a-mesures.png"].iter().map(|f| real_path(&photos.join(f))).collect();
-        let name = free_name("a", "-mesures.png", |n| !sources.contains(&real_path(&alias.join(n))));
-        assert_eq!(name, "a-2-mesures.png");
+        for dir in [&photos, &alias] {
+            let name = free_name("a", "-mesures.png", |n| !dir.join(n).exists());
+            assert_eq!(name, "a-2-mesures.png");
+        }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Capture du flux caméra avec une image ouverte : elle s'ajoute à la
+    /// série avec les mesures du flux, garde l'échelle de la série si le flux
+    /// n'en a pas, et la première image retrouve son document.
+    #[test]
+    fn capture_joins_series_from_camera() {
+        use meteroscope_core::{Pt, Shape};
+        meteroscope_i18n::set_language("fr");
+        let ctx = egui::Context::default();
+        let mut app = MeterOscopeApp::blank();
+        app.set_image(&ctx, RgbaImage::new(40, 30), None);
+        assert!(app.doc.calibration.set_from_reference(100.0, 1.0, "mm"));
+        app.doc.add(Shape::Marker { p: Pt::new(1.0, 1.0) });
+        app.series_frame(&ctx);
+        // Mode caméra sans ouvrir de vraie caméra.
+        std::mem::swap(&mut app.doc, &mut app.camera.other_doc);
+        std::mem::swap(&mut app.canvas, &mut app.camera.other_canvas);
+        app.mode = Mode::Camera;
+        app.doc.add(Shape::Marker { p: Pt::new(2.0, 2.0) });
+        app.doc.add(Shape::Marker { p: Pt::new(3.0, 3.0) });
+        // Le flux ne compte pas dans la série ; annuler y agit sur le flux.
+        app.series_frame(&ctx);
+        assert!(app.is_dirty());
+        app.undo(&ctx);
+        assert_eq!(app.doc.measurements.len(), 1);
+        assert_eq!(app.camera.other_doc.measurements.len(), 1);
+
+        app.freeze(&ctx, RgbaImage::new(40, 30));
+        app.series_frame(&ctx);
+        assert!(app.mode == Mode::Image);
+        assert_eq!((app.series.model.len(), app.series.model.active()), (2, 1));
+        assert_eq!(app.doc.measurements.len(), 1);
+        assert!(app.doc.calibration.is_calibrated(), "l'échelle de la série est gardée");
+        app.series_do(&ctx, Act::Go(0));
+        assert_eq!(app.doc.measurements.len(), 1);
+        assert!(app.doc.get(app.doc.measurements[0].id).is_some() && app.doc.calibration.is_calibrated());
     }
 
     /// Une capture en première position ne prend pas le nom d'une photo

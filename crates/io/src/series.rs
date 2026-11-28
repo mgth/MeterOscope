@@ -431,15 +431,12 @@ mod tests {
 
         // Un projet d'une image en version 2 (clé `document`, sans `images`)
         // n'est pas pris pour une série : il va au lecteur de projet simple.
-        let single_v2: serde_json::Value =
-            serde_json::from_str(r#"{ "format": "meteroscope", "version": 2, "image": "a.png", "document": {} }"#).unwrap();
+        let single_v2 = serde_json::json!({ "format": "meteroscope", "version": 2, "image": "a.png", "document": Document::new() });
         assert!(!is_series(&single_v2));
         assert!(is_series(&serde_json::from_str(&text).unwrap()));
         let single = dir.join("seule-v2.meteroscope");
         std::fs::write(&single, single_v2.to_string()).unwrap();
-        let single_err = format!("{:#}", load_series(&single).unwrap_err());
-        let direct_err = format!("{:#}", crate::load_project(&single).unwrap_err());
-        assert_eq!(single_err, direct_err);
+        assert_eq!(load_series(&single).unwrap().images.len(), 1);
 
         // Un champ de document inconnu et renseigné (écrit par une version
         // plus récente) fait refuser le projet plutôt que de le perdre ; le
@@ -453,9 +450,8 @@ mod tests {
         std::fs::write(&newer, with("\"champ_futur\": null")).unwrap();
         assert_eq!(load_series(&newer).unwrap().images.len(), 3);
 
-        // L'ancienne fonction refuse proprement la version 2.
-        let err = format!("{:#}", crate::load_project(&path).unwrap_err());
-        assert!(err.contains('2'), "{err}");
+        // Le lecteur d'une seule image refuse une série plutôt que d'en perdre.
+        assert!(crate::load_project(&path).is_err());
         // Version inconnue.
         std::fs::write(&path, text.replace("\"version\": 2", "\"version\": 3")).unwrap();
         assert!(load_series(&path).is_err());

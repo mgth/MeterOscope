@@ -10,14 +10,32 @@ use std::path::{Component, Path, PathBuf};
 
 /// Identifiant du format, pour reconnaître nos fichiers.
 pub(crate) const FORMAT_ID: &str = "meteroscope";
-/// Version courante du format sur disque.
+/// Version du format à une image, `document` à la racine. C'est celle qu'on
+/// écrit tant que rien ne l'interdit : les versions antérieures du logiciel
+/// la lisent.
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
+/// Version du format à tableau `images`, celui des séries d'images. Un
+/// document à correction de perspective s'y écrit, comme une série d'une
+/// seule image : ses mesures et son échelle sont exprimées dans l'image
+/// corrigée, et un lecteur qui ignorerait le champ `perspective` les
+/// superposerait à la photo brute, puis perdrait la correction en
+/// réenregistrant. La version 2 lui fait refuser le projet, et il n'existe
+/// ainsi qu'une seule forme de version 2.
+const IMAGES_FORMAT_VERSION: u32 = 2;
 
-/// Représentation sur disque (version 1).
+/// Représentation sur disque, version 1.
 #[derive(Serialize, Deserialize)]
 struct ProjectFile {
     format: String,
     version: u32,
+    #[serde(flatten)]
+    image: ImageEntry,
+}
+
+/// Une image et son document : la racine d'un projet version 1, ou un
+/// élément du tableau `images` de la version 2.
+#[derive(Serialize, Deserialize)]
+struct ImageEntry {
     /// Chemin de l'image relatif au projet (séparateurs `/`) si possible, sinon absolu.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     image: Option<String>,
@@ -26,6 +44,15 @@ struct ProjectFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     image_absolute: Option<String>,
     document: Document,
+}
+
+/// Représentation sur disque, version 2. Seuls les champs utiles ici sont
+/// décrits ; ceux d'une série (image active, échelle commune…) sont ignorés.
+#[derive(Serialize, Deserialize)]
+struct ImagesFile {
+    format: String,
+    version: u32,
+    images: Vec<ImageEntry>,
 }
 
 /// Rend un chemin absolu sans accéder au disque et résout `.` / `..` lexicalement.
@@ -94,14 +121,14 @@ pub fn save_project(project: &Project, path: &Path) -> Result<()> {
             (Some(rel.unwrap_or_else(|| abs_str.clone())), Some(abs_str))
         }
     };
-    let file = ProjectFile {
-        format: FORMAT_ID.to_owned(),
-        version: PROJECT_FORMAT_VERSION,
-        image,
-        image_absolute,
-        document: project.document.clone(),
+    let entry = ImageEntry { image, image_absolute, document: project.document.clone() };
+    let format = FORMAT_ID.to_owned();
+    let json = if project.document.perspective.is_some() {
+        serde_json::to_string_pretty(&ImagesFile { format, version: IMAGES_FORMAT_VERSION, images: vec![entry] })
+    } else {
+        serde_json::to_string_pretty(&ProjectFile { format, version: PROJECT_FORMAT_VERSION, image: entry })
     };
-    let mut json = serde_json::to_string_pretty(&file).context(tr!("project.serialize")).with_context(ctx)?;
+    let mut json = json.context(tr!("project.serialize")).with_context(ctx)?;
     json.push('\n');
     write_atomic(path, json.as_bytes()).map_err(|e| anyhow!(describe_io(&e))).with_context(ctx)?;
     Ok(())
@@ -139,13 +166,24 @@ pub fn load_project(path: &Path) -> Result<Project> {
         }
         match value.get("version").and_then(|v| v.as_u64()) {
             None => bail!(tr!("project.bad_version")),
-            Some(v) if v == 0 || v > PROJECT_FORMAT_VERSION as u64 => bail!(tr!("project.unknown_version", version = v, max = PROJECT_FORMAT_VERSION)),
+            Some(v) if v == 0 || v > IMAGES_FORMAT_VERSION as u64 => bail!(tr!("project.unknown_version", version = v, max = IMAGES_FORMAT_VERSION)),
             Some(_) => Ok(()),
         }
     };
     check().with_context(ctx)?;
-    let file: ProjectFile =
-        serde_json::from_value(value).map_err(|e| anyhow!(tr!("project.bad_content", error = e))).with_context(ctx)?;
+    // La forme se reconnaît au tableau `images`, pas au numéro : un projet
+    // version 2 à `document` racine a existé brièvement et reste lu.
+    let bad = |e: serde_json::Error| anyhow!(tr!("project.bad_content", error = e));
+    let file = if value.get("images").is_some() {
+        let mut images = serde_json::from_value::<ImagesFile>(value).map_err(bad).with_context(ctx)?.images;
+        match images.pop() {
+            Some(only) if images.is_empty() => only,
+            // Une série : n'en ouvrir qu'une image perdrait les autres à l'enregistrement.
+            _ => return Err(anyhow!(tr!("project.several_images"))).with_context(ctx),
+        }
+    } else {
+        serde_json::from_value::<ProjectFile>(value).map_err(bad).with_context(ctx)?.image
+    };
     let proj_abs = absolute_clean(path);
     let dir = proj_abs.parent().unwrap_or(Path::new("/"));
     let image_path = file.image.as_deref().map(|s| resolve_image(s, file.image_absolute.as_deref(), dir));
