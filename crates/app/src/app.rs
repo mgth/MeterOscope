@@ -117,6 +117,7 @@ impl MeterOscopeApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         let mut app = Self::blank();
         meteroscope_core::measure::set_decimals(app.settings.decimals);
+        app.canvas.set_line_width(app.settings.line_width());
         if let Some(u) = &app.settings.calibration_unit {
             app.calibration.set_unit(u);
         }
@@ -886,6 +887,8 @@ impl MeterOscopeApp {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 crate::language::selector(ui);
                 crate::settings::decimals_selector(ui, &mut self.settings);
+                let width = crate::settings::line_width_selector(ui, &mut self.settings);
+                self.canvas.set_line_width(width);
                 ui.separator();
                 if let Some(img) = self.work_image().filter(|_| self.mode == Mode::Image) {
                     ui.label(format!("{} × {} px", img.width(), img.height()));
